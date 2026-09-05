@@ -1,0 +1,19 @@
+node_modules/
+dist/
+data/
+storage/
+.next/
+*.tsbuildinfo
+*.log
+.DS_Store
+.crawllee/
+crawlee_storage/
+.vercel/
+
+# secrets — keep examples
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example

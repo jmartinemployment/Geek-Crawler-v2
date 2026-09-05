@@ -1,0 +1,11 @@
+# Optional Railway service hints for Geek-Crawler v2 (standalone).
+# Do not point this at Geek-Crawler v1.
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "deploy/Dockerfile"
+
+[deploy]
+healthcheckPath = "/health"
+healthcheckTimeout = 30
+restartPolicyType = "ON_FAILURE"

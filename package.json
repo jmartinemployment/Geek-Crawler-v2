@@ -1,0 +1,33 @@
+{
+  "name": "geek-crawler-v2",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Geek-Crawler v2 — Crawlee CheerioCrawler raw HTML pipeline (standalone; does not modify v1)",
+  "scripts": {
+    "build": "tsc",
+    "crawl": "tsx src/cli.ts crawl",
+    "serve": "tsx src/cli.ts serve",
+    "start": "node dist/cli.js",
+    "typecheck": "tsc --noEmit",
+    "web:dev": "npm run dev --prefix web",
+    "web:build": "npm run build --prefix web"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "crawlee": "^3.18.1",
+    "dotenv": "^16.4.7",
+    "playwright": "^1.63.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.10",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true,
+    "fsevents@2.3.3": true
+  }
+}
