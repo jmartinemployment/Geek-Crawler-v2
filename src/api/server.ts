@@ -72,9 +72,9 @@ export function createCrawlApiServer(options?: { dataDir?: string; port?: number
           });
         }
         const crawlType = String(body.crawlType ?? 'partner');
-        const maxRequestsPerCrawl = body.maxRequestsPerCrawl
-          ? Number(body.maxRequestsPerCrawl)
-          : 50;
+        const maxRaw = body.maxRequestsPerCrawl != null ? Number(body.maxRequestsPerCrawl) : NaN;
+        const maxRequestsPerCrawl =
+          Number.isFinite(maxRaw) && maxRaw > 0 ? maxRaw : undefined;
         const maxConcurrency = body.maxConcurrency
           ? Number(body.maxConcurrency)
           : undefined;
@@ -188,6 +188,81 @@ export function createCrawlApiServer(options?: { dataDir?: string; port?: number
         });
       }
 
+      /** Re-attach every local stub still marked running (e.g. after serve restart). */
+      if (req.method === 'POST' && pathname === '/crawls/resume-running') {
+        const raw = await readBody(req);
+        const body = raw ? (JSON.parse(raw) as Json) : {};
+        const maxConcurrencyRaw = body.maxConcurrency
+          ? Number(body.maxConcurrency)
+          : 1;
+        const maxConcurrency = Number.isFinite(maxConcurrencyRaw)
+          ? Math.max(1, Math.min(32, Math.floor(maxConcurrencyRaw)))
+          : 1;
+        const maxRequestsPerCrawl = body.maxRequestsPerCrawl
+          ? Number(body.maxRequestsPerCrawl)
+          : undefined;
+
+        const runs = await meta.listRuns();
+        const candidates = runs.filter((r) => r.status === 'running');
+        const resumed: { runId: string; seedUrl: string }[] = [];
+        const skipped: { runId: string; seedUrl: string; reason: string }[] = [];
+        const failed: { runId: string; seedUrl: string; error: string }[] = [];
+
+        for (const run of candidates) {
+          const seedUrl = (run.seeds ?? [])[0] ?? '';
+          if (!seedUrl) {
+            skipped.push({
+              runId: run.runId,
+              seedUrl: '',
+              reason: 'no seed URL on stub',
+            });
+            continue;
+          }
+          if (inFlight.has(run.runId)) {
+            skipped.push({
+              runId: run.runId,
+              seedUrl,
+              reason: 'already in flight on this serve process',
+            });
+            continue;
+          }
+          try {
+            clearCancelRequested(run.runId);
+            const prepared = await prepareResumeCrawl({
+              runId: run.runId,
+              dataDir,
+              maxRequestsPerCrawl:
+                Number.isFinite(maxRequestsPerCrawl) && (maxRequestsPerCrawl as number) > 0
+                  ? maxRequestsPerCrawl
+                  : undefined,
+              maxConcurrency,
+            });
+            const work = prepared.run().catch((err) => {
+              console.error(`Resume crawl ${prepared.runId} failed:`, err);
+              return err;
+            });
+            inFlight.set(prepared.runId, work);
+            void work.finally(() => inFlight.delete(prepared.runId));
+            resumed.push({ runId: prepared.runId, seedUrl });
+          } catch (err) {
+            failed.push({
+              runId: run.runId,
+              seedUrl,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+        }
+
+        return send(res, 200, {
+          ok: true,
+          maxConcurrency,
+          candidateCount: candidates.length,
+          resumed,
+          skipped,
+          failed,
+        });
+      }
+
       const resumeMatch = pathname.match(/^\/crawls\/([^/]+)\/resume$/);
       if (req.method === 'POST' && resumeMatch) {
         const runId = decodeURIComponent(resumeMatch[1]!);
@@ -275,6 +350,7 @@ export function createCrawlApiServer(options?: { dataDir?: string; port?: number
           console.log(`  GET  /crawls`);
           console.log(`  POST /crawls  { seed|seeds[1], crawlType?, maxRequestsPerCrawl?, maxConcurrency? } → 202`);
           console.log(`  POST /crawls/resume-by-url  { url } → 202 continue queue for that seed`);
+          console.log(`  POST /crawls/resume-running  → 200 re-attach all local status=running stubs`);
           console.log(`  POST /crawls/:runId/resume  → 202 continue .crawlee queue`);
           console.log(`  GET  /crawls/:runId`);
           console.log(`  GET  /crawls/:runId/pages`);

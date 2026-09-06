@@ -1,5 +1,6 @@
 import { SubmitCrawlForm } from "@/components/submit-crawl-form";
 import { ResumeByUrlForm } from "@/components/resume-by-url-form";
+import { ResumeAllRunningButton } from "@/components/resume-all-running-button";
 
 export default function HomePage() {
   return (
@@ -20,6 +21,7 @@ export default function HomePage() {
           not a predicted site total.
         </p>
         <ResumeByUrlForm />
+        <ResumeAllRunningButton />
       </div>
     </div>
   );
