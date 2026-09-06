@@ -1,4 +1,5 @@
 import { hostnameKey } from './links.js';
+import { localeNormalizeForMap } from './locale-path.js';
 import { BOT } from '../bot/identity.js';
 
 const MAX_SITEMAPS = 40;
@@ -163,7 +164,10 @@ export async function loadSiteMapForSeed(seedUrl: string): Promise<SiteMapIndex>
         continue;
       }
       if (!sameSite(seed, u)) continue;
-      const normalized = normalizeCrawlUrl(u.toString());
+      // Drop non-English locales; strip en / en-us / … so they collapse with bare paths.
+      const localeOk = localeNormalizeForMap(u.toString());
+      if (!localeOk) continue;
+      const normalized = normalizeCrawlUrl(localeOk);
       if (normalized) urlSet.add(normalized);
     }
   }
@@ -201,7 +205,9 @@ export function filterEnqueueUrls(candidates: string[], map: SiteMapIndex): stri
   const out: string[] = [];
   const seen = new Set<string>();
   for (const c of candidates) {
-    const n = normalizeCrawlUrl(c);
+    const localeOk = localeNormalizeForMap(c);
+    if (!localeOk) continue;
+    const n = normalizeCrawlUrl(localeOk);
     if (!n || seen.has(n)) continue;
     if (map.hasMap && !map.urls.has(n)) continue;
     seen.add(n);
@@ -215,7 +221,9 @@ export function initialCrawlUrls(seeds: string[], map: SiteMapIndex): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
   for (const s of seeds) {
-    const n = normalizeCrawlUrl(s) ?? s;
+    // Prefer stripped English form so seed matches map keys; keep non-English seeds as-is.
+    const localeOk = localeNormalizeForMap(s) ?? s;
+    const n = normalizeCrawlUrl(localeOk) ?? localeOk;
     if (seen.has(n)) continue;
     seen.add(n);
     out.push(n);

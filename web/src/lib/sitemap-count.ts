@@ -1,7 +1,10 @@
 /**
  * Fetch and count same-site URLs from robots.txt Sitemap: entries and /sitemap.xml.
  * Report-only. Crawl policy lives in src/crawl/sitemap.ts (sitemap is the map).
+ * Locale rules: keep in sync with src/crawl/locale-path.ts
  */
+
+import { localeNormalizeForMap } from "./locale-path";
 
 const MAX_SITEMAPS = 40;
 const MAX_URLS = 50_000;
@@ -132,11 +135,23 @@ export async function countSitemapPages(seedUrl: string): Promise<SitemapCountRe
         continue;
       }
       if (!sameSite(seed, u)) continue;
-      u.hash = "";
-      const full = u.toString();
+      const localeOk = localeNormalizeForMap(u.toString());
+      if (!localeOk) continue;
+      let normalized: URL;
+      try {
+        normalized = new URL(localeOk);
+      } catch {
+        continue;
+      }
+      normalized.hash = "";
+      const full = normalized.toString();
       urlSet.add(full);
-      const pathOnly = `${u.origin}${u.pathname}`;
-      pathSet.add(pathOnly.endsWith("/") && u.pathname !== "/" ? pathOnly.slice(0, -1) : pathOnly);
+      const pathOnly = `${normalized.origin}${normalized.pathname}`;
+      pathSet.add(
+        pathOnly.endsWith("/") && normalized.pathname !== "/"
+          ? pathOnly.slice(0, -1)
+          : pathOnly,
+      );
     }
   }
 
