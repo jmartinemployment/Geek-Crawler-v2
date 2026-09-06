@@ -176,3 +176,18 @@ th {
 .muted {
   color: var(--muted);
 }
+
+button.linkish {
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-weight: inherit;
+  cursor: pointer;
+}
+
+button.linkish:hover {
+  text-decoration: underline;
+}

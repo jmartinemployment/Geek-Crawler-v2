@@ -17,9 +17,8 @@ export function AppNav() {
 export function PhaseBanner() {
   return (
     <aside className="phase-banner" role="status">
-      <strong>Phase 2</strong> — Live submit via Crawlee <code>:8787</code>,
-      reports via GeekAPI <code>page-urls</code>, live status via SignalR (no
-      timer polling).
+      <strong>Phase 2</strong> — Submit via Crawlee <code>:8787</code>, reports
+      via GeekAPI <code>page-urls</code>.
     </aside>
   );
 }

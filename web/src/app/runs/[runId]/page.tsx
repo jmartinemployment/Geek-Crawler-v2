@@ -9,8 +9,7 @@ export default async function RunDetailPage({ params }: Props) {
       <div>
         <h1>Run {runId}</h1>
         <p className="lede">
-          Live status via SignalR <code>GeekCrawlerEvent</code> — no timer
-          polling. URL table from GeekAPI <code>page-urls</code>.
+          Seed report + URL table from GeekAPI. Refresh the page to update.
         </p>
       </div>
       <RunLiveView runId={runId} />

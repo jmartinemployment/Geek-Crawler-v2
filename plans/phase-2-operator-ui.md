@@ -1,6 +1,6 @@
 # Phase 2 — Operator UI live wiring (deferred while crawl ran)
 
-Status: **implemented in repo** — restart local `serve`; **deploy GeekAPI** for `page-urls` + ingest SignalR (controllers updated; push when ready).
+Status: **done** — local Crawlee async API, GeekAPI `page-urls` + ingest SignalR (deployed), `web/` BFF + live run view wired.
 
 Phase 1 (done): `web/` shell, BFF stubs, SignalR helpers, `web:dev`, README.
 
@@ -55,8 +55,8 @@ Browser :3000
 
 ## Test plan
 
-- [ ] `POST /crawls` returns `runId` in &lt;1s while crawl continues
-- [ ] `GET /crawls` lists local runs
-- [ ] `page-urls` returns rows without HTML bodies
-- [ ] Ingest triggers SignalR event (UI updates without refresh polling)
-- [ ] UI submit → run detail; URL table + CSV work
+- [x] `POST /crawls` returns `runId` in &lt;1s while crawl continues
+- [x] `GET /crawls` lists local runs
+- [x] `page-urls` returns rows without HTML bodies
+- [x] Ingest triggers SignalR event (UI updates without refresh polling) — requires `GEEK_USER_ACCESS_TOKEN` in `web/.env.local`
+- [x] UI submit → run detail; URL table + CSV work

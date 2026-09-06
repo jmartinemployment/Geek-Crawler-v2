@@ -1,6 +1,6 @@
 /**
- * SignalR client scaffold for GeekAPI `/hubs/geek-crawler-realtime`.
- * Phase 1: helpers only — hub token + ingest pushes arrive in Phase 2.
+ * SignalR client for GeekAPI `/hubs/geek-crawler-realtime`.
+ * Needs GEEK_USER_ACCESS_TOKEN via `/api/auth/hub-token`.
  * No timer polling; live status uses GeekCrawlerEvent after JoinGeekCrawlerRun.
  */
 import {
@@ -32,7 +32,7 @@ async function hubAccessToken(): Promise<string> {
   const res = await fetch("/api/auth/hub-token", { cache: "no-store" });
   if (!res.ok) {
     throw new Error(
-      `Hub token unavailable (${res.status}) — Phase 2 will mint this`,
+      `Hub token unavailable (${res.status}) — Sign in (top nav) for SignalR`,
     );
   }
   const body = (await res.json()) as {

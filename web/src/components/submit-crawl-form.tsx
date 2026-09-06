@@ -7,7 +7,7 @@ type CrawlType = "partner" | "competitors" | "local";
 
 export function SubmitCrawlForm() {
   const router = useRouter();
-  const [seeds, setSeeds] = useState("");
+  const [seed, setSeed] = useState("");
   const [crawlType, setCrawlType] = useState<CrawlType>("partner");
   const [maxRequests, setMaxRequests] = useState("50");
   const [pending, setPending] = useState(false);
@@ -18,15 +18,16 @@ export function SubmitCrawlForm() {
     setPending(true);
     setError(null);
     try {
-      const seedList = seeds
-        .split(/[\n,]+/)
-        .map((s) => s.trim())
-        .filter(Boolean);
+      const url = seed.trim();
+      if (!url) {
+        setError("Enter one seed URL");
+        return;
+      }
       const res = await fetch("/api/crawls", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          seeds: seedList,
+          seed: url,
           crawlType,
           maxRequestsPerCrawl: Number(maxRequests) || 50,
         }),
@@ -49,11 +50,11 @@ export function SubmitCrawlForm() {
   return (
     <form className="stack" onSubmit={onSubmit}>
       <label className="field">
-        <span>Seeds (one URL per line)</span>
-        <textarea
-          rows={6}
-          value={seeds}
-          onChange={(e) => setSeeds(e.target.value)}
+        <span>Seed URL (one URL = one run)</span>
+        <input
+          type="url"
+          value={seed}
+          onChange={(e) => setSeed(e.target.value)}
           placeholder="https://www.example.com"
           required
         />

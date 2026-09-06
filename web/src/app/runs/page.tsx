@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { RunsSeedReport } from "@/components/runs-seed-report";
 
 async function loadRuns() {
   const base =
@@ -41,26 +42,29 @@ export default async function RunsPage() {
             </tr>
           </thead>
           <tbody>
-            {runs.map((r: {
-              runId?: string;
-              status?: string;
-              crawlType?: string;
-              createdAtUtc?: string;
-            }) => (
-              <tr key={r.runId}>
-                <td>
-                  <Link href={`/runs/${encodeURIComponent(r.runId ?? "")}`}>
-                    {r.runId}
-                  </Link>
-                </td>
-                <td>{r.status}</td>
-                <td>{r.crawlType}</td>
-                <td>{r.createdAtUtc}</td>
-              </tr>
-            ))}
+            {runs.map(
+              (r: {
+                runId?: string;
+                status?: string;
+                crawlType?: string;
+                createdAtUtc?: string;
+              }) => (
+                <tr key={r.runId}>
+                  <td>
+                    <Link href={`/runs/${encodeURIComponent(r.runId ?? "")}`}>
+                      {r.runId}
+                    </Link>
+                  </td>
+                  <td>{r.status}</td>
+                  <td>{r.crawlType}</td>
+                  <td>{r.createdAtUtc}</td>
+                </tr>
+              ),
+            )}
           </tbody>
         </table>
       )}
+      <RunsSeedReport />
     </div>
   );
 }

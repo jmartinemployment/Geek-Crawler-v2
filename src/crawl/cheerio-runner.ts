@@ -1,9 +1,18 @@
 import { CheerioCrawler, Configuration, log } from 'crawlee';
+import { access } from 'node:fs/promises';
+import path from 'node:path';
 import { BOT, defaultRequestHeaders } from '../bot/identity.js';
 import { createCrawlPersist, type CrawlPersist } from '../storage/persist.js';
+import { createJsonRunStore } from '../storage/runs.js';
 import { extractHrefs, sameOriginUrls } from './links.js';
 import { runPlaywrightPool } from './playwright-pool.js';
 import { buildProxyConfiguration } from './proxy.js';
+import {
+  filterEnqueueUrls,
+  initialCrawlUrls,
+  loadSiteMapIndex,
+  type SiteMapIndex,
+} from './sitemap.js';
 import { concurrencyOptions, httpAgent, httpsAgent } from './throttle.js';
 import type { CrawlType } from './types.js';
 import { isViableHtml } from './viability.js';
@@ -15,6 +24,8 @@ export type RunCrawlInput = {
   seeds: string[];
   dataDir: string;
   maxRequestsPerCrawl?: number;
+  /** When true, do not re-seed; continue Crawlee request queue under .crawlee/<runId>. */
+  resume?: boolean;
 };
 
 export type RunCrawlResult = {
@@ -54,6 +65,65 @@ export async function prepareCheerioCrawl(input: RunCrawlInput): Promise<Prepare
   };
 }
 
+/**
+ * Resume an existing run: same runId, same `.crawlee/<runId>` queue, no GeekAPI createRun.
+ * Processes remaining pending requests (already-handled URLs stay skipped by Crawlee).
+ */
+export async function prepareResumeCheerioCrawl(input: {
+  runId: string;
+  dataDir: string;
+  maxRequestsPerCrawl?: number;
+}): Promise<PreparedCrawl> {
+  const dataDir = path.resolve(input.dataDir);
+  const runId = input.runId;
+  const meta = createJsonRunStore(dataDir);
+  const existing = await meta.getRun(runId);
+  if (!existing) {
+    throw new Error(`Run not found locally: ${runId}`);
+  }
+  const queueDir = path.join(dataDir, '.crawlee', runId);
+  try {
+    await access(queueDir);
+  } catch {
+    throw new Error(
+      `Cannot resume — Crawlee storage missing at ${queueDir}. Resume needs the local request queue.`,
+    );
+  }
+
+  const seeds = normalizeSeeds(existing.seeds);
+  if (seeds.length === 0) {
+    throw new Error(`Cannot resume — run ${runId} has no seeds in local stub`);
+  }
+  const persist = createCrawlPersist({
+    runIdHint: runId,
+    crawlType: existing.crawlType,
+    seeds,
+    dataDir,
+  });
+  await persist.beginResume();
+  await persist.markRunning();
+
+  if (persist.runId !== runId) {
+    throw new Error(`Resume runId mismatch: expected ${runId}, got ${persist.runId}`);
+  }
+
+  const crawlInput: RunCrawlInput = {
+    runId,
+    crawlType: existing.crawlType,
+    seeds,
+    dataDir,
+    maxRequestsPerCrawl: input.maxRequestsPerCrawl,
+    resume: true,
+  };
+
+  return {
+    runId: persist.runId,
+    persistMode: persist.mode,
+    dataDir: persist.dataDir,
+    run: () => executeCheerioCrawl(persist, seeds, crawlInput),
+  };
+}
+
 export async function runCheerioCrawl(input: RunCrawlInput): Promise<RunCrawlResult> {
   const prepared = await prepareCheerioCrawl(input);
   return prepared.run();
@@ -67,6 +137,15 @@ async function executeCheerioCrawl(
   const promoteToPlaywright = new Set<string>();
   const { minConcurrency, maxConcurrency, autoscaledPoolOptions } = concurrencyOptions();
   const proxyConfiguration = buildProxyConfiguration();
+
+  const siteMap: SiteMapIndex = await loadSiteMapIndex(seeds);
+  if (siteMap.hasMap) {
+    log.info(
+      `Sitemap is the map: ${siteMap.urls.size} URL(s); link enqueue restricted to map`,
+    );
+  } else {
+    log.info('No sitemap map found — same-site BFS (tracking params stripped)');
+  }
 
   const config = new Configuration({
     storageClientOptions: {
@@ -82,7 +161,9 @@ async function executeCheerioCrawl(
       minConcurrency,
       maxConcurrency,
       autoscaledPoolOptions,
-      maxRequestsPerCrawl: input.maxRequestsPerCrawl ?? 50,
+      ...(input.maxRequestsPerCrawl != null
+        ? { maxRequestsPerCrawl: input.maxRequestsPerCrawl }
+        : {}),
       maxRequestRetries: 5,
       requestHandlerTimeoutSecs: 60,
       additionalHttpErrorStatusCodes: [429, 503],
@@ -135,9 +216,9 @@ async function executeCheerioCrawl(
           log.info(`Playwright backup (${viability.reason}): ${request.url}`);
           promoteToPlaywright.add(request.url);
           const links = extractHrefs($, finalUrl);
-          const sameSite = sameOriginUrls(links);
-          if (sameSite.length > 0) {
-            await enqueueLinks({ urls: sameSite, strategy: 'all' });
+          const toEnqueue = filterEnqueueUrls(sameOriginUrls(links), siteMap);
+          if (toEnqueue.length > 0) {
+            await enqueueLinks({ urls: toEnqueue, strategy: 'all' });
           }
           return;
         }
@@ -161,9 +242,9 @@ async function executeCheerioCrawl(
           })),
         );
 
-        const sameSite = sameOriginUrls(links);
-        if (sameSite.length > 0) {
-          await enqueueLinks({ urls: sameSite, strategy: 'all' });
+        const toEnqueue = filterEnqueueUrls(sameOriginUrls(links), siteMap);
+        if (toEnqueue.length > 0) {
+          await enqueueLinks({ urls: toEnqueue, strategy: 'all' });
         }
       },
       failedRequestHandler: async ({ request }, error) => {
@@ -180,7 +261,14 @@ async function executeCheerioCrawl(
   );
 
   try {
-    await crawler.run(seeds);
+    if (input.resume) {
+      log.info(`Resuming Crawlee queue for run ${persist.runId} (no re-seed; map filter active)`);
+      await crawler.run();
+    } else {
+      const startUrls = initialCrawlUrls(seeds, siteMap);
+      log.info(`Starting crawl with ${startUrls.length} URL(s)`);
+      await crawler.run(startUrls);
+    }
 
     if (promoteToPlaywright.size > 0) {
       log.info(`Playwright backup pool: ${promoteToPlaywright.size} URL(s)`);

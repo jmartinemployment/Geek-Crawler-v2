@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { prepareCrawl, startCrawl } from '../crawl/orchestrator.js';
+import { prepareCrawl, prepareResumeCrawl, findRunIdBySeedUrl, startCrawl } from '../crawl/orchestrator.js';
 import { createJsonRunStore } from '../storage/runs.js';
 
 type Json = Record<string, unknown>;
@@ -23,6 +23,10 @@ const cancellations = new Set<string>();
 
 export function isCancelRequested(runId: string): boolean {
   return cancellations.has(runId);
+}
+
+export function clearCancelRequested(runId: string): void {
+  cancellations.delete(runId);
 }
 
 export function createCrawlApiServer(options?: { dataDir?: string; port?: number }) {
@@ -60,7 +64,12 @@ export function createCrawlApiServer(options?: { dataDir?: string; port?: number
             ? [String(body.seed)]
             : [];
         if (seeds.length === 0) {
-          return send(res, 400, { error: 'seeds[] or seed required' });
+          return send(res, 400, { error: 'seed or seeds[] required' });
+        }
+        if (seeds.length !== 1) {
+          return send(res, 400, {
+            error: 'exactly one seed URL per run (1 runId = 1 URL)',
+          });
         }
         const crawlType = String(body.crawlType ?? 'partner');
         const maxRequestsPerCrawl = body.maxRequestsPerCrawl
@@ -116,6 +125,99 @@ export function createCrawlApiServer(options?: { dataDir?: string; port?: number
         return send(res, 200, run as unknown as Json);
       }
 
+      const resumeByUrlMatch = pathname === '/crawls/resume-by-url';
+      if (req.method === 'POST' && resumeByUrlMatch) {
+        const raw = await readBody(req);
+        const body = raw ? (JSON.parse(raw) as Json) : {};
+        const url = String(body.url ?? body.seed ?? '').trim();
+        if (!url) {
+          return send(res, 400, { error: 'url (seed) required' });
+        }
+        const found = await findRunIdBySeedUrl({ url, dataDir });
+        if (!found) {
+          return send(res, 404, {
+            error: `no local run found for seed URL: ${url}`,
+          });
+        }
+        const runId = found.run.runId;
+        if (inFlight.has(runId)) {
+          return send(res, 409, {
+            error: 'run already in flight on this serve process',
+            runId,
+          });
+        }
+        const maxRequestsPerCrawl = body.maxRequestsPerCrawl
+          ? Number(body.maxRequestsPerCrawl)
+          : undefined;
+
+        clearCancelRequested(runId);
+        const prepared = await prepareResumeCrawl({
+          runId,
+          dataDir,
+          maxRequestsPerCrawl,
+        });
+
+        const work = prepared.run().catch((err) => {
+          console.error(`Resume crawl ${prepared.runId} failed:`, err);
+          return err;
+        });
+        inFlight.set(prepared.runId, work);
+        void work.finally(() => inFlight.delete(prepared.runId));
+
+        return send(res, 202, {
+          ok: true,
+          runId: prepared.runId,
+          seedUrl: url,
+          persistMode: prepared.persistMode,
+          dataDir: prepared.dataDir,
+          status: 'running',
+          resumed: true,
+          multiSeed: found.multiSeed,
+          note: found.multiSeed
+            ? 'Matched a legacy multi-seed run; resume continues the shared Crawlee queue.'
+            : undefined,
+        });
+      }
+
+      const resumeMatch = pathname.match(/^\/crawls\/([^/]+)\/resume$/);
+      if (req.method === 'POST' && resumeMatch) {
+        const runId = decodeURIComponent(resumeMatch[1]!);
+        if (inFlight.has(runId)) {
+          return send(res, 409, {
+            error: 'run already in flight on this serve process',
+            runId,
+          });
+        }
+        const raw = await readBody(req);
+        const body = raw ? (JSON.parse(raw) as Json) : {};
+        const maxRequestsPerCrawl = body.maxRequestsPerCrawl
+          ? Number(body.maxRequestsPerCrawl)
+          : undefined;
+
+        clearCancelRequested(runId);
+        const prepared = await prepareResumeCrawl({
+          runId,
+          dataDir,
+          maxRequestsPerCrawl,
+        });
+
+        const work = prepared.run().catch((err) => {
+          console.error(`Resume crawl ${prepared.runId} failed:`, err);
+          return err;
+        });
+        inFlight.set(prepared.runId, work);
+        void work.finally(() => inFlight.delete(prepared.runId));
+
+        return send(res, 202, {
+          ok: true,
+          runId: prepared.runId,
+          persistMode: prepared.persistMode,
+          dataDir: prepared.dataDir,
+          status: 'running',
+          resumed: true,
+        });
+      }
+
       const cancelMatch = pathname.match(/^\/crawls\/([^/]+)\/cancel$/);
       if (req.method === 'POST' && cancelMatch) {
         const runId = decodeURIComponent(cancelMatch[1]!);
@@ -158,7 +260,9 @@ export function createCrawlApiServer(options?: { dataDir?: string; port?: number
           console.log(`geek-crawler-v2 API on http://127.0.0.1:${port}`);
           console.log(`  GET  /health`);
           console.log(`  GET  /crawls`);
-          console.log(`  POST /crawls  { seeds[], crawlType?, maxRequestsPerCrawl? } → 202 + runId`);
+          console.log(`  POST /crawls  { seed|seeds[1], crawlType?, maxRequestsPerCrawl? } → 202`);
+          console.log(`  POST /crawls/resume-by-url  { url } → 202 continue queue for that seed`);
+          console.log(`  POST /crawls/:runId/resume  → 202 continue .crawlee queue`);
           console.log(`  GET  /crawls/:runId`);
           console.log(`  GET  /crawls/:runId/pages`);
           console.log(`  POST /crawls/:runId/cancel`);
