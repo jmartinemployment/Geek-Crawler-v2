@@ -50,7 +50,7 @@ Then on the home page: enter one seed URL, set max requests / max concurrency, *
 - **One seed URL = one `runId`**
 - **Max concurrency** = parallel fetches *for that run* (default 1 in the UI)
 - **Request budget** = locale-filtered sitemap URL count when a map exists (no Max requests field). Optional API/CLI `--max` / `maxRequestsPerCrawl` overrides for smoke tests. No sitemap → uncapped until the queue drains.
-- **Locale filter on sitemap map** (crawl + report): drop non-English language prefixes (`/fr/`, `/de/`, …); strip English language (`/en/`, `/en-us/`, …) and English-market regions (`/us/`, `/gb/`, `/uk/`, `/au/`, …) so they collapse with the bare path
+- **Locale filter on sitemap map** (crawl + report): **keep** `/us/…`; **drop** other region dirt (`/gb/`, `/uk/`, `/au/`, …) and non-English languages (`/fr/`, `/de/`, …); **strip** English language prefixes only (`/en/`, `/en-us/`, …) to the bare path
 - **Sign in** (nav) is only needed for live SignalR; crawls and reports work without it
 - **Resume by URL** on the home page continues a local `.crawlee/<runId>` queue and re-seeds from the same locale-filtered sitemap map (Crawlee skips already-handled URLs)
 - **Resume all running** on the home page re-attaches every local stub still marked `running` (useful after a `serve` restart orphans in-memory workers; skips already in-flight)
@@ -181,7 +181,7 @@ Localhost Next.js app. Does **not** replace Geek-Crawler v1. Start commands: see
 - `POST /crawls` returns `runId` immediately (HTTP 202); crawl continues in background
 - `GET /crawls` lists local run stubs
 - Seed report (URL-first on `/runs`) with sitemap totals; sitemap is the map when present
-- Locale filter on sitemap map + report counts (drop non-English languages; strip `en` / `en-*` and region prefixes like `/us/`)
+- Locale filter on sitemap map + report counts (keep `/us/`; drop other regions + non-English; strip `en` / `en-*`)
 - GeekAPI `page-urls` + optional SignalR after Sign in
 
 ### Deferred

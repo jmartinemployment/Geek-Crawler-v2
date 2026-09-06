@@ -1,4 +1,4 @@
-import { isNonEnglishLocalePath } from './locale-path.js';
+import { shouldExcludeLocalePath } from './locale-path.js';
 
 export type ExtractedLink = {
   linkUrl: string;
@@ -73,9 +73,9 @@ export function extractHrefs($: CheerioLike, pageUrl: string): ExtractedLink[] {
   return out;
 }
 
-/** Same-site URLs for BFS enqueue — drops non-English locale paths. */
+/** Same-site URLs for BFS enqueue — drops non-US regions and non-English locales. */
 export function sameOriginUrls(links: ExtractedLink[]): string[] {
   return links
-    .filter((l) => l.isSameOrigin && !isNonEnglishLocalePath(l.linkUrl))
+    .filter((l) => l.isSameOrigin && !shouldExcludeLocalePath(l.linkUrl))
     .map((l) => l.linkUrl);
 }

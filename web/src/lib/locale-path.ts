@@ -1,6 +1,6 @@
 /**
  * Keep in sync with src/crawl/locale-path.ts
- * Non-English languages dropped; English locales + English-market regions (`us`, …) stripped.
+ * KEEP `/us/…`; DROP other regions + non-English; STRIP `en` / `en-*` only.
  */
 
 const NON_ENGLISH_LOCALE = new Set([
@@ -32,14 +32,11 @@ const NON_ENGLISH_LOCALE = new Set([
   "za","zh","zu",
 ]);
 
-const ENGLISH_MARKET_REGION = new Set([
-  "us",
-  "gb",
-  "uk",
-  "au",
-  "nz",
-  "sg",
-  "ae",
+const KEEP_REGION = new Set(["us"]);
+
+const DROP_REGION = new Set([
+  "gb","uk","au","nz","sg","ae",
+  "ca","ie","eu","in","za","jp","kr","br","mx","de","fr","es","it","nl",
 ]);
 
 function firstPathSegment(pathname: string): string | undefined {
@@ -48,10 +45,6 @@ function firstPathSegment(pathname: string): string | undefined {
 
 function primaryLang(seg: string): string {
   return seg.toLowerCase().split("-")[0] ?? "";
-}
-
-function isEnglishMarketRegionSeg(seg: string): boolean {
-  return ENGLISH_MARKET_REGION.has(seg.toLowerCase());
 }
 
 function stripLeadingSegment(
@@ -73,12 +66,34 @@ function stripLeadingSegment(
   }
 }
 
+export function isUsRegionPath(url: string): boolean {
+  try {
+    const seg = firstPathSegment(new URL(url).pathname);
+    return Boolean(seg && KEEP_REGION.has(seg.toLowerCase()));
+  } catch {
+    return false;
+  }
+}
+
+export function isDroppedRegionPath(url: string): boolean {
+  try {
+    const seg = firstPathSegment(new URL(url).pathname);
+    if (!seg) return false;
+    const lower = seg.toLowerCase();
+    if (KEEP_REGION.has(lower)) return false;
+    return DROP_REGION.has(lower);
+  } catch {
+    return false;
+  }
+}
+
 export function isNonEnglishLocalePath(url: string): boolean {
   try {
     const { pathname } = new URL(url);
     const seg = firstPathSegment(pathname);
     if (!seg) return false;
-    if (isEnglishMarketRegionSeg(seg)) return false;
+    const lower = seg.toLowerCase();
+    if (KEEP_REGION.has(lower)) return false;
     const primary = primaryLang(seg);
     if (primary === "en") return false;
     return NON_ENGLISH_LOCALE.has(primary);
@@ -87,15 +102,16 @@ export function isNonEnglishLocalePath(url: string): boolean {
   }
 }
 
+export function shouldExcludeLocalePath(url: string): boolean {
+  return isDroppedRegionPath(url) || isNonEnglishLocalePath(url);
+}
+
 export function stripEnglishLocalePrefix(url: string): string {
+  if (isUsRegionPath(url)) return url;
   return stripLeadingSegment(url, (seg) => primaryLang(seg) === "en");
 }
 
-export function stripRegionPathPrefix(url: string): string {
-  return stripLeadingSegment(url, isEnglishMarketRegionSeg);
-}
-
 export function localeNormalizeForMap(url: string): string | null {
-  if (isNonEnglishLocalePath(url)) return null;
-  return stripEnglishLocalePrefix(stripRegionPathPrefix(url));
+  if (shouldExcludeLocalePath(url)) return null;
+  return stripEnglishLocalePrefix(url);
 }

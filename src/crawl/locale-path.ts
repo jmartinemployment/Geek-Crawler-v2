@@ -1,8 +1,9 @@
 /**
  * Locale / region path helpers for crawl map + BFS.
- * - Non-English language prefixes → DROP
- * - English language (`en`, `en-us`, …) → STRIP
- * - English-market region prefixes (`us`, `gb`, `uk`, …) → STRIP
+ * - KEEP `/us/…` (US market) as-is
+ * - DROP other market regions (`/gb/`, `/uk/`, `/au/`, …)
+ * - DROP non-English language prefixes (`/fr/`, `/de/`, …)
+ * - STRIP English language only (`/en/`, `/en-us/`, …) → bare path
  */
 
 const NON_ENGLISH_LOCALE = new Set([
@@ -34,19 +35,16 @@ const NON_ENGLISH_LOCALE = new Set([
   'za','zh','zu',
 ]);
 
+/** Allowed market region — keep path as-is. */
+const KEEP_REGION = new Set(['us']);
+
 /**
- * Country/region market prefixes used on English sites (e.g. /us/learn).
- * Stripped so they collapse with the bare path. Overrides language DROP for
- * codes that collide (uk→Ukrainian, sg→Sango, ae→Avestan).
+ * Other market / country first segments — drop (dirt).
+ * Includes codes that also exist as language tags (uk, sg, ae, …).
  */
-const ENGLISH_MARKET_REGION = new Set([
-  'us', // United States
-  'gb', // Great Britain
-  'uk', // United Kingdom (URL convention; not Ukrainian content here)
-  'au', // Australia
-  'nz', // New Zealand
-  'sg', // Singapore
-  'ae', // UAE
+const DROP_REGION = new Set([
+  'gb', 'uk', 'au', 'nz', 'sg', 'ae',
+  'ca', 'ie', 'eu', 'in', 'za', 'jp', 'kr', 'br', 'mx', 'de', 'fr', 'es', 'it', 'nl',
 ]);
 
 function firstPathSegment(pathname: string): string | undefined {
@@ -55,10 +53,6 @@ function firstPathSegment(pathname: string): string | undefined {
 
 function primaryLang(seg: string): string {
   return seg.toLowerCase().split('-')[0] ?? '';
-}
-
-function isEnglishMarketRegionSeg(seg: string): boolean {
-  return ENGLISH_MARKET_REGION.has(seg.toLowerCase());
 }
 
 function stripLeadingSegment(url: string, shouldStrip: (seg: string) => boolean): string {
@@ -77,13 +71,37 @@ function stripLeadingSegment(url: string, shouldStrip: (seg: string) => boolean)
   }
 }
 
-/** True when URL path starts with a non-English locale prefix. */
+/** True when first segment is an allowed `/us/` market prefix. */
+export function isUsRegionPath(url: string): boolean {
+  try {
+    const seg = firstPathSegment(new URL(url).pathname);
+    return Boolean(seg && KEEP_REGION.has(seg.toLowerCase()));
+  } catch {
+    return false;
+  }
+}
+
+/** True when first segment is a non-US market/region prefix to drop. */
+export function isDroppedRegionPath(url: string): boolean {
+  try {
+    const seg = firstPathSegment(new URL(url).pathname);
+    if (!seg) return false;
+    const lower = seg.toLowerCase();
+    if (KEEP_REGION.has(lower)) return false;
+    return DROP_REGION.has(lower);
+  } catch {
+    return false;
+  }
+}
+
+/** True when URL path starts with a non-English locale prefix (not `/us/`). */
 export function isNonEnglishLocalePath(url: string): boolean {
   try {
     const { pathname } = new URL(url);
     const seg = firstPathSegment(pathname);
     if (!seg) return false;
-    if (isEnglishMarketRegionSeg(seg)) return false;
+    const lower = seg.toLowerCase();
+    if (KEEP_REGION.has(lower)) return false;
     const primary = primaryLang(seg);
     if (primary === 'en') return false;
     return NON_ENGLISH_LOCALE.has(primary);
@@ -92,27 +110,26 @@ export function isNonEnglishLocalePath(url: string): boolean {
   }
 }
 
+/** Drop from map / BFS: foreign regions or non-English languages. */
+export function shouldExcludeLocalePath(url: string): boolean {
+  return isDroppedRegionPath(url) || isNonEnglishLocalePath(url);
+}
+
 /**
  * Strip leading `en` / `en-*` path segment (e.g. /en-us/foo → /foo).
- * Leaves the URL unchanged if there is no English locale prefix.
+ * Does not touch `/us/`.
  */
 export function stripEnglishLocalePrefix(url: string): string {
+  if (isUsRegionPath(url)) return url;
   return stripLeadingSegment(url, (seg) => primaryLang(seg) === 'en');
 }
 
 /**
- * Strip leading English-market region segment (e.g. /us/foo → /foo).
- */
-export function stripRegionPathPrefix(url: string): string {
-  return stripLeadingSegment(url, isEnglishMarketRegionSeg);
-}
-
-/**
  * For sitemap map membership:
- * drop non-English languages; strip region (`us`, …) then English (`en`, `en-us`, …).
+ * keep `/us/…`; drop other regions + non-English; strip `en` / `en-*` only.
  * Returns null if the URL should not be on the map.
  */
 export function localeNormalizeForMap(url: string): string | null {
-  if (isNonEnglishLocalePath(url)) return null;
-  return stripEnglishLocalePrefix(stripRegionPathPrefix(url));
+  if (shouldExcludeLocalePath(url)) return null;
+  return stripEnglishLocalePrefix(url);
 }

@@ -10,12 +10,14 @@ Sitemap map, request budget, and report sitemap columns filter locales.
 
 | Path | Action |
 |------|--------|
+| `/us/...` | **KEEP** (US market) |
+| `/gb/`, `/uk/`, `/au/`, other region dirt | **DROP** |
 | `/fr/...`, `/de/...`, `/pt-br/...`, etc. | **DROP** |
 | `/en/...`, `/en-us/...`, `/en-gb/...` | **STRIP** prefix (collapse with bare path) |
-| `/foo` (no locale) | **KEEP** |
+| `/foo` (no locale/region) | **KEEP** |
 
 ```text
-loc → same-site → DROP non-English → STRIP en/en-* → add to map / counts / budget
+loc → same-site → DROP non-US regions + non-English → STRIP en/en-* → KEEP /us/ as-is → add to map
 ```
 
 ### Implementation
