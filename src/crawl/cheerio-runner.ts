@@ -24,6 +24,8 @@ export type RunCrawlInput = {
   seeds: string[];
   dataDir: string;
   maxRequestsPerCrawl?: number;
+  /** Cap parallel Cheerio requests for this run (1–32). */
+  maxConcurrency?: number;
   /** When true, do not re-seed; continue Crawlee request queue under .crawlee/<runId>. */
   resume?: boolean;
 };
@@ -73,6 +75,7 @@ export async function prepareResumeCheerioCrawl(input: {
   runId: string;
   dataDir: string;
   maxRequestsPerCrawl?: number;
+  maxConcurrency?: number;
 }): Promise<PreparedCrawl> {
   const dataDir = path.resolve(input.dataDir);
   const runId = input.runId;
@@ -113,6 +116,7 @@ export async function prepareResumeCheerioCrawl(input: {
     seeds,
     dataDir,
     maxRequestsPerCrawl: input.maxRequestsPerCrawl,
+    maxConcurrency: input.maxConcurrency,
     resume: true,
   };
 
@@ -135,7 +139,9 @@ async function executeCheerioCrawl(
   input: RunCrawlInput,
 ): Promise<RunCrawlResult> {
   const promoteToPlaywright = new Set<string>();
-  const { minConcurrency, maxConcurrency, autoscaledPoolOptions } = concurrencyOptions();
+  const { minConcurrency, maxConcurrency, autoscaledPoolOptions } = concurrencyOptions({
+    maxConcurrency: input.maxConcurrency,
+  });
   const proxyConfiguration = buildProxyConfiguration();
 
   const siteMap: SiteMapIndex = await loadSiteMapIndex(seeds);
@@ -146,6 +152,7 @@ async function executeCheerioCrawl(
   } else {
     log.info('No sitemap map found — same-site BFS (tracking params stripped)');
   }
+  log.info(`Concurrency min=${minConcurrency} max=${maxConcurrency}`);
 
   const config = new Configuration({
     storageClientOptions: {

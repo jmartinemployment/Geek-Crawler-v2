@@ -13,6 +13,7 @@ export type StartCrawlOptions = {
   crawlType?: string;
   dataDir?: string;
   maxRequestsPerCrawl?: number;
+  maxConcurrency?: number;
   runId?: string;
 };
 
@@ -26,6 +27,7 @@ export async function startCrawl(options: StartCrawlOptions) {
     seeds: options.seeds,
     dataDir,
     maxRequestsPerCrawl: options.maxRequestsPerCrawl,
+    maxConcurrency: options.maxConcurrency,
   });
 }
 
@@ -40,6 +42,7 @@ export async function prepareCrawl(options: StartCrawlOptions) {
     seeds: options.seeds,
     dataDir,
     maxRequestsPerCrawl: options.maxRequestsPerCrawl,
+    maxConcurrency: options.maxConcurrency,
   });
 }
 
@@ -48,12 +51,14 @@ export async function prepareResumeCrawl(options: {
   runId: string;
   dataDir?: string;
   maxRequestsPerCrawl?: number;
+  maxConcurrency?: number;
 }) {
   const dataDir = path.resolve(options.dataDir ?? process.env.DATA_DIR ?? './data');
   return prepareResumeCheerioCrawl({
     runId: options.runId,
     dataDir,
     maxRequestsPerCrawl: options.maxRequestsPerCrawl,
+    maxConcurrency: options.maxConcurrency,
   });
 }
 

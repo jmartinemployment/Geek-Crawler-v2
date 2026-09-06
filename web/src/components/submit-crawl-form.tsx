@@ -10,6 +10,8 @@ export function SubmitCrawlForm() {
   const [seed, setSeed] = useState("");
   const [crawlType, setCrawlType] = useState<CrawlType>("partner");
   const [maxRequests, setMaxRequests] = useState("50");
+  /** Polite default — was env-driven 8 before this control existed. */
+  const [maxConcurrency, setMaxConcurrency] = useState("2");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -23,6 +25,10 @@ export function SubmitCrawlForm() {
         setError("Enter one seed URL");
         return;
       }
+      const concurrency = Math.max(
+        1,
+        Math.min(32, Math.floor(Number(maxConcurrency) || 2)),
+      );
       const res = await fetch("/api/crawls", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -30,6 +36,7 @@ export function SubmitCrawlForm() {
           seed: url,
           crawlType,
           maxRequestsPerCrawl: Number(maxRequests) || 50,
+          maxConcurrency: concurrency,
         }),
       });
       const body = await res.json();
@@ -79,6 +86,20 @@ export function SubmitCrawlForm() {
           onChange={(e) => setMaxRequests(e.target.value)}
         />
       </label>
+      <label className="field">
+        <span>Max concurrency</span>
+        <input
+          type="number"
+          min={1}
+          max={32}
+          value={maxConcurrency}
+          onChange={(e) => setMaxConcurrency(e.target.value)}
+        />
+      </label>
+      <p className="muted">
+        Parallel page fetches for this run (1–32). Lower is more polite; default
+        2.
+      </p>
       <button type="submit" disabled={pending}>
         {pending ? "Starting…" : "Start crawl"}
       </button>

@@ -75,6 +75,9 @@ export function createCrawlApiServer(options?: { dataDir?: string; port?: number
         const maxRequestsPerCrawl = body.maxRequestsPerCrawl
           ? Number(body.maxRequestsPerCrawl)
           : 50;
+        const maxConcurrency = body.maxConcurrency
+          ? Number(body.maxConcurrency)
+          : undefined;
         const wait = body.wait === true || body.wait === '1';
 
         if (wait) {
@@ -83,6 +86,7 @@ export function createCrawlApiServer(options?: { dataDir?: string; port?: number
             crawlType,
             dataDir,
             maxRequestsPerCrawl,
+            maxConcurrency,
           });
           return send(res, 200, {
             ok: true,
@@ -99,6 +103,7 @@ export function createCrawlApiServer(options?: { dataDir?: string; port?: number
           crawlType,
           dataDir,
           maxRequestsPerCrawl,
+          maxConcurrency,
         });
 
         const work = prepared.run().catch((err) => {
@@ -149,12 +154,16 @@ export function createCrawlApiServer(options?: { dataDir?: string; port?: number
         const maxRequestsPerCrawl = body.maxRequestsPerCrawl
           ? Number(body.maxRequestsPerCrawl)
           : undefined;
+        const maxConcurrency = body.maxConcurrency
+          ? Number(body.maxConcurrency)
+          : undefined;
 
         clearCancelRequested(runId);
         const prepared = await prepareResumeCrawl({
           runId,
           dataDir,
           maxRequestsPerCrawl,
+          maxConcurrency,
         });
 
         const work = prepared.run().catch((err) => {
@@ -193,12 +202,16 @@ export function createCrawlApiServer(options?: { dataDir?: string; port?: number
         const maxRequestsPerCrawl = body.maxRequestsPerCrawl
           ? Number(body.maxRequestsPerCrawl)
           : undefined;
+        const maxConcurrency = body.maxConcurrency
+          ? Number(body.maxConcurrency)
+          : undefined;
 
         clearCancelRequested(runId);
         const prepared = await prepareResumeCrawl({
           runId,
           dataDir,
           maxRequestsPerCrawl,
+          maxConcurrency,
         });
 
         const work = prepared.run().catch((err) => {
@@ -260,7 +273,7 @@ export function createCrawlApiServer(options?: { dataDir?: string; port?: number
           console.log(`geek-crawler-v2 API on http://127.0.0.1:${port}`);
           console.log(`  GET  /health`);
           console.log(`  GET  /crawls`);
-          console.log(`  POST /crawls  { seed|seeds[1], crawlType?, maxRequestsPerCrawl? } → 202`);
+          console.log(`  POST /crawls  { seed|seeds[1], crawlType?, maxRequestsPerCrawl?, maxConcurrency? } → 202`);
           console.log(`  POST /crawls/resume-by-url  { url } → 202 continue queue for that seed`);
           console.log(`  POST /crawls/:runId/resume  → 202 continue .crawlee queue`);
           console.log(`  GET  /crawls/:runId`);
