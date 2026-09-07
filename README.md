@@ -4,6 +4,36 @@ Standalone **Crawlee** crawler (Cheerio primary, Playwright backup). Does not mo
 
 **Normal use is local:** crawl egress comes from your machine (politer than cloud IPs). The operator UI and `serve` API both run on localhost.
 
+## Product overview
+
+Geek-Crawler v2 builds clean, citation-ready research corpora from partner and competitor websites. It gives SEO and content operators a recoverable crawl workflow with live reporting while supplying grounded source material to the wider Geek content platform.
+
+### Capabilities
+
+- Sitemap-first inventory with same-origin discovery fallback
+- Cheerio crawling with selective Playwright fallback for JavaScript shells
+- Tracking-parameter normalization and US/English locale filtering
+- `robots.txt` handling, retries, configurable concurrency, and durable resume queues
+- Cloudflare/challenge, locale, and empty-content rejection before corpus storage
+- Mozilla Readability + Turndown extraction into title, excerpt, and Markdown
+- Local storage or authenticated GeekAPI ingestion
+- Next.js operator UI with OAuth, SignalR progress, coverage reports, and CSV export
+
+### Technology
+
+Node.js, TypeScript, Crawlee, Cheerio, Playwright, Mozilla Readability, Turndown, Next.js, React, OAuth 2.0 PKCE, and Microsoft SignalR.
+
+## Place in the Geek content platform
+
+```text
+Geek-Crawler-v2
+  → GeekAPI → GeekRepository → MongoDB
+  → Geek-Crawler-Rag → Qdrant
+  → GeekAPI → Content Creator v2
+```
+
+This repository owns external website discovery, fetching, extraction, and crawl reporting. **Geek-Crawler-Rag** owns indexing, retrieval, and citation verification. **Content Creator v2** owns the editorial and publishing experience.
+
 ## How to run locally
 
 ### One-time setup
@@ -90,7 +120,7 @@ Crawlee (localhost)
       → Hostinger MongoDB (db geek_crawler)
 ```
 
-Each successful page save includes raw **HTML** plus clean **title** / **markdown** (and optional excerpt). GeekBackend must store those fields for Mongo to retain them; until then the client still sends them. Existing pages without markdown are a **tomorrow backfill** — see `plans/rag-markdown-backfill-tomorrow.md`.
+Each successful page save includes raw **HTML** plus clean **title** / **markdown** (and optional excerpt). GeekBackend stores those fields for Mongo. Historical pages without Markdown are handled by the Geek-Crawler-Rag backfill; see [`plans/rag-markdown-backfill.md`](./plans/rag-markdown-backfill.md).
 
 Without those env vars, data stays under `./data/` (or `DATA_DIR`) only (`.html` + sibling `.md` bodies when local).
 

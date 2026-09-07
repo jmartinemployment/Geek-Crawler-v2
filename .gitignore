@@ -10,6 +10,8 @@ data/
 .crawlee/
 crawlee_storage/
 .vercel/
+web/playwright-report/
+web/test-results/
 
 # secrets — keep examples
 .env

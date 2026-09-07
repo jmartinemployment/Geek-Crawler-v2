@@ -172,6 +172,8 @@ async function executeCheerioCrawl(
   }
 
   const config = new Configuration({
+    // Resumes must preserve the request queue left by the prior process.
+    purgeOnStart: !input.resume,
     storageClientOptions: {
       localDataDirectory: `${input.dataDir}/.crawlee/${persist.runId}`,
     },

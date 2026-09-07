@@ -10,12 +10,14 @@
     "serve": "tsx src/cli.ts serve",
     "start": "node dist/cli.js",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test src/crawl/reject.test.ts src/crawl/viability-reject.test.ts",
+    "test": "tsx --test src/**/*.test.ts",
+    "test:integration": "tsx --test tests/**/*.test.ts",
+    "test:all": "npm test && npm run test:integration",
     "web:dev": "npm run dev --prefix web",
     "web:build": "npm run build --prefix web"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=24"
   },
   "dependencies": {
     "@mozilla/readability": "^0.6.0",

@@ -340,7 +340,7 @@ export function createCrawlApiServer(options?: { dataDir?: string; port?: number
       return send(res, 404, { error: 'not found' });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      return send(res, 500, { error: message });
+      return send(res, err instanceof SyntaxError ? 400 : 500, { error: message });
     }
   });
 

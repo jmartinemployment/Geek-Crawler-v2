@@ -211,9 +211,12 @@ export function createJsonRunStore(dataDir: string): RunStore {
     },
 
     async getRun(runId) {
-      const cached = memory.get(runId);
-      if (cached) return { ...cached };
-      return readJson<CrawlRunMeta>(runPath(runId));
+      // Multiple store instances are expected (API status reads vs. crawl/resume
+      // workers). Always refresh from disk so a server does not keep returning
+      // the state cached by an earlier listRuns() call.
+      const run = await readJson<CrawlRunMeta>(runPath(runId));
+      if (run) memory.set(runId, run);
+      return run ? { ...run } : null;
     },
 
     async listRuns() {
