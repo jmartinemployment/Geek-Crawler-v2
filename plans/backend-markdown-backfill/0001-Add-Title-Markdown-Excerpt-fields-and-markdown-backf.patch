@@ -1,0 +1,416 @@
+From 69f77c671cd463267958540f2639086ce6f2791c Mon Sep 17 00:00:00 2001
+From: Cursor Agent <cursoragent@cursor.com>
+Date: Mon, 7 Sep 2026 09:27:39 +0000
+Subject: [PATCH] Add Title/Markdown/Excerpt fields and markdown-backfill API.
+
+Persist clean content on page create and expose an idempotent batch
+backfill endpoint so existing HTML-only crawl pages can be updated
+without re-crawling.
+---
+ .../GeekCrawlerIngestController.cs            | 53 ++++++++++++++-
+ GeekAPI/HttpClients/GeekCrawlerDtos.cs        | 23 ++++++-
+ .../HttpClients/HttpGeekCrawlerRepository.cs  |  8 +++
+ .../GeekCrawler/GeekCrawlerPagesController.cs | 41 ++++++++++-
+ .../Entities/GeekCrawler/GeekCrawlerPage.cs   |  8 +++
+ GeekRepository/Data/GeekCrawlerDbContext.cs   |  3 +
+ ...120000_AddGeekCrawlerPageMarkdownFields.cs | 68 +++++++++++++++++++
+ .../Services/MongoGeekCrawlerService.cs       | 57 ++++++++++++++++
+ 8 files changed, 256 insertions(+), 5 deletions(-)
+ create mode 100644 GeekRepository/Data/Migrations/GeekCrawler/20260907120000_AddGeekCrawlerPageMarkdownFields.cs
+
+diff --git a/GeekAPI/Controllers/GeekCrawler/GeekCrawlerIngestController.cs b/GeekAPI/Controllers/GeekCrawler/GeekCrawlerIngestController.cs
+index e4b50d4..2edc956 100644
+--- a/GeekAPI/Controllers/GeekCrawler/GeekCrawlerIngestController.cs
++++ b/GeekAPI/Controllers/GeekCrawler/GeekCrawlerIngestController.cs
+@@ -167,7 +167,10 @@ public class GeekCrawlerIngestController : ControllerBase
+             p.StatusCode,
+             p.RobotsAllowed,
+             p.Html,
+-            p.FailureReason)).ToList();
++            p.FailureReason,
++            p.Title,
++            p.Markdown,
++            p.Excerpt)).ToList();
+ 
+         try
+         {
+@@ -201,6 +204,41 @@ public class GeekCrawlerIngestController : ControllerBase
+         }
+     }
+ 
++    [HttpPost("runs/{runId:guid}/pages/markdown-backfill")]
++    [RequestSizeLimit(MaxPageBatchBytes)]
++    public async Task<IActionResult> MarkdownBackfill(
++        Guid runId,
++        [FromBody] IngestMarkdownBackfillRequest request,
++        CancellationToken ct)
++    {
++        if (!_user.IsAuthenticated) return Unauthorized();
++        if (!await OwnsRunAsync(runId, ct).ConfigureAwait(false)) return NotFound();
++        if (request?.Pages is null || request.Pages.Count == 0)
++            return BadRequest("pages are required");
++        if (request.Pages.Count > 100)
++            return BadRequest("at most 100 pages per batch");
++
++        var items = request.Pages
++            .Select(p => new GeekCrawlerMarkdownBackfillItemCommand(
++                p.PageId,
++                p.Title,
++                p.Markdown,
++                p.Excerpt))
++            .ToList();
++
++        try
++        {
++            var result = await _repo.BackfillPageMarkdownBatchAsync(
++                new GeekCrawlerMarkdownBackfillBatchCommand(runId, items),
++                ct).ConfigureAwait(false);
++            return Ok(result);
++        }
++        catch (HttpRequestException ex)
++        {
++            return StatusCode(StatusCodes.Status502BadGateway, ex.Message);
++        }
++    }
++
+     [HttpPost("runs/{runId:guid}/links/batch")]
+     public async Task<IActionResult> CreateLinksBatch(
+         Guid runId,
+@@ -264,7 +302,18 @@ public class GeekCrawlerIngestController : ControllerBase
+         int StatusCode,
+         bool RobotsAllowed,
+         string? Html,
+-        string? FailureReason = null);
++        string? FailureReason = null,
++        string? Title = null,
++        string? Markdown = null,
++        string? Excerpt = null);
++
++    public record IngestMarkdownBackfillRequest(IReadOnlyList<IngestMarkdownBackfillItem>? Pages);
++
++    public record IngestMarkdownBackfillItem(
++        Guid PageId,
++        string? Title,
++        string? Markdown,
++        string? Excerpt);
+ 
+     public record IngestLinksBatchRequest(IReadOnlyList<IngestLinkItem>? Links);
+ 
+diff --git a/GeekAPI/HttpClients/GeekCrawlerDtos.cs b/GeekAPI/HttpClients/GeekCrawlerDtos.cs
+index 5f613dd..19cddc8 100644
+--- a/GeekAPI/HttpClients/GeekCrawlerDtos.cs
++++ b/GeekAPI/HttpClients/GeekCrawlerDtos.cs
+@@ -36,7 +36,11 @@ public record GeekCrawlerPageDto(
+     bool RobotsAllowed,
+     string? Html,
+     string? FailureReason,
+-    DateTimeOffset CrawledAtUtc);
++    DateTimeOffset CrawledAtUtc,
++    string? Title = null,
++    string? Markdown = null,
++    string? Excerpt = null,
++    DateTimeOffset? MarkdownBackfilledAt = null);
+ 
+ public record CreateGeekCrawlerPageBatchCommand(
+     Guid RunId,
+@@ -49,7 +53,22 @@ public record CreateGeekCrawlerPageItemCommand(
+     int StatusCode,
+     bool RobotsAllowed,
+     string? Html,
+-    string? FailureReason = null);
++    string? FailureReason = null,
++    string? Title = null,
++    string? Markdown = null,
++    string? Excerpt = null);
++
++public record GeekCrawlerMarkdownBackfillBatchCommand(
++    Guid RunId,
++    IReadOnlyList<GeekCrawlerMarkdownBackfillItemCommand> Pages);
++
++public record GeekCrawlerMarkdownBackfillItemCommand(
++    Guid PageId,
++    string? Title,
++    string? Markdown,
++    string? Excerpt);
++
++public record GeekCrawlerMarkdownBackfillResult(int Count, int Requested);
+ 
+ public record GeekCrawlerPageBatchResult(
+     int Count,
+diff --git a/GeekAPI/HttpClients/HttpGeekCrawlerRepository.cs b/GeekAPI/HttpClients/HttpGeekCrawlerRepository.cs
+index e8e7564..e1b1222 100644
+--- a/GeekAPI/HttpClients/HttpGeekCrawlerRepository.cs
++++ b/GeekAPI/HttpClients/HttpGeekCrawlerRepository.cs
+@@ -119,6 +119,14 @@ public sealed class HttpGeekCrawlerRepository : IGeekCrawlerResumeRepository
+         CancellationToken ct = default) =>
+         PostAsync<GeekCrawlerPageBatchResult>("repo/geek-crawler/pages/batch", command, ct);
+ 
++    public Task<GeekCrawlerMarkdownBackfillResult> BackfillPageMarkdownBatchAsync(
++        GeekCrawlerMarkdownBackfillBatchCommand command,
++        CancellationToken ct = default) =>
++        PostAsync<GeekCrawlerMarkdownBackfillResult>(
++            "repo/geek-crawler/pages/markdown-backfill",
++            command,
++            ct);
++
+     public Task<IReadOnlyList<GeekCrawlerLinkDto>> ListLinksAsync(
+         Guid runId,
+         bool? sameOrigin = null,
+diff --git a/GeekRepository/Controllers/GeekCrawler/GeekCrawlerPagesController.cs b/GeekRepository/Controllers/GeekCrawler/GeekCrawlerPagesController.cs
+index 9361b0a..92e8443 100644
+--- a/GeekRepository/Controllers/GeekCrawler/GeekCrawlerPagesController.cs
++++ b/GeekRepository/Controllers/GeekCrawler/GeekCrawlerPagesController.cs
+@@ -109,6 +109,9 @@ public class GeekCrawlerPagesController : ControllerBase
+                 StatusCode = p.StatusCode,
+                 RobotsAllowed = p.RobotsAllowed,
+                 Html = p.Html,
++                Title = p.Title,
++                Markdown = p.Markdown,
++                Excerpt = p.Excerpt,
+                 FailureReason = TruncateFailureReason(p.FailureReason),
+                 CrawledAtUtc = now,
+             });
+@@ -119,6 +122,29 @@ public class GeekCrawlerPagesController : ControllerBase
+         return Ok(new { count = result.Count, pages = result });
+     }
+ 
++    /// <summary>
++    /// Idempotent backfill: set Title/Markdown/Excerpt only when Markdown is currently empty.
++    /// </summary>
++    [HttpPost("markdown-backfill")]
++    [RequestSizeLimit(50L * 1024 * 1024)]
++    public async Task<ActionResult<object>> MarkdownBackfill(
++        [FromBody] MarkdownBackfillBatchCommand command,
++        CancellationToken ct)
++    {
++        if (command is null || command.RunId == Guid.Empty || command.Pages is null || command.Pages.Count == 0)
++            return BadRequest("runId and pages are required");
++        if (command.Pages.Count > 100)
++            return BadRequest("at most 100 pages per batch");
++
++        var updates = command.Pages
++            .Where(p => p.PageId != Guid.Empty && !string.IsNullOrWhiteSpace(p.Markdown))
++            .Select(p => (p.PageId, p.Title, p.Markdown, p.Excerpt))
++            .ToList();
++
++        var modified = await _mongo.BackfillPageMarkdownBatchAsync(command.RunId, updates, ct);
++        return Ok(new { count = modified, requested = updates.Count });
++    }
++
+     public record CreateGeekCrawlerPageBatchCommand(
+         Guid RunId,
+         IReadOnlyList<CreateGeekCrawlerPageItem> Pages);
+@@ -130,7 +156,20 @@ public class GeekCrawlerPagesController : ControllerBase
+         int StatusCode,
+         bool RobotsAllowed,
+         string? Html,
+-        string? FailureReason = null);
++        string? FailureReason = null,
++        string? Title = null,
++        string? Markdown = null,
++        string? Excerpt = null);
++
++    public record MarkdownBackfillBatchCommand(
++        Guid RunId,
++        IReadOnlyList<MarkdownBackfillPageItem> Pages);
++
++    public record MarkdownBackfillPageItem(
++        Guid PageId,
++        string? Title,
++        string? Markdown,
++        string? Excerpt);
+ 
+     private static string? TruncateFailureReason(string? reason) =>
+         string.IsNullOrWhiteSpace(reason) ? null : reason.Length <= 512 ? reason : reason[..512];
+diff --git a/GeekRepository/Data/Entities/GeekCrawler/GeekCrawlerPage.cs b/GeekRepository/Data/Entities/GeekCrawler/GeekCrawlerPage.cs
+index 2f30ddf..aee668b 100644
+--- a/GeekRepository/Data/Entities/GeekCrawler/GeekCrawlerPage.cs
++++ b/GeekRepository/Data/Entities/GeekCrawler/GeekCrawlerPage.cs
+@@ -10,6 +10,14 @@ public class GeekCrawlerPage
+     public int StatusCode { get; set; }
+     public bool RobotsAllowed { get; set; }
+     public string? Html { get; set; }
++    /// <summary>Clean article title (Readability).</summary>
++    public string? Title { get; set; }
++    /// <summary>Clean article markdown (Readability + Turndown).</summary>
++    public string? Markdown { get; set; }
++    /// <summary>Short plain excerpt when available.</summary>
++    public string? Excerpt { get; set; }
++    /// <summary>Set when markdown was filled by a backfill job (not live crawl).</summary>
++    public DateTimeOffset? MarkdownBackfilledAt { get; set; }
+     public string? FailureReason { get; set; }
+     public DateTimeOffset CrawledAtUtc { get; set; } = DateTimeOffset.UtcNow;
+ }
+diff --git a/GeekRepository/Data/GeekCrawlerDbContext.cs b/GeekRepository/Data/GeekCrawlerDbContext.cs
+index ef48415..e819b92 100644
+--- a/GeekRepository/Data/GeekCrawlerDbContext.cs
++++ b/GeekRepository/Data/GeekCrawlerDbContext.cs
+@@ -46,6 +46,9 @@ public class GeekCrawlerDbContext : DbContext
+             entity.Property(p => p.Url).IsRequired().HasMaxLength(2048);
+             entity.Property(p => p.FinalUrl).IsRequired().HasMaxLength(2048);
+             entity.Property(p => p.Html).HasColumnType("text");
++            entity.Property(p => p.Title).HasMaxLength(1024);
++            entity.Property(p => p.Markdown).HasColumnType("text");
++            entity.Property(p => p.Excerpt).HasMaxLength(2048);
+             entity.Property(p => p.FailureReason).HasMaxLength(512);
+             entity.Property(p => p.CrawledAtUtc).IsRequired();
+             entity.HasIndex(p => p.RunId).HasDatabaseName("ix_crawl_pages_run_id");
+diff --git a/GeekRepository/Data/Migrations/GeekCrawler/20260907120000_AddGeekCrawlerPageMarkdownFields.cs b/GeekRepository/Data/Migrations/GeekCrawler/20260907120000_AddGeekCrawlerPageMarkdownFields.cs
+new file mode 100644
+index 0000000..e8859f4
+--- /dev/null
++++ b/GeekRepository/Data/Migrations/GeekCrawler/20260907120000_AddGeekCrawlerPageMarkdownFields.cs
+@@ -0,0 +1,68 @@
++using GeekRepository.Data;
++using Microsoft.EntityFrameworkCore.Infrastructure;
++using Microsoft.EntityFrameworkCore.Migrations;
++
++#nullable disable
++
++namespace GeekRepository.Data.Migrations.GeekCrawler;
++
++[DbContext(typeof(GeekCrawlerDbContext))]
++[Migration("20260907120000_AddGeekCrawlerPageMarkdownFields")]
++public partial class AddGeekCrawlerPageMarkdownFields : Migration
++{
++    protected override void Up(MigrationBuilder migrationBuilder)
++    {
++        migrationBuilder.AddColumn<string>(
++            name: "Title",
++            schema: "geek_crawler",
++            table: "crawl_pages",
++            type: "character varying(1024)",
++            maxLength: 1024,
++            nullable: true);
++
++        migrationBuilder.AddColumn<string>(
++            name: "Markdown",
++            schema: "geek_crawler",
++            table: "crawl_pages",
++            type: "text",
++            nullable: true);
++
++        migrationBuilder.AddColumn<string>(
++            name: "Excerpt",
++            schema: "geek_crawler",
++            table: "crawl_pages",
++            type: "character varying(2048)",
++            maxLength: 2048,
++            nullable: true);
++
++        migrationBuilder.AddColumn<DateTimeOffset>(
++            name: "MarkdownBackfilledAt",
++            schema: "geek_crawler",
++            table: "crawl_pages",
++            type: "timestamp with time zone",
++            nullable: true);
++    }
++
++    protected override void Down(MigrationBuilder migrationBuilder)
++    {
++        migrationBuilder.DropColumn(
++            name: "Title",
++            schema: "geek_crawler",
++            table: "crawl_pages");
++
++        migrationBuilder.DropColumn(
++            name: "Markdown",
++            schema: "geek_crawler",
++            table: "crawl_pages");
++
++        migrationBuilder.DropColumn(
++            name: "Excerpt",
++            schema: "geek_crawler",
++            table: "crawl_pages");
++
++        migrationBuilder.DropColumn(
++            name: "MarkdownBackfilledAt",
++            schema: "geek_crawler",
++            table: "crawl_pages");
++    }
++}
+diff --git a/GeekRepository/Services/MongoGeekCrawlerService.cs b/GeekRepository/Services/MongoGeekCrawlerService.cs
+index a392694..9799499 100644
+--- a/GeekRepository/Services/MongoGeekCrawlerService.cs
++++ b/GeekRepository/Services/MongoGeekCrawlerService.cs
+@@ -25,6 +25,14 @@ public interface IMongoGeekCrawlerService
+ 
+     // WRITE: Pages
+     Task<List<(string Url, Guid PageId)>> CreatePagesBatchAsync(Guid runId, IReadOnlyList<GeekCrawlerPage> pages, CancellationToken ct = default);
++    /// <summary>
++    /// Idempotent markdown backfill: updates Title/Markdown/Excerpt only when Markdown is empty.
++    /// Returns number of documents modified.
++    /// </summary>
++    Task<int> BackfillPageMarkdownBatchAsync(
++        Guid runId,
++        IReadOnlyList<(Guid PageId, string? Title, string? Markdown, string? Excerpt)> updates,
++        CancellationToken ct = default);
+ 
+     // READ: Runs
+     Task<GeekCrawlerRun?> GetRunByIdAsync(Guid id, CancellationToken ct = default);
+@@ -103,6 +111,7 @@ public sealed class MongoGeekCrawlerService : IMongoGeekCrawlerService
+             cm.MapMember(x => x.StatusCode).SetSerializer(pgInt);
+             cm.MapMember(x => x.RobotsAllowed).SetSerializer(pgBool);
+             cm.MapMember(x => x.CrawledAtUtc).SetSerializer(date);
++            cm.MapMember(x => x.MarkdownBackfilledAt).SetSerializer(nullableDate);
+         });
+ 
+         BsonClassMap.RegisterClassMap<GeekCrawlerLink>(cm =>
+@@ -397,6 +406,54 @@ public sealed class MongoGeekCrawlerService : IMongoGeekCrawlerService
+         }
+     }
+ 
++    public async Task<int> BackfillPageMarkdownBatchAsync(
++        Guid runId,
++        IReadOnlyList<(Guid PageId, string? Title, string? Markdown, string? Excerpt)> updates,
++        CancellationToken ct = default)
++    {
++        if (runId == Guid.Empty) throw new ArgumentException("runId is required", nameof(runId));
++        if (updates == null || updates.Count == 0)
++            throw new ArgumentException("updates are required", nameof(updates));
++
++        try
++        {
++            var collection = _db.GetCollection<GeekCrawlerPage>("crawl_pages");
++            var now = DateTimeOffset.UtcNow;
++            var models = new List<WriteModel<GeekCrawlerPage>>(updates.Count);
++
++            foreach (var u in updates)
++            {
++                if (u.PageId == Guid.Empty) continue;
++                if (string.IsNullOrWhiteSpace(u.Markdown)) continue;
++
++                var filter = Builders<GeekCrawlerPage>.Filter.And(
++                    Builders<GeekCrawlerPage>.Filter.Eq(p => p.RunId, runId),
++                    Builders<GeekCrawlerPage>.Filter.Eq(p => p.Id, u.PageId),
++                    Builders<GeekCrawlerPage>.Filter.Or(
++                        Builders<GeekCrawlerPage>.Filter.Eq(p => p.Markdown, null),
++                        Builders<GeekCrawlerPage>.Filter.Eq(p => p.Markdown, "")));
++
++                var update = Builders<GeekCrawlerPage>.Update
++                    .Set(p => p.Title, u.Title)
++                    .Set(p => p.Markdown, u.Markdown)
++                    .Set(p => p.Excerpt, u.Excerpt)
++                    .Set(p => p.MarkdownBackfilledAt, now);
++
++                models.Add(new UpdateOneModel<GeekCrawlerPage>(filter, update));
++            }
++
++            if (models.Count == 0) return 0;
++
++            var result = await collection.BulkWriteAsync(models, cancellationToken: ct);
++            return (int)result.ModifiedCount;
++        }
++        catch (Exception ex)
++        {
++            _logger.LogError(ex, "Failed to backfill markdown for run {RunId}", runId);
++            throw;
++        }
++    }
++
+     public async Task<GeekCrawlerRun?> GetRunByIdAsync(Guid id, CancellationToken ct = default)
+     {
+         if (id == Guid.Empty) throw new ArgumentException("id is required", nameof(id));
+-- 
+2.43.0
+

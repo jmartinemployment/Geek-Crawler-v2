@@ -1,6 +1,7 @@
 import { Configuration, PlaywrightCrawler, log } from 'crawlee';
 import { defaultRequestHeaders } from '../bot/identity.js';
 import type { CrawlPersist } from '../storage/persist.js';
+import { extractCleanContent } from './extract-content.js';
 import { extractHrefs } from './links.js';
 import { buildProxyConfiguration } from './proxy.js';
 
@@ -54,11 +55,15 @@ export async function runPlaywrightPool(input: PlaywrightPoolInput): Promise<num
       async requestHandler({ request, page, parseWithCheerio }) {
         const rawHtml = await page.content();
         const finalUrl = page.url();
+        const clean = extractCleanContent(rawHtml, finalUrl);
         const { pageId } = await input.persist.savePage({
           url: request.url,
           finalUrl,
           statusCode: 200,
           html: rawHtml,
+          markdown: clean.markdown,
+          title: clean.title,
+          excerpt: clean.excerpt,
           robotsAllowed: true,
           fetchMode: 'playwright',
         });
