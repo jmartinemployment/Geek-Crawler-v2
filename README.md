@@ -58,12 +58,20 @@ When `GEEK_API_URL` + `GEEK_BACKEND_API_KEY` + `GEEK_USER_ID` are set:
 
 ```text
 Crawlee (localhost)
+  → Readability + Turndown (title + markdown alongside HTML)
   → GeekAPI (/api/geek-crawler/ingest/*)
     → GeekRepository (X-Repo-Key)
       → Hostinger MongoDB (db geek_crawler)
 ```
 
-Without those env vars, data stays under `./data/` only.
+Without those env vars, data stays under `./data/` only (HTML + sibling `.md` when local).
+
+**Backfill existing HTML-only pages** (after applying Backend patch in `plans/backend-markdown-backfill/`):
+
+```bash
+npm run backfill-markdown -- --run-id <guid> --dry-run
+npm run backfill-markdown -- --run-id <guid>
+```
 
 Do **not** point this crawler at GeekRepository (`REPO_*`) — that bypasses GeekAPI.
 
