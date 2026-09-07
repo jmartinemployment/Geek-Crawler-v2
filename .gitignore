@@ -1,7 +1,8 @@
 node_modules/
 dist/
 data/
-storage/
+# Crawlee default dataset dir at repo root (not src/storage/)
+/storage/
 .next/
 *.tsbuildinfo
 *.log
