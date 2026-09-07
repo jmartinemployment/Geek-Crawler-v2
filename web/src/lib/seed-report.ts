@@ -25,6 +25,9 @@ export type SeedReportRow = {
   crawlType: string;
   completed: string;
   failureReason: string | null;
+  pagesRejectedLocale: number;
+  pagesRejectedChallenge: number;
+  pagesRejectedExtractEmpty: number;
 };
 
 /** Fail fast when Hostinger / GeekAPI is down so reports use local stubs. */
@@ -88,6 +91,9 @@ type LocalRunStub = {
   crawlType: string;
   seeds: string[];
   pagesSaved: number;
+  pagesRejectedLocale: number;
+  pagesRejectedChallenge: number;
+  pagesRejectedExtractEmpty: number;
   errorSummary: string | null;
 };
 
@@ -97,6 +103,9 @@ type GeekSnap = {
   seedUrls: string[];
   hosts: HostRow[];
   errorSummary: string | null;
+  pagesRejectedLocale: number;
+  pagesRejectedChallenge: number;
+  pagesRejectedExtractEmpty: number;
 };
 
 async function loadLocalRun(runId: string): Promise<LocalRunStub | null> {
@@ -113,6 +122,10 @@ async function loadLocalRun(runId: string): Promise<LocalRunStub | null> {
       crawlType: String(body.crawlType ?? ""),
       seeds: Array.isArray(body.seeds) ? body.seeds.map(String) : [],
       pagesSaved: Number(body.pagesSaved ?? 0) || 0,
+      pagesRejectedLocale: Number(body.pagesRejectedLocale ?? 0) || 0,
+      pagesRejectedChallenge: Number(body.pagesRejectedChallenge ?? 0) || 0,
+      pagesRejectedExtractEmpty:
+        Number(body.pagesRejectedExtractEmpty ?? 0) || 0,
       errorSummary:
         typeof body.errorSummary === "string" ? body.errorSummary : null,
     };
@@ -134,13 +147,25 @@ async function loadGeekSnap(runId: string): Promise<GeekSnap | null> {
     );
     if (!res.ok) return null;
     const snap = await res.json();
+    const hosts = Array.isArray(snap.hosts) ? snap.hosts : [];
+    const rejectHost = hosts.find(
+      (h: HostRow & Record<string, unknown>) =>
+        String(h.origin ?? "") === "__crawlee_reject_stats__",
+    ) as (HostRow & Record<string, unknown>) | undefined;
     return {
       status: String(snap.status ?? ""),
       crawlType: String(snap.crawlType ?? ""),
       seedUrls: Array.isArray(snap.seedUrls) ? snap.seedUrls.map(String) : [],
-      hosts: Array.isArray(snap.hosts) ? snap.hosts : [],
+      hosts: hosts.filter(
+        (h: HostRow) => String(h.origin ?? "") !== "__crawlee_reject_stats__",
+      ),
       errorSummary:
         typeof snap.errorSummary === "string" ? snap.errorSummary : null,
+      pagesRejectedLocale: Number(rejectHost?.pagesRejectedLocale ?? 0) || 0,
+      pagesRejectedChallenge:
+        Number(rejectHost?.pagesRejectedChallenge ?? 0) || 0,
+      pagesRejectedExtractEmpty:
+        Number(rejectHost?.pagesRejectedExtractEmpty ?? 0) || 0,
     };
   } catch {
     return null;
@@ -239,6 +264,13 @@ export async function buildSeedReportForRun(
   const crawlType = geek?.crawlType || local?.crawlType || "";
   const errorSummary = geek?.errorSummary ?? local?.errorSummary ?? null;
   const hosts = geek?.hosts ?? [];
+  const pagesRejectedLocale =
+    (local?.pagesRejectedLocale ?? 0) || (geek?.pagesRejectedLocale ?? 0);
+  const pagesRejectedChallenge =
+    (local?.pagesRejectedChallenge ?? 0) || (geek?.pagesRejectedChallenge ?? 0);
+  const pagesRejectedExtractEmpty =
+    (local?.pagesRejectedExtractEmpty ?? 0) ||
+    (geek?.pagesRejectedExtractEmpty ?? 0);
   const hostByOrigin = new Map(
     hosts
       .filter((h) => h.origin)
@@ -302,6 +334,9 @@ export async function buildSeedReportForRun(
       crawlType,
       completed: completedLabel(status, host, pageCount, totalForPct),
       failureReason,
+      pagesRejectedLocale,
+      pagesRejectedChallenge,
+      pagesRejectedExtractEmpty,
     };
   });
 

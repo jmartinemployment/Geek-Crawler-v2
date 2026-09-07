@@ -10,6 +10,7 @@
     "serve": "tsx src/cli.ts serve",
     "start": "node dist/cli.js",
     "typecheck": "tsc --noEmit",
+    "test": "tsx --test src/crawl/reject.test.ts src/crawl/viability-reject.test.ts",
     "web:dev": "npm run dev --prefix web",
     "web:build": "npm run build --prefix web"
   },

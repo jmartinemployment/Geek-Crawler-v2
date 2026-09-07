@@ -93,6 +93,9 @@ export function createCrawlApiServer(options?: { dataDir?: string; port?: number
             runId: result.runId,
             pagesSaved: result.pagesSaved,
             linksSaved: result.linksSaved,
+            pagesRejectedLocale: result.pagesRejectedLocale,
+            pagesRejectedChallenge: result.pagesRejectedChallenge,
+            pagesRejectedExtractEmpty: result.pagesRejectedExtractEmpty,
             dataDir: result.dataDir,
             persistMode: result.persistMode,
           });

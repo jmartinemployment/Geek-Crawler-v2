@@ -17,6 +17,7 @@ import {
 import { concurrencyOptions, httpAgent, httpsAgent } from './throttle.js';
 import type { CrawlType } from './types.js';
 import { isViableHtml } from './viability.js';
+import { classifyReject } from './reject.js';
 import { normalizeSeeds } from '../storage/seed-key.js';
 
 export type RunCrawlInput = {
@@ -35,6 +36,9 @@ export type RunCrawlResult = {
   runId: string;
   pagesSaved: number;
   linksSaved: number;
+  pagesRejectedLocale: number;
+  pagesRejectedChallenge: number;
+  pagesRejectedExtractEmpty: number;
   dataDir: string;
   persistMode: string;
 };
@@ -216,22 +220,16 @@ async function executeCheerioCrawl(
         const statusCode = response?.statusCode;
         const finalUrl = request.loadedUrl ?? request.url;
 
+        const localeReject = classifyReject({ finalUrl });
+        if (localeReject === 'locale_excluded') {
+          persist.noteReject('locale_excluded', finalUrl);
+          return;
+        }
+
         const viability = isViableHtml(rawHtml, $ as never);
         if (!viability.viable) {
           if (viability.reason === 'challenge_page') {
-            const clean = extractCleanContent(rawHtml, finalUrl);
-            await persist.savePage({
-              url: request.url,
-              finalUrl,
-              statusCode,
-              html: rawHtml,
-              markdown: clean.markdown,
-              title: clean.title,
-              excerpt: clean.excerpt,
-              robotsAllowed: true,
-              failureReason: viability.reason,
-              fetchMode: 'cheerio',
-            });
+            persist.noteReject('challenge_page', finalUrl);
             return;
           }
 
@@ -246,6 +244,20 @@ async function executeCheerioCrawl(
         }
 
         const clean = extractCleanContent(rawHtml, finalUrl);
+        const extractReject = classifyReject({
+          finalUrl,
+          markdown: clean.markdown,
+        });
+        if (extractReject === 'extract_empty') {
+          const links = extractHrefs($, finalUrl);
+          const toEnqueue = filterEnqueueUrls(sameOriginUrls(links), siteMap);
+          if (toEnqueue.length > 0) {
+            await enqueueLinks({ urls: toEnqueue, strategy: 'all' });
+          }
+          persist.noteReject('extract_empty', finalUrl);
+          return;
+        }
+
         const { pageId } = await persist.savePage({
           url: request.url,
           finalUrl,
@@ -306,6 +318,7 @@ async function executeCheerioCrawl(
         urls: [...promoteToPlaywright],
         dataDir: input.dataDir,
         persist,
+        siteMap,
       });
     }
 
@@ -321,6 +334,9 @@ async function executeCheerioCrawl(
     runId: persist.runId,
     pagesSaved: stats.pagesSaved,
     linksSaved: stats.linksSaved,
+    pagesRejectedLocale: stats.pagesRejectedLocale,
+    pagesRejectedChallenge: stats.pagesRejectedChallenge,
+    pagesRejectedExtractEmpty: stats.pagesRejectedExtractEmpty,
     dataDir: persist.dataDir,
     persistMode: persist.mode,
   };

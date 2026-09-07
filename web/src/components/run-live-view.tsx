@@ -21,6 +21,9 @@ type ReportRow = {
   crawlType: string;
   completed: string;
   failureReason: string | null;
+  pagesRejectedLocale?: number;
+  pagesRejectedChallenge?: number;
+  pagesRejectedExtractEmpty?: number;
 };
 
 const PAGE_SIZE = 100;
@@ -126,7 +129,7 @@ export function RunLiveView({ runId }: { runId: string }) {
 
   function downloadReportCsv() {
     const lines = [
-      "seedUrl,pageCount,sitemapUrlCount,sitemapPathCount,status,statusDescription,crawlType,completed,failureReason",
+      "seedUrl,pageCount,sitemapUrlCount,sitemapPathCount,status,statusDescription,crawlType,completed,failureReason,pagesRejectedLocale,pagesRejectedChallenge,pagesRejectedExtractEmpty",
     ];
     for (const row of reportRows) {
       lines.push(
@@ -140,6 +143,9 @@ export function RunLiveView({ runId }: { runId: string }) {
           JSON.stringify(row.crawlType),
           JSON.stringify(row.completed),
           JSON.stringify(row.failureReason ?? ""),
+          row.pagesRejectedLocale ?? 0,
+          row.pagesRejectedChallenge ?? 0,
+          row.pagesRejectedExtractEmpty ?? 0,
         ].join(","),
       );
     }
@@ -212,6 +218,9 @@ export function RunLiveView({ runId }: { runId: string }) {
               <tr>
                 <th>seedUrl</th>
                 <th># crawled</th>
+                <th>rej locale</th>
+                <th>rej challenge</th>
+                <th>rej empty</th>
                 <th>sitemap URLs</th>
                 <th>sitemap paths</th>
                 <th>status</th>
@@ -226,6 +235,9 @@ export function RunLiveView({ runId }: { runId: string }) {
                 <tr key={row.seedUrl}>
                   <td>{row.seedUrl}</td>
                   <td>{row.pageCount}</td>
+                  <td>{row.pagesRejectedLocale ?? 0}</td>
+                  <td>{row.pagesRejectedChallenge ?? 0}</td>
+                  <td>{row.pagesRejectedExtractEmpty ?? 0}</td>
                   <td>{row.sitemapUrlCount ?? "—"}</td>
                   <td>{row.sitemapPathCount ?? "—"}</td>
                   <td>{row.status}</td>

@@ -2,14 +2,18 @@ import { Configuration, PlaywrightCrawler, log } from 'crawlee';
 import { defaultRequestHeaders } from '../bot/identity.js';
 import type { CrawlPersist } from '../storage/persist.js';
 import { extractCleanContent } from './extract-content.js';
-import { extractHrefs } from './links.js';
+import { extractHrefs, sameOriginUrls } from './links.js';
 import { buildProxyConfiguration } from './proxy.js';
+import { classifyReject } from './reject.js';
+import { filterEnqueueUrls, type SiteMapIndex } from './sitemap.js';
+import { isViableHtml } from './viability.js';
 
 export type PlaywrightPoolInput = {
   runId: string;
   urls: string[];
   dataDir: string;
   persist: CrawlPersist;
+  siteMap?: SiteMapIndex;
 };
 
 /** Crawlee PlaywrightCrawler backup — promoted URLs only, capped concurrency. */
@@ -19,6 +23,11 @@ export async function runPlaywrightPool(input: PlaywrightPoolInput): Promise<num
 
   const maxConcurrency = Number(process.env.PLAYWRIGHT_MAX_CONCURRENCY ?? 1);
   const proxyConfiguration = buildProxyConfiguration();
+  const siteMap: SiteMapIndex = input.siteMap ?? {
+    hasMap: false,
+    urls: new Set(),
+    sources: [],
+  };
 
   const config = new Configuration({
     storageClientOptions: {
@@ -52,10 +61,39 @@ export async function runPlaywrightPool(input: PlaywrightPoolInput): Promise<num
           goOptions.waitUntil = 'domcontentloaded';
         },
       ],
-      async requestHandler({ request, page, parseWithCheerio }) {
+      async requestHandler({ request, page, parseWithCheerio, enqueueLinks }) {
         const rawHtml = await page.content();
         const finalUrl = page.url();
+        const $ = await parseWithCheerio();
+
+        const localeReject = classifyReject({ finalUrl });
+        if (localeReject === 'locale_excluded') {
+          input.persist.noteReject('locale_excluded', finalUrl);
+          return;
+        }
+
+        const viability = isViableHtml(rawHtml, $ as never);
+        if (!viability.viable && viability.reason === 'challenge_page') {
+          input.persist.noteReject('challenge_page', finalUrl);
+          return;
+        }
+
         const clean = extractCleanContent(rawHtml, finalUrl);
+        const extractReject = classifyReject({
+          finalUrl,
+          markdown: clean.markdown,
+        });
+        if (extractReject === 'extract_empty') {
+          const links = extractHrefs($ as never, finalUrl);
+          const toEnqueue = filterEnqueueUrls(sameOriginUrls(links), siteMap);
+          if (toEnqueue.length > 0) {
+            await enqueueLinks({ urls: toEnqueue, strategy: 'all' });
+          }
+          input.persist.noteReject('extract_empty', finalUrl);
+          return;
+        }
+
+        // Still non-viable (SPA shell etc.) but not challenge — save if extract produced markdown.
         const { pageId } = await input.persist.savePage({
           url: request.url,
           finalUrl,
@@ -69,7 +107,6 @@ export async function runPlaywrightPool(input: PlaywrightPoolInput): Promise<num
         });
         saved += 1;
 
-        const $ = await parseWithCheerio();
         const links = extractHrefs($ as never, finalUrl);
         await input.persist.saveLinks(
           pageId,

@@ -13,6 +13,14 @@ export type CrawlRunMeta = {
   errorSummary?: string;
   pagesSaved: number;
   linksSaved: number;
+  pagesRejectedLocale?: number;
+  pagesRejectedChallenge?: number;
+  pagesRejectedExtractEmpty?: number;
+  rejectSamples?: {
+    locale_excluded?: string[];
+    challenge_page?: string[];
+    extract_empty?: string[];
+  };
 };
 
 export type CrawlPageMeta = {
@@ -45,6 +53,16 @@ export type RunStore = {
   markRunning(runId: string): Promise<void>;
   markComplete(runId: string): Promise<void>;
   markFailed(runId: string, errorSummary: string): Promise<void>;
+  /** Merge reject counters + samples into run.json (no page body). */
+  recordRejectStats(
+    runId: string,
+    stats: {
+      pagesRejectedLocale: number;
+      pagesRejectedChallenge: number;
+      pagesRejectedExtractEmpty: number;
+      rejectSamples?: CrawlRunMeta['rejectSamples'];
+    },
+  ): Promise<void>;
   insertPage(runId: string, page: CrawlPageMeta): Promise<void>;
   insertLinks(runId: string, links: CrawlLinkMeta[]): Promise<void>;
   getRun(runId: string): Promise<CrawlRunMeta | null>;
@@ -156,6 +174,17 @@ export function createJsonRunStore(dataDir: string): RunStore {
         run.status = 'failed';
         run.errorSummary = errorSummary;
         run.completedAtUtc = new Date().toISOString();
+        await saveRun(run);
+      });
+    },
+
+    async recordRejectStats(runId, stats) {
+      await withRunLock(runId, async () => {
+        const run = await loadRun(runId);
+        run.pagesRejectedLocale = stats.pagesRejectedLocale;
+        run.pagesRejectedChallenge = stats.pagesRejectedChallenge;
+        run.pagesRejectedExtractEmpty = stats.pagesRejectedExtractEmpty;
+        if (stats.rejectSamples) run.rejectSamples = stats.rejectSamples;
         await saveRun(run);
       });
     },

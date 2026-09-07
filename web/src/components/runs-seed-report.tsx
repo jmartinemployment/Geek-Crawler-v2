@@ -14,6 +14,9 @@ type ReportRow = {
   crawlType: string;
   completed: string;
   failureReason: string | null;
+  pagesRejectedLocale?: number;
+  pagesRejectedChallenge?: number;
+  pagesRejectedExtractEmpty?: number;
 };
 
 export function RunsSeedReport() {
@@ -51,7 +54,7 @@ export function RunsSeedReport() {
 
   function downloadCsv() {
     const lines = [
-      "seedUrl,runId,pageCount,sitemapUrlCount,sitemapPathCount,status,statusDescription,crawlType,completed,failureReason",
+      "seedUrl,runId,pageCount,sitemapUrlCount,sitemapPathCount,status,statusDescription,crawlType,completed,failureReason,pagesRejectedLocale,pagesRejectedChallenge,pagesRejectedExtractEmpty",
     ];
     for (const row of rows) {
       lines.push(
@@ -66,6 +69,9 @@ export function RunsSeedReport() {
           JSON.stringify(row.crawlType),
           JSON.stringify(row.completed),
           JSON.stringify(row.failureReason ?? ""),
+          row.pagesRejectedLocale ?? 0,
+          row.pagesRejectedChallenge ?? 0,
+          row.pagesRejectedExtractEmpty ?? 0,
         ].join(","),
       );
     }
@@ -99,6 +105,8 @@ export function RunsSeedReport() {
       <p className="lede">
         One row per seed URL (and per run). Sitemap path count strips query
         strings and non-English locales; English locale prefixes are collapsed.
+        Unusable pages (locale / Cloudflare challenge / empty extract) are not
+        stored — only reject counts are reported.
       </p>
       {error ? <pre className="result">{error}</pre> : null}
       {loading ? (
@@ -111,6 +119,9 @@ export function RunsSeedReport() {
             <tr>
               <th>seedUrl</th>
               <th># crawled</th>
+              <th>rej locale</th>
+              <th>rej challenge</th>
+              <th>rej empty</th>
               <th>sitemap URLs</th>
               <th>sitemap paths</th>
               <th>status</th>
@@ -130,6 +141,9 @@ export function RunsSeedReport() {
                   </Link>
                 </td>
                 <td>{row.pageCount}</td>
+                <td>{row.pagesRejectedLocale ?? 0}</td>
+                <td>{row.pagesRejectedChallenge ?? 0}</td>
+                <td>{row.pagesRejectedExtractEmpty ?? 0}</td>
                 <td>{row.sitemapUrlCount ?? "—"}</td>
                 <td>{row.sitemapPathCount ?? "—"}</td>
                 <td>{row.status}</td>

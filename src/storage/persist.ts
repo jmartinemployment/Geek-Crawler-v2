@@ -3,7 +3,16 @@ import { createGeekApiClient, isGeekApiConfigured, type GeekApiClient } from './
 import { createJsonRunStore, type CrawlLinkMeta, type CrawlPageMeta, type RunStore } from './runs.js';
 import { computeSeedKey, normalizeSeeds, originOf } from './seed-key.js';
 import type { CrawlType } from '../crawl/types.js';
+import {
+  bumpRejectCounter,
+  emptyRejectCounters,
+  RejectSampleLog,
+  rejectStatsHostProgressEntry,
+  type RejectCounters,
+  type RejectReason,
+} from '../crawl/reject.js';
 import { randomUUID } from 'node:crypto';
+import { log } from 'crawlee';
 
 export type PersistPageInput = {
   url: string;
@@ -32,9 +41,16 @@ export type CrawlPersist = {
   markRunning(): Promise<void>;
   markComplete(): Promise<void>;
   markFailed(errorSummary: string): Promise<void>;
+  /** Count + sample-log a reject; never persists page HTML. */
+  noteReject(reason: RejectReason, url: string): void;
   savePage(page: PersistPageInput): Promise<{ pageId: string }>;
   saveLinks(pageId: string, links: CrawlLinkMeta[]): Promise<void>;
-  stats(): Promise<{ pagesSaved: number; linksSaved: number }>;
+  stats(): Promise<
+    {
+      pagesSaved: number;
+      linksSaved: number;
+    } & RejectCounters
+  >;
 };
 
 function keepLocalData(): boolean {
@@ -64,7 +80,16 @@ export function createCrawlPersist(input: {
   let runId = input.runIdHint ?? randomUUID();
   let pagesSaved = 0;
   let linksSaved = 0;
+  const rejectCounters = emptyRejectCounters();
+  const rejectSamples = new RejectSampleLog();
   const client: GeekApiClient | null = api;
+
+  async function flushRejectStatsToLocal(): Promise<void> {
+    await localMeta.recordRejectStats(runId, {
+      ...rejectCounters,
+      rejectSamples: rejectSamples.snapshot(),
+    });
+  }
 
   return {
     get runId() {
@@ -130,22 +155,42 @@ export function createCrawlPersist(input: {
 
     async markComplete() {
       const completedAtUtc = new Date().toISOString();
+      await flushRejectStatsToLocal();
       if (client) {
-        await client.patchRun(runId, { status: 'complete', completedAtUtc });
+        await client.patchRun(runId, {
+          status: 'complete',
+          completedAtUtc,
+          // Array form required by GeekAPI snapshot deserializer; synthetic origin carries rejects.
+          hostProgressJson: JSON.stringify([
+            rejectStatsHostProgressEntry(rejectCounters, pagesSaved),
+          ]),
+        });
       }
       await localMeta.markComplete(runId);
     },
 
     async markFailed(errorSummary: string) {
       const completedAtUtc = new Date().toISOString();
+      await flushRejectStatsToLocal();
       if (client) {
         await client.patchRun(runId, {
           status: 'failed',
           errorSummary,
           completedAtUtc,
+          hostProgressJson: JSON.stringify([
+            rejectStatsHostProgressEntry(rejectCounters, pagesSaved),
+          ]),
         });
       }
       await localMeta.markFailed(runId, errorSummary);
+    },
+
+    noteReject(reason, url) {
+      bumpRejectCounter(rejectCounters, reason);
+      const sampled = rejectSamples.note(reason, url);
+      if (sampled) {
+        log.info(`Reject ${reason}: ${sampled}`);
+      }
     },
 
     async savePage(page) {
@@ -223,7 +268,7 @@ export function createCrawlPersist(input: {
     },
 
     async stats() {
-      return { pagesSaved, linksSaved };
+      return { pagesSaved, linksSaved, ...rejectCounters };
     },
   };
 }
