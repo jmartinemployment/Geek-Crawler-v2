@@ -86,7 +86,7 @@ export class GeekApiClient {
       statusCode: number;
       robotsAllowed: boolean;
       html?: string | null;
-      /** Clean markdown — requires GeekAPI/Repo schema support (ignored until then). */
+      /** Clean markdown — persisted once GeekAPI/Repo schema includes Markdown. */
       markdown?: string | null;
       title?: string | null;
       excerpt?: string | null;

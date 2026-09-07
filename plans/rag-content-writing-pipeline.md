@@ -6,27 +6,30 @@ Siblings: `Geek-Crawler-Rag/plans/rag-content-writing-pipeline.md`, `content-cre
 ## This repo owns
 
 - Crawlee + Playwright crawl
-- Clean **markdown + title** at ingest (Readability + Turndown)
+- Clean **markdown + title** at ingest (**Mozilla Readability → Turndown**) — draft-research cleaning, locked
 - Locale/region filters (existing `/us/` keep)
 - Passing pages to GeekAPI ingest (HTML + new fields)
 
-## Phase A — Done here
+## Phase A — Done here (new-crawl cleaning)
 
 | Piece | Location |
 |-------|----------|
-| Extract helper | `src/crawl/extract-content.ts` |
-| Cheerio + Playwright | `savePage` includes `title` / `markdown` / `excerpt` |
+| Extract helper | `src/crawl/extract-content.ts` — Readability → Turndown; `title` / `markdown` / `excerpt`; ~500k cap |
+| Cheerio + Playwright | `savePage` includes clean fields; **full HTML still saved** |
 | Persist + GeekAPI client | optional fields on batch ingest |
 | Local bodies | `.html` + sibling `.md` when `persistMode` is `local` or `both` |
 
-**Note:** GeekBackend `IngestPageItem` must add Title/Markdown (and store them) before Mongo retains clean text. Extra JSON is safe to send early; ignored until Backend is updated.
+**Locked:** New crawls always run this cleaning path. Not Firecrawl.
 
-## Tomorrow — data mirror
+**Note:** GeekBackend must store `Title` / `Markdown` / `Excerpt` on ingest before Mongo retains clean text. Extra JSON is safe to send early; ignored until Backend schema is updated.
 
-See **`plans/rag-markdown-backfill-tomorrow.md`**: reprocess existing HTML → markdown in Mongo (no full re-crawl). Apply locale filter when deciding what to keep.
+## One-time cleanse (existing data — no re-crawl)
+
+See **`plans/rag-markdown-backfill.md`**: Readability-equivalent pass over Mongo pages that have HTML and empty Markdown. Runner: **Geek-Crawler-Rag** script on Hostinger. Same locale keep/drop/strip rules as crawl.
 
 ## Not this repo
 
-- Qdrant / hybrid / parent-child (Geek-Crawler-Rag)
-- `/api/rag/generate` (GeekBackend)
-- Content Creator UI (content-creator-v2)
+- Qdrant / hybrid / parent-child / **LlamaIndex** / **GraphRAG** / ad-template **index** (Geek-Crawler-Rag — Phases E + D)
+- `/api/rag/generate` + **OpenAI o1/o3** long-form routing (GeekBackend Phase F)
+- Content Creator UI / template picker (content-creator-v2 Phase D)
+- Markdown backfill **script** execution (Geek-Crawler-Rag); this repo only defines the extract algorithm to mirror
