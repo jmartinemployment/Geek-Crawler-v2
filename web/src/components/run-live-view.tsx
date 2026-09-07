@@ -197,9 +197,10 @@ export function RunLiveView({ runId }: { runId: string }) {
           </button>
         </div>
         <p className="muted">
-          Sitemap totals from robots.txt / sitemap.xml. When a sitemap exists,
-          the crawler treats it as the map (only those URLs). Path count strips
-          query strings for reporting.
+          Sitemap totals from robots.txt / sitemap.xml (non-English locales
+          dropped; English locale prefixes stripped). When a sitemap exists, the
+          crawler treats it as the map (only those URLs). Path count strips query
+          strings for reporting.
         </p>
         {reportLoading ? (
           <div className="panel">Building seed report…</div>

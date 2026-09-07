@@ -9,7 +9,7 @@ function usage(): never {
   console.log(`Geek-Crawler v2 (standalone — does not use Geek-Crawler v1)
 
 Usage:
-  npm run crawl -- --seed <url> [--seed <url>...] [--type partner|competitors|local] [--max 50]
+  npm run crawl -- --seed <url> [--seed <url>...] [--type partner|competitors|local] [--max N]
   npm run serve
 
 Env: see .env.example (GEEK_API_URL, EGRESS_MODE, PROXY_URL, DATA_DIR)
@@ -20,7 +20,7 @@ Env: see .env.example (GEEK_API_URL, EGRESS_MODE, PROXY_URL, DATA_DIR)
 function parseArgs(argv: string[]) {
   const seeds: string[] = [];
   let crawlType = 'partner';
-  let maxRequestsPerCrawl = 50;
+  let maxRequestsPerCrawl: number | undefined;
   let dataDir: string | undefined;
 
   for (let i = 0; i < argv.length; i++) {
@@ -32,7 +32,8 @@ function parseArgs(argv: string[]) {
     } else if (a === '--type' || a === '-t') {
       crawlType = argv[++i] ?? crawlType;
     } else if (a === '--max') {
-      maxRequestsPerCrawl = Number(argv[++i] ?? 50);
+      const n = Number(argv[++i]);
+      if (Number.isFinite(n) && n > 0) maxRequestsPerCrawl = n;
     } else if (a === '--data-dir') {
       dataDir = argv[++i];
     } else if (a === '--help' || a === '-h') {
@@ -50,7 +51,9 @@ async function cmdCrawl(argv: string[]) {
     usage();
   }
 
-  console.log(`Starting crawl type=${crawlType} seeds=${seeds.join(', ')} max=${maxRequestsPerCrawl}`);
+  console.log(
+    `Starting crawl type=${crawlType} seeds=${seeds.join(', ')} max=${maxRequestsPerCrawl ?? 'auto(sitemap)'}`,
+  );
   console.log(`EGRESS_MODE=${process.env.EGRESS_MODE ?? 'off'}`);
   const result = await startCrawl({
     seeds,

@@ -1,4 +1,4 @@
-import { geekApiHeaders, geekApiUrl } from "@/lib/server-env";
+import { crawleeApiUrl, geekApiHeaders, geekApiUrl } from "@/lib/server-env";
 import { countSitemapPages } from "@/lib/sitemap-count";
 
 export type HostRow = {
@@ -26,6 +26,9 @@ export type SeedReportRow = {
   completed: string;
   failureReason: string | null;
 };
+
+/** Fail fast when Hostinger / GeekAPI is down so reports use local stubs. */
+const GEEK_API_MS = 8_000;
 
 export function statusDescription(status: string): string {
   switch (status.toLowerCase()) {
@@ -62,11 +65,11 @@ export function completedLabel(
   sitemapTotal: number,
 ): string {
   const s = status.toLowerCase();
-  if (s === "complete") return "100%";
-  if (s === "failed" || s === "cancelled") return "0%";
   if (sitemapTotal > 0) {
     return `${Math.min(100, Math.round((100 * pageCount) / sitemapTotal))}%`;
   }
+  if (s === "complete") return "100%";
+  if (s === "failed" || s === "cancelled") return "0%";
   if (host?.pagesAttempted && host.pagesAttempted > 0) {
     const pct = Math.round(
       (100 * (host.pagesWithHtml ?? 0)) / host.pagesAttempted,
@@ -79,19 +82,98 @@ export function completedLabel(
   return "—";
 }
 
+type LocalRunStub = {
+  runId: string;
+  status: string;
+  crawlType: string;
+  seeds: string[];
+  pagesSaved: number;
+  errorSummary: string | null;
+};
+
+type GeekSnap = {
+  status: string;
+  crawlType: string;
+  seedUrls: string[];
+  hosts: HostRow[];
+  errorSummary: string | null;
+};
+
+async function loadLocalRun(runId: string): Promise<LocalRunStub | null> {
+  try {
+    const res = await fetch(
+      `${crawleeApiUrl()}/crawls/${encodeURIComponent(runId)}`,
+      { cache: "no-store", signal: AbortSignal.timeout(5_000) },
+    );
+    if (!res.ok) return null;
+    const body = await res.json();
+    return {
+      runId,
+      status: String(body.status ?? ""),
+      crawlType: String(body.crawlType ?? ""),
+      seeds: Array.isArray(body.seeds) ? body.seeds.map(String) : [],
+      pagesSaved: Number(body.pagesSaved ?? 0) || 0,
+      errorSummary:
+        typeof body.errorSummary === "string" ? body.errorSummary : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function loadGeekSnap(runId: string): Promise<GeekSnap | null> {
+  try {
+    const headers = geekApiHeaders();
+    const res = await fetch(
+      `${geekApiUrl()}/api/geek-crawler/crawls/${encodeURIComponent(runId)}`,
+      {
+        headers,
+        cache: "no-store",
+        signal: AbortSignal.timeout(GEEK_API_MS),
+      },
+    );
+    if (!res.ok) return null;
+    const snap = await res.json();
+    return {
+      status: String(snap.status ?? ""),
+      crawlType: String(snap.crawlType ?? ""),
+      seedUrls: Array.isArray(snap.seedUrls) ? snap.seedUrls.map(String) : [],
+      hosts: Array.isArray(snap.hosts) ? snap.hosts : [],
+      errorSummary:
+        typeof snap.errorSummary === "string" ? snap.errorSummary : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
 async function tallyPageUrlsByOrigin(
   runId: string,
-  headers: HeadersInit,
-  base: string,
 ): Promise<Map<string, number>> {
   const pageCountByOrigin = new Map<string, number>();
+  let headers: HeadersInit;
+  try {
+    headers = geekApiHeaders();
+  } catch {
+    return pageCountByOrigin;
+  }
+  const base = geekApiUrl();
   let offset = 0;
   const limit = 500;
   for (;;) {
-    const urlRes = await fetch(
-      `${base}/api/geek-crawler/crawls/${encodeURIComponent(runId)}/page-urls?limit=${limit}&offset=${offset}`,
-      { headers, cache: "no-store" },
-    );
+    let urlRes: Response;
+    try {
+      urlRes = await fetch(
+        `${base}/api/geek-crawler/crawls/${encodeURIComponent(runId)}/page-urls?limit=${limit}&offset=${offset}`,
+        {
+          headers,
+          cache: "no-store",
+          signal: AbortSignal.timeout(GEEK_API_MS),
+        },
+      );
+    } catch {
+      break;
+    }
     if (!urlRes.ok) break;
     const chunk = (await urlRes.json()) as UrlRow[];
     if (!Array.isArray(chunk) || chunk.length === 0) break;
@@ -108,7 +190,35 @@ async function tallyPageUrlsByOrigin(
   return pageCountByOrigin;
 }
 
-/** Build seed-report rows for one GeekAPI run. Returns null if snapshot missing. */
+async function tallyLocalPagesByOrigin(
+  runId: string,
+): Promise<Map<string, number>> {
+  const pageCountByOrigin = new Map<string, number>();
+  try {
+    const res = await fetch(
+      `${crawleeApiUrl()}/crawls/${encodeURIComponent(runId)}/pages`,
+      { cache: "no-store", signal: AbortSignal.timeout(10_000) },
+    );
+    if (!res.ok) return pageCountByOrigin;
+    const body = await res.json();
+    const pages = Array.isArray(body.pages) ? body.pages : [];
+    for (const page of pages) {
+      const url = String(page.finalUrl ?? page.url ?? "");
+      if (!url) continue;
+      const key = originKey(url);
+      pageCountByOrigin.set(key, (pageCountByOrigin.get(key) ?? 0) + 1);
+    }
+  } catch {
+    /* empty local pages is normal in api-only persist mode */
+  }
+  return pageCountByOrigin;
+}
+
+/**
+ * Build seed-report rows for one run.
+ * Prefers GeekAPI when reachable; falls back to local Crawlee stubs so
+ * Hostinger outages still produce seed rows (sitemap counts + local status).
+ */
 export async function buildSeedReportForRun(
   runId: string,
 ): Promise<{
@@ -116,41 +226,39 @@ export async function buildSeedReportForRun(
   status: string;
   crawlType: string;
   rows: SeedReportRow[];
+  source: "geekapi" | "local" | "merged";
 } | null> {
-  const headers = geekApiHeaders();
-  const base = geekApiUrl();
+  const [local, geek] = await Promise.all([
+    loadLocalRun(runId),
+    loadGeekSnap(runId),
+  ]);
 
-  const snapRes = await fetch(
-    `${base}/api/geek-crawler/crawls/${encodeURIComponent(runId)}`,
-    { headers, cache: "no-store" },
-  );
-  if (!snapRes.ok) return null;
+  if (!local && !geek) return null;
 
-  const snap = await snapRes.json();
-  const status = String(snap.status ?? "");
-  const crawlType = String(snap.crawlType ?? "");
-  const errorSummary =
-    typeof snap.errorSummary === "string" ? snap.errorSummary : null;
-  const seedUrls: string[] = Array.isArray(snap.seedUrls)
-    ? snap.seedUrls.map(String)
-    : [];
-  const hosts: HostRow[] = Array.isArray(snap.hosts) ? snap.hosts : [];
+  const status = geek?.status || local?.status || "";
+  const crawlType = geek?.crawlType || local?.crawlType || "";
+  const errorSummary = geek?.errorSummary ?? local?.errorSummary ?? null;
+  const hosts = geek?.hosts ?? [];
   const hostByOrigin = new Map(
     hosts
       .filter((h) => h.origin)
       .map((h) => [originKey(String(h.origin)), h]),
   );
 
-  const pageCountByOrigin = await tallyPageUrlsByOrigin(runId, headers, base);
+  let pageCountByOrigin = await tallyPageUrlsByOrigin(runId);
+  if (pageCountByOrigin.size === 0) {
+    pageCountByOrigin = await tallyLocalPagesByOrigin(runId);
+  }
 
   const seeds =
-    seedUrls.length > 0
-      ? seedUrls
-      : [...pageCountByOrigin.keys()].map(
-          (k) => `https://${k.replace(/^https?:\/\//, "")}`,
-        );
+    (geek?.seedUrls?.length ? geek.seedUrls : null) ||
+    (local?.seeds?.length ? local.seeds : null) ||
+    [...pageCountByOrigin.keys()].map(
+      (k) => `https://${k.replace(/^https?:\/\//, "")}`,
+    );
 
-  // Sitemap fetches are network-bound; cap concurrency per run.
+  if (seeds.length === 0) return null;
+
   const sitemapBySeed = new Map<
     string,
     Awaited<ReturnType<typeof countSitemapPages>>
@@ -160,6 +268,11 @@ export async function buildSeedReportForRun(
     sitemapBySeed.set(seedUrl, result);
   });
 
+  const singleSeedLocalPages =
+    seeds.length === 1 && local && local.pagesSaved > 0
+      ? local.pagesSaved
+      : null;
+
   const rows = seeds.map((seedUrl) => {
     const key = originKey(seedUrl);
     const host = hostByOrigin.get(key);
@@ -167,17 +280,17 @@ export async function buildSeedReportForRun(
       pageCountByOrigin.get(key) ??
       host?.pagesWithHtml ??
       host?.pagesAttempted ??
+      singleSeedLocalPages ??
       0;
     const sm = sitemapBySeed.get(seedUrl);
     const sitemapUrlCount = sm?.sitemapUrlCount ?? 0;
     const sitemapPathCount = sm?.sitemapPathCount ?? 0;
-    // Prefer path count for “total pages” / % complete (ignores ?query variants).
     const totalForPct = sitemapPathCount || sitemapUrlCount;
     const failureReason =
       host?.lastFailureReason ||
       errorSummary ||
       (sm?.error && sitemapUrlCount === 0 ? sm.error : null) ||
-      null;
+      (!geek ? "GeekAPI unreachable — local stub only" : null);
     return {
       runId,
       seedUrl,
@@ -192,7 +305,10 @@ export async function buildSeedReportForRun(
     };
   });
 
-  return { runId, status, crawlType, rows };
+  const source: "geekapi" | "local" | "merged" =
+    geek && local ? "merged" : geek ? "geekapi" : "local";
+
+  return { runId, status, crawlType, rows, source };
 }
 
 /** Run async work with a concurrency cap. */

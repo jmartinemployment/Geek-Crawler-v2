@@ -5,6 +5,7 @@ import { BOT, defaultRequestHeaders } from '../bot/identity.js';
 import { createCrawlPersist, type CrawlPersist } from '../storage/persist.js';
 import { createJsonRunStore } from '../storage/runs.js';
 import { extractHrefs, sameOriginUrls } from './links.js';
+import { extractCleanContent } from './extract-content.js';
 import { runPlaywrightPool } from './playwright-pool.js';
 import { buildProxyConfiguration } from './proxy.js';
 import {
@@ -154,6 +155,18 @@ async function executeCheerioCrawl(
   }
   log.info(`Concurrency min=${minConcurrency} max=${maxConcurrency}`);
 
+  /** Override if provided; else sitemap size; else uncapped. */
+  let maxRequestsPerCrawl: number | undefined;
+  if (input.maxRequestsPerCrawl != null && Number.isFinite(input.maxRequestsPerCrawl)) {
+    maxRequestsPerCrawl = Math.max(1, Math.floor(input.maxRequestsPerCrawl));
+    log.info(`Request budget override: maxRequestsPerCrawl=${maxRequestsPerCrawl}`);
+  } else if (siteMap.hasMap) {
+    maxRequestsPerCrawl = Math.max(siteMap.urls.size, seeds.length);
+    log.info(`Request budget from sitemap: maxRequestsPerCrawl=${maxRequestsPerCrawl}`);
+  } else {
+    log.info('Request budget: uncapped (no sitemap map)');
+  }
+
   const config = new Configuration({
     storageClientOptions: {
       localDataDirectory: `${input.dataDir}/.crawlee/${persist.runId}`,
@@ -168,9 +181,7 @@ async function executeCheerioCrawl(
       minConcurrency,
       maxConcurrency,
       autoscaledPoolOptions,
-      ...(input.maxRequestsPerCrawl != null
-        ? { maxRequestsPerCrawl: input.maxRequestsPerCrawl }
-        : {}),
+      ...(maxRequestsPerCrawl != null ? { maxRequestsPerCrawl } : {}),
       maxRequestRetries: 5,
       requestHandlerTimeoutSecs: 60,
       additionalHttpErrorStatusCodes: [429, 503],
@@ -208,11 +219,15 @@ async function executeCheerioCrawl(
         const viability = isViableHtml(rawHtml, $ as never);
         if (!viability.viable) {
           if (viability.reason === 'challenge_page') {
+            const clean = extractCleanContent(rawHtml, finalUrl);
             await persist.savePage({
               url: request.url,
               finalUrl,
               statusCode,
               html: rawHtml,
+              markdown: clean.markdown,
+              title: clean.title,
+              excerpt: clean.excerpt,
               robotsAllowed: true,
               failureReason: viability.reason,
               fetchMode: 'cheerio',
@@ -230,11 +245,15 @@ async function executeCheerioCrawl(
           return;
         }
 
+        const clean = extractCleanContent(rawHtml, finalUrl);
         const { pageId } = await persist.savePage({
           url: request.url,
           finalUrl,
           statusCode,
           html: rawHtml,
+          markdown: clean.markdown,
+          title: clean.title,
+          excerpt: clean.excerpt,
           robotsAllowed: true,
           fetchMode: 'cheerio',
         });
@@ -268,14 +287,17 @@ async function executeCheerioCrawl(
   );
 
   try {
+    // Resume and fresh starts both seed from the (locale-filtered) sitemap map.
+    // Crawlee skips already-handled request keys; bare run() no-ops on a drained queue.
+    const startUrls = initialCrawlUrls(seeds, siteMap);
     if (input.resume) {
-      log.info(`Resuming Crawlee queue for run ${persist.runId} (no re-seed; map filter active)`);
-      await crawler.run();
+      log.info(
+        `Resuming run ${persist.runId} with ${startUrls.length} map URL(s) (handled keys skipped)`,
+      );
     } else {
-      const startUrls = initialCrawlUrls(seeds, siteMap);
       log.info(`Starting crawl with ${startUrls.length} URL(s)`);
-      await crawler.run(startUrls);
     }
+    await crawler.run(startUrls);
 
     if (promoteToPlaywright.size > 0) {
       log.info(`Playwright backup pool: ${promoteToPlaywright.size} URL(s)`);

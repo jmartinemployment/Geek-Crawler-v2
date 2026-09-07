@@ -51,13 +51,13 @@ export function RunsSeedReport() {
 
   function downloadCsv() {
     const lines = [
-      "runId,seedUrl,pageCount,sitemapUrlCount,sitemapPathCount,status,statusDescription,crawlType,completed,failureReason",
+      "seedUrl,runId,pageCount,sitemapUrlCount,sitemapPathCount,status,statusDescription,crawlType,completed,failureReason",
     ];
     for (const row of rows) {
       lines.push(
         [
-          JSON.stringify(row.runId),
           JSON.stringify(row.seedUrl),
+          JSON.stringify(row.runId),
           row.pageCount,
           row.sitemapUrlCount ?? 0,
           row.sitemapPathCount ?? 0,
@@ -78,7 +78,7 @@ export function RunsSeedReport() {
   }
 
   return (
-    <section className="stack" style={{ marginTop: "2rem" }}>
+    <section className="stack">
       <div
         style={{
           display: "flex",
@@ -87,7 +87,7 @@ export function RunsSeedReport() {
           gap: "1rem",
         }}
       >
-        <h2>Seed report (all local runs)</h2>
+        <h1>Runs by URL</h1>
         <button
           type="button"
           onClick={downloadCsv}
@@ -96,10 +96,9 @@ export function RunsSeedReport() {
           Download report CSV
         </button>
       </div>
-      <p className="muted">
-        Includes partner, competitors, and local runs from DATA_DIR. Sitemap
-        path count strips query strings; crawl uses the sitemap as the map when
-        present.
+      <p className="lede">
+        One row per seed URL (and per run). Sitemap path count strips query
+        strings and non-English locales; English locale prefixes are collapsed.
       </p>
       {error ? <pre className="result">{error}</pre> : null}
       {loading ? (
@@ -125,7 +124,11 @@ export function RunsSeedReport() {
           <tbody>
             {rows.map((row) => (
               <tr key={`${row.runId}-${row.seedUrl}`}>
-                <td>{row.seedUrl}</td>
+                <td>
+                  <Link href={`/runs/${encodeURIComponent(row.runId)}`}>
+                    {row.seedUrl}
+                  </Link>
+                </td>
                 <td>{row.pageCount}</td>
                 <td>{row.sitemapUrlCount ?? "—"}</td>
                 <td>{row.sitemapPathCount ?? "—"}</td>
@@ -134,7 +137,7 @@ export function RunsSeedReport() {
                 <td>{row.crawlType}</td>
                 <td>{row.completed}</td>
                 <td>{row.failureReason ?? "—"}</td>
-                <td>
+                <td className="muted">
                   <Link href={`/runs/${encodeURIComponent(row.runId)}`}>
                     {row.runId}
                   </Link>

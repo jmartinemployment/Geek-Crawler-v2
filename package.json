@@ -17,12 +17,18 @@
     "node": ">=20"
   },
   "dependencies": {
+    "@mozilla/readability": "^0.6.0",
     "crawlee": "^3.18.1",
     "dotenv": "^16.4.7",
-    "playwright": "^1.63.0"
+    "jsdom": "^29.1.1",
+    "playwright": "^1.63.0",
+    "turndown": "^7.2.4"
   },
   "devDependencies": {
+    "@types/jsdom": "^30.0.0",
+    "@types/mozilla__readability": "^0.4.2",
     "@types/node": "^22.13.10",
+    "@types/turndown": "^5.0.6",
     "tsx": "^4.19.3",
     "typescript": "^5.8.2"
   },

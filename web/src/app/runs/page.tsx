@@ -25,46 +25,62 @@ export default async function RunsPage() {
   const { runs, error } = await loadRuns();
 
   return (
-    <div>
-      <h1>Runs</h1>
-      <p className="lede">Local Crawlee run stubs under DATA_DIR.</p>
-      {error ? <p className="muted">{error}</p> : null}
-      {runs.length === 0 ? (
-        <div className="panel">No local runs yet.</div>
-      ) : (
-        <table>
-          <thead>
-            <tr>
-              <th>Run</th>
-              <th>Status</th>
-              <th>Type</th>
-              <th>Created</th>
-            </tr>
-          </thead>
-          <tbody>
-            {runs.map(
-              (r: {
-                runId?: string;
-                status?: string;
-                crawlType?: string;
-                createdAtUtc?: string;
-              }) => (
-                <tr key={r.runId}>
-                  <td>
-                    <Link href={`/runs/${encodeURIComponent(r.runId ?? "")}`}>
-                      {r.runId}
-                    </Link>
-                  </td>
-                  <td>{r.status}</td>
-                  <td>{r.crawlType}</td>
-                  <td>{r.createdAtUtc}</td>
-                </tr>
-              ),
-            )}
-          </tbody>
-        </table>
-      )}
+    <div className="stack">
       <RunsSeedReport />
+
+      <section style={{ marginTop: "2rem" }}>
+        <h2>Local run stubs</h2>
+        <p className="muted">
+          Raw stubs under DATA_DIR (secondary to the URL report above).
+        </p>
+        {error ? <p className="muted">{error}</p> : null}
+        {runs.length === 0 ? (
+          <div className="panel">No local runs yet.</div>
+        ) : (
+          <table>
+            <thead>
+              <tr>
+                <th>seedUrl</th>
+                <th>Status</th>
+                <th>Type</th>
+                <th>Created</th>
+                <th>runId</th>
+              </tr>
+            </thead>
+            <tbody>
+              {runs.map(
+                (r: {
+                  runId?: string;
+                  status?: string;
+                  crawlType?: string;
+                  createdAtUtc?: string;
+                  seeds?: string[];
+                }) => {
+                  const seed =
+                    (Array.isArray(r.seeds) && r.seeds[0]) || "—";
+                  return (
+                    <tr key={r.runId}>
+                      <td>
+                        <Link href={`/runs/${encodeURIComponent(r.runId ?? "")}`}>
+                          {seed}
+                        </Link>
+                      </td>
+                      <td>{r.status}</td>
+                      <td>{r.crawlType}</td>
+                      <td>{r.createdAtUtc}</td>
+                      <td className="muted">
+                        <Link href={`/runs/${encodeURIComponent(r.runId ?? "")}`}>
+                          {r.runId}
+                        </Link>
+                      </td>
+                    </tr>
+                  );
+                },
+              )}
+            </tbody>
+          </table>
+        )}
+      </section>
     </div>
   );
 }

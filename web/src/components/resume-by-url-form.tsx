@@ -7,6 +7,7 @@ import { useRouter } from "next/navigation";
 export function ResumeByUrlForm() {
   const router = useRouter();
   const [url, setUrl] = useState("");
+  const [maxConcurrency, setMaxConcurrency] = useState("1");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
@@ -22,10 +23,14 @@ export function ResumeByUrlForm() {
         setError("Enter the seed URL from the report");
         return;
       }
+      const concurrency = Math.max(
+        1,
+        Math.min(32, Math.floor(Number(maxConcurrency) || 1)),
+      );
       const res = await fetch("/api/crawls/resume-by-url", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ url: seed }),
+        body: JSON.stringify({ url: seed, maxConcurrency: concurrency }),
       });
       const body = await res.json();
       if (!res.ok || !body.runId) {
@@ -59,6 +64,19 @@ export function ResumeByUrlForm() {
           required
         />
       </label>
+      <label className="field">
+        <span>Max concurrency</span>
+        <input
+          type="number"
+          min={1}
+          max={32}
+          value={maxConcurrency}
+          onChange={(e) => setMaxConcurrency(e.target.value)}
+        />
+      </label>
+      <p className="muted">
+        Parallel page fetches for this resume (1–32). Default 1.
+      </p>
       <button type="submit" disabled={pending}>
         {pending ? "Resuming…" : "Resume by URL"}
       </button>

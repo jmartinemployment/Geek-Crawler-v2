@@ -9,9 +9,8 @@ export function SubmitCrawlForm() {
   const router = useRouter();
   const [seed, setSeed] = useState("");
   const [crawlType, setCrawlType] = useState<CrawlType>("partner");
-  const [maxRequests, setMaxRequests] = useState("50");
   /** Polite default — was env-driven 8 before this control existed. */
-  const [maxConcurrency, setMaxConcurrency] = useState("2");
+  const [maxConcurrency, setMaxConcurrency] = useState("1");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -27,7 +26,7 @@ export function SubmitCrawlForm() {
       }
       const concurrency = Math.max(
         1,
-        Math.min(32, Math.floor(Number(maxConcurrency) || 2)),
+        Math.min(32, Math.floor(Number(maxConcurrency) || 1)),
       );
       const res = await fetch("/api/crawls", {
         method: "POST",
@@ -35,7 +34,6 @@ export function SubmitCrawlForm() {
         body: JSON.stringify({
           seed: url,
           crawlType,
-          maxRequestsPerCrawl: Number(maxRequests) || 50,
           maxConcurrency: concurrency,
         }),
       });
@@ -78,15 +76,6 @@ export function SubmitCrawlForm() {
         </select>
       </label>
       <label className="field">
-        <span>Max requests</span>
-        <input
-          type="number"
-          min={1}
-          value={maxRequests}
-          onChange={(e) => setMaxRequests(e.target.value)}
-        />
-      </label>
-      <label className="field">
         <span>Max concurrency</span>
         <input
           type="number"
@@ -98,7 +87,7 @@ export function SubmitCrawlForm() {
       </label>
       <p className="muted">
         Parallel page fetches for this run (1–32). Lower is more polite; default
-        2.
+        1. Request budget = sitemap URL count when a map exists (no manual max).
       </p>
       <button type="submit" disabled={pending}>
         {pending ? "Starting…" : "Start crawl"}

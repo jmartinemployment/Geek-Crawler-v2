@@ -83,12 +83,15 @@ When `GEEK_API_URL` + `GEEK_BACKEND_API_KEY` + `GEEK_USER_ID` are set:
 
 ```text
 Crawlee (localhost)
+  → Readability + Turndown (title + markdown alongside HTML)
   → GeekAPI (/api/geek-crawler/ingest/*)
     → GeekRepository (X-Repo-Key)
       → Hostinger MongoDB (db geek_crawler)
 ```
 
-Without those env vars, data stays under `./data/` (or `DATA_DIR`) only.
+Each successful page save includes raw **HTML** plus clean **title** / **markdown** (and optional excerpt). GeekBackend must store those fields for Mongo to retain them; until then the client still sends them. Existing pages without markdown are a **tomorrow backfill** — see `plans/rag-markdown-backfill-tomorrow.md`.
+
+Without those env vars, data stays under `./data/` (or `DATA_DIR`) only (`.html` + sibling `.md` bodies when local).
 
 Do **not** point this crawler at GeekRepository (`REPO_*`) — that bypasses GeekAPI.
 
