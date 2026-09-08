@@ -122,6 +122,10 @@ Crawlee (localhost)
 
 Each successful page save includes raw **HTML** plus clean **title** / **markdown** (and optional excerpt). GeekBackend stores those fields for Mongo. Historical pages without Markdown are handled by the Geek-Crawler-Rag backfill; see [`plans/rag-markdown-backfill.md`](./plans/rag-markdown-backfill.md).
 
+After all page batches flush, successful API-backed crawls set the run-level
+`MarkdownReadyAt` marker. Resumes clear that marker until the crawl completes
+again, so the RAG scheduler never selects a partial recrawl.
+
 Without those env vars, data stays under `./data/` (or `DATA_DIR`) only (`.html` + sibling `.md` bodies when local).
 
 Do **not** point this crawler at GeekRepository (`REPO_*`) — that bypasses GeekAPI.

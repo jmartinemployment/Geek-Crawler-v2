@@ -72,6 +72,8 @@ export class GeekApiClient {
       hostProgressJson?: string | null;
       startedAtUtc?: string | null;
       completedAtUtc?: string | null;
+      markdownReadyAt?: string | null;
+      clearMarkdownReadyAt?: boolean;
     },
   ): Promise<ApiRunSnapshot> {
     return this.request<ApiRunSnapshot>('PATCH', `/api/geek-crawler/ingest/runs/${runId}`, patch);

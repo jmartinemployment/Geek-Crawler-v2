@@ -79,6 +79,7 @@ export function createCrawlPersist(input: {
 
   let runId = input.runIdHint ?? randomUUID();
   let pagesSaved = 0;
+  let pagesWithoutMarkdown = 0;
   let linksSaved = 0;
   const rejectCounters = emptyRejectCounters();
   const rejectSamples = new RejectSampleLog();
@@ -132,12 +133,15 @@ export function createCrawlPersist(input: {
       if (!existing) {
         throw new Error(`Cannot resume — local run stub missing for ${runId}`);
       }
+      pagesSaved = existing.pagesSaved;
+      linksSaved = existing.linksSaved;
       if (client) {
         await client.patchRun(runId, {
           status: 'external',
           errorSummary: null,
           completedAtUtc: null,
           startedAtUtc: new Date().toISOString(),
+          clearMarkdownReadyAt: true,
         });
         console.log(
           `Resume persist mode=${mode} runId=${runId} — reusing GeekAPI run + Crawlee queue`,
@@ -157,9 +161,12 @@ export function createCrawlPersist(input: {
       const completedAtUtc = new Date().toISOString();
       await flushRejectStatsToLocal();
       if (client) {
+        const markdownReady = pagesSaved > 0 && pagesWithoutMarkdown === 0;
         await client.patchRun(runId, {
           status: 'complete',
           completedAtUtc,
+          markdownReadyAt: markdownReady ? completedAtUtc : undefined,
+          clearMarkdownReadyAt: !markdownReady,
           // Array form required by GeekAPI snapshot deserializer; synthetic origin carries rejects.
           hostProgressJson: JSON.stringify([
             rejectStatsHostProgressEntry(rejectCounters, pagesSaved),
@@ -244,6 +251,7 @@ export function createCrawlPersist(input: {
       }
 
       pagesSaved += 1;
+      if (!page.markdown?.trim()) pagesWithoutMarkdown += 1;
       return { pageId };
     },
 
