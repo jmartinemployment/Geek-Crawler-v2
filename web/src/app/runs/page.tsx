@@ -4,9 +4,6 @@ import { RunsSeedReport } from "@/components/runs-seed-report";
 async function loadRuns() {
   const base =
     process.env.CRAWLEE_API_URL?.trim() || "http://127.0.0.1:8787";
-  // #region agent log
-  fetch("http://127.0.0.1:7522/ingest/a1301922-e501-4d06-affc-47df584c3a01", { method: "POST", headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "8fdfbf" }, body: JSON.stringify({ sessionId: "8fdfbf", runId: "pre-fix", hypothesisId: "H4", location: "web/src/app/runs/page.tsx:7", message: "Runs page loader entered", data: { pid: process.pid, cwd: process.cwd(), baseOrigin: (() => { try { return new URL(base).origin; } catch { return "invalid"; } })() }, timestamp: Date.now() }) }).catch(() => {});
-  // #endregion
   try {
     const res = await fetch(`${base.replace(/\/$/, "")}/crawls`, {
       cache: "no-store",
@@ -26,9 +23,6 @@ async function loadRuns() {
 
 export default async function RunsPage() {
   const { runs, error } = await loadRuns();
-  // #region agent log
-  fetch("http://127.0.0.1:7522/ingest/a1301922-e501-4d06-affc-47df584c3a01", { method: "POST", headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "8fdfbf" }, body: JSON.stringify({ sessionId: "8fdfbf", runId: "pre-fix", hypothesisId: "H4", location: "web/src/app/runs/page.tsx:29", message: "Runs page loader completed", data: { runCount: runs.length, hasError: Boolean(error) }, timestamp: Date.now() }) }).catch(() => {});
-  // #endregion
 
   return (
     <div className="stack">
