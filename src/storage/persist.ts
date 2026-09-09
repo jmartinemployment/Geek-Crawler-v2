@@ -5,6 +5,7 @@ import { computeSeedKey, normalizeSeeds, originOf } from './seed-key.js';
 import type { CrawlType } from '../crawl/types.js';
 import {
   bumpRejectCounter,
+  classifyReject,
   emptyRejectCounters,
   RejectSampleLog,
   rejectStatsHostProgressEntry,
@@ -41,9 +42,10 @@ export type CrawlPersist = {
   markRunning(): Promise<void>;
   markComplete(): Promise<void>;
   markFailed(errorSummary: string): Promise<void>;
+  throwIfPersistenceFailed(): void;
   /** Count + sample-log a reject; never persists page HTML. */
-  noteReject(reason: RejectReason, url: string): void;
-  savePage(page: PersistPageInput): Promise<{ pageId: string }>;
+  noteReject(reason: RejectReason, url: string, detail?: string): void;
+  savePage(page: PersistPageInput): Promise<{ pageId: string } | null>;
   saveLinks(pageId: string, links: CrawlLinkMeta[]): Promise<void>;
   stats(): Promise<
     {
@@ -80,7 +82,9 @@ export function createCrawlPersist(input: {
   let runId = input.runIdHint ?? randomUUID();
   let pagesSaved = 0;
   let pagesWithoutMarkdown = 0;
+  let resumeCountsVerified = true;
   let linksSaved = 0;
+  let persistenceFailure: Error | null = null;
   const rejectCounters = emptyRejectCounters();
   const rejectSamples = new RejectSampleLog();
   const client: GeekApiClient | null = api;
@@ -90,6 +94,22 @@ export function createCrawlPersist(input: {
       ...rejectCounters,
       rejectSamples: rejectSamples.snapshot(),
     });
+  }
+
+  function recordReject(reason: RejectReason, url: string, detail?: string): void {
+    bumpRejectCounter(rejectCounters, reason);
+    const sampled = rejectSamples.note(reason, url, detail);
+    if (sampled) {
+      log.info(
+        `Reject ${reason}: ${sampled.url}${sampled.detail ? ` (${sampled.detail})` : ''}`,
+      );
+    }
+  }
+
+  function rememberPersistenceFailure(context: string, error: unknown): void {
+    const detail = error instanceof Error ? error.message : String(error);
+    persistenceFailure ??= new Error(`${context}: ${detail}`);
+    recordReject('request_failed', context, detail);
   }
 
   return {
@@ -134,6 +154,9 @@ export function createCrawlPersist(input: {
         throw new Error(`Cannot resume — local run stub missing for ${runId}`);
       }
       pagesSaved = existing.pagesSaved;
+      pagesWithoutMarkdown =
+        existing.pagesWithoutMarkdown ?? (existing.pagesSaved > 0 ? 1 : 0);
+      resumeCountsVerified = existing.storageContractVersion === 2;
       linksSaved = existing.linksSaved;
       if (client) {
         await client.patchRun(runId, {
@@ -161,7 +184,8 @@ export function createCrawlPersist(input: {
       const completedAtUtc = new Date().toISOString();
       await flushRejectStatsToLocal();
       if (client) {
-        const markdownReady = pagesSaved > 0 && pagesWithoutMarkdown === 0;
+        const markdownReady =
+          resumeCountsVerified && pagesSaved > 0 && pagesWithoutMarkdown === 0;
         await client.patchRun(runId, {
           status: 'complete',
           completedAtUtc,
@@ -169,7 +193,11 @@ export function createCrawlPersist(input: {
           clearMarkdownReadyAt: !markdownReady,
           // Array form required by GeekAPI snapshot deserializer; synthetic origin carries rejects.
           hostProgressJson: JSON.stringify([
-            rejectStatsHostProgressEntry(rejectCounters, pagesSaved),
+            rejectStatsHostProgressEntry(
+              rejectCounters,
+              pagesSaved,
+              rejectSamples.snapshot(),
+            ),
           ]),
         });
       }
@@ -185,41 +213,68 @@ export function createCrawlPersist(input: {
           errorSummary,
           completedAtUtc,
           hostProgressJson: JSON.stringify([
-            rejectStatsHostProgressEntry(rejectCounters, pagesSaved),
+            rejectStatsHostProgressEntry(
+              rejectCounters,
+              pagesSaved,
+              rejectSamples.snapshot(),
+            ),
           ]),
         });
       }
       await localMeta.markFailed(runId, errorSummary);
     },
 
-    noteReject(reason, url) {
-      bumpRejectCounter(rejectCounters, reason);
-      const sampled = rejectSamples.note(reason, url);
-      if (sampled) {
-        log.info(`Reject ${reason}: ${sampled}`);
-      }
+    throwIfPersistenceFailed() {
+      if (persistenceFailure) throw persistenceFailure;
+    },
+
+    noteReject(reason, url, detail) {
+      recordReject(reason, url, detail);
     },
 
     async savePage(page) {
       let pageId: string = randomUUID();
-      const origin = originOf(page.finalUrl || page.url);
+      const finalUrl = page.finalUrl || page.url;
+      const rejectReason = !page.robotsAllowed
+        ? 'robots_disallowed'
+        : page.failureReason?.trim()
+          ? 'request_failed'
+          : classifyReject({ finalUrl, markdown: page.markdown });
+      if (rejectReason) {
+        recordReject(rejectReason, finalUrl, page.failureReason);
+        return null;
+      }
+      const origin = originOf(finalUrl);
 
       if (client) {
-        const created = await client.createPagesBatch(runId, [
-          {
-            origin,
-            url: page.url,
-            finalUrl: page.finalUrl ?? page.url,
-            statusCode: page.statusCode ?? 0,
-            robotsAllowed: page.robotsAllowed,
-            html: page.html ?? null,
-            markdown: page.markdown ?? null,
-            title: page.title ?? null,
-            excerpt: page.excerpt ?? null,
-            failureReason: page.failureReason ?? null,
-          },
-        ]);
-        if (created[0]?.pageId) pageId = created[0].pageId;
+        let created;
+        try {
+          created = await client.createPagesBatch(runId, [
+            {
+              origin,
+              url: page.url,
+              finalUrl: page.finalUrl ?? page.url,
+              statusCode: page.statusCode ?? 0,
+              robotsAllowed: page.robotsAllowed,
+              html: page.html ?? null,
+              markdown: page.markdown ?? null,
+              title: page.title ?? null,
+              excerpt: page.excerpt ?? null,
+              failureReason: page.failureReason ?? null,
+            },
+          ]);
+        } catch (error) {
+          rememberPersistenceFailure(`page persistence ${finalUrl}`, error);
+          return null;
+        }
+        if (!created[0]?.pageId) {
+          rememberPersistenceFailure(
+            `page persistence ${finalUrl}`,
+            'GeekAPI rejected page persistence',
+          );
+          return null;
+        }
+        pageId = created[0].pageId;
       }
 
       if (mode !== 'api') {
@@ -248,31 +303,38 @@ export function createCrawlPersist(input: {
           failureReason: page.failureReason,
         };
         await localMeta.insertPage(runId, metaPage);
+      } else {
+        await localMeta.recordAcceptedPage(runId, true);
       }
 
       pagesSaved += 1;
-      if (!page.markdown?.trim()) pagesWithoutMarkdown += 1;
       return { pageId };
     },
 
     async saveLinks(pageId, links) {
       if (links.length === 0) return;
       if (client) {
-        const n = await client.createLinksBatch(
-          runId,
-          links.map((l) => ({
-            pageId,
-            fromUrl: l.fromUrl,
-            linkUrl: l.linkUrl,
-            isSameOrigin: l.isSameOrigin,
-          })),
-        );
-        linksSaved += n;
+        try {
+          await client.createLinksBatch(
+            runId,
+            links.map((l) => ({
+              pageId,
+              fromUrl: l.fromUrl,
+              linkUrl: l.linkUrl,
+              isSameOrigin: l.isSameOrigin,
+            })),
+          );
+        } catch (error) {
+          rememberPersistenceFailure(`link persistence pageId=${pageId}`, error);
+          return;
+        }
       }
       if (mode !== 'api') {
         await localMeta.insertLinks(runId, links);
-        linksSaved += links.length;
+      } else {
+        await localMeta.recordAcceptedLinks(runId, links.length);
       }
+      linksSaved += links.length;
     },
 
     async stats() {

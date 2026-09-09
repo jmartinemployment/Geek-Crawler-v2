@@ -11,6 +11,10 @@ export type HostRow = {
 };
 
 export type UrlRow = { origin?: string; url?: string; hasHtml?: boolean };
+export type RejectSamples = Record<
+  string,
+  Array<{ url: string; detail?: string }>
+>;
 
 export type SeedReportRow = {
   runId: string;
@@ -28,6 +32,9 @@ export type SeedReportRow = {
   pagesRejectedLocale: number;
   pagesRejectedChallenge: number;
   pagesRejectedExtractEmpty: number;
+  pagesRejectedRobots: number;
+  pagesRejectedRequestFailed: number;
+  rejectSamples?: RejectSamples;
 };
 
 /** Fail fast when Hostinger / GeekAPI is down so reports use local stubs. */
@@ -94,6 +101,9 @@ type LocalRunStub = {
   pagesRejectedLocale: number;
   pagesRejectedChallenge: number;
   pagesRejectedExtractEmpty: number;
+  pagesRejectedRobots: number;
+  pagesRejectedRequestFailed: number;
+  rejectSamples?: RejectSamples;
   errorSummary: string | null;
 };
 
@@ -106,6 +116,9 @@ type GeekSnap = {
   pagesRejectedLocale: number;
   pagesRejectedChallenge: number;
   pagesRejectedExtractEmpty: number;
+  pagesRejectedRobots: number;
+  pagesRejectedRequestFailed: number;
+  rejectSamples?: RejectSamples;
 };
 
 async function loadLocalRun(runId: string): Promise<LocalRunStub | null> {
@@ -126,6 +139,13 @@ async function loadLocalRun(runId: string): Promise<LocalRunStub | null> {
       pagesRejectedChallenge: Number(body.pagesRejectedChallenge ?? 0) || 0,
       pagesRejectedExtractEmpty:
         Number(body.pagesRejectedExtractEmpty ?? 0) || 0,
+      pagesRejectedRobots: Number(body.pagesRejectedRobots ?? 0) || 0,
+      pagesRejectedRequestFailed:
+        Number(body.pagesRejectedRequestFailed ?? 0) || 0,
+      rejectSamples:
+        body.rejectSamples && typeof body.rejectSamples === "object"
+          ? (body.rejectSamples as RejectSamples)
+          : undefined,
       errorSummary:
         typeof body.errorSummary === "string" ? body.errorSummary : null,
     };
@@ -166,6 +186,14 @@ async function loadGeekSnap(runId: string): Promise<GeekSnap | null> {
         Number(rejectHost?.pagesRejectedChallenge ?? 0) || 0,
       pagesRejectedExtractEmpty:
         Number(rejectHost?.pagesRejectedExtractEmpty ?? 0) || 0,
+      pagesRejectedRobots: Number(rejectHost?.pagesRejectedRobots ?? 0) || 0,
+      pagesRejectedRequestFailed:
+        Number(rejectHost?.pagesRejectedRequestFailed ?? 0) || 0,
+      rejectSamples:
+        rejectHost?.rejectSamples &&
+        typeof rejectHost.rejectSamples === "object"
+          ? (rejectHost.rejectSamples as RejectSamples)
+          : undefined,
     };
   } catch {
     return null;
@@ -271,6 +299,12 @@ export async function buildSeedReportForRun(
   const pagesRejectedExtractEmpty =
     (local?.pagesRejectedExtractEmpty ?? 0) ||
     (geek?.pagesRejectedExtractEmpty ?? 0);
+  const pagesRejectedRobots =
+    (local?.pagesRejectedRobots ?? 0) || (geek?.pagesRejectedRobots ?? 0);
+  const pagesRejectedRequestFailed =
+    (local?.pagesRejectedRequestFailed ?? 0) ||
+    (geek?.pagesRejectedRequestFailed ?? 0);
+  const rejectSamples = local?.rejectSamples ?? geek?.rejectSamples;
   const hostByOrigin = new Map(
     hosts
       .filter((h) => h.origin)
@@ -337,6 +371,9 @@ export async function buildSeedReportForRun(
       pagesRejectedLocale,
       pagesRejectedChallenge,
       pagesRejectedExtractEmpty,
+      pagesRejectedRobots,
+      pagesRejectedRequestFailed,
+      rejectSamples,
     };
   });
 

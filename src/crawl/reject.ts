@@ -5,7 +5,12 @@
 
 import { shouldExcludeLocalePath } from './locale-path.js';
 
-export type RejectReason = 'locale_excluded' | 'challenge_page' | 'extract_empty';
+export type RejectReason =
+  | 'locale_excluded'
+  | 'challenge_page'
+  | 'extract_empty'
+  | 'robots_disallowed'
+  | 'request_failed';
 
 const MIN_MARKDOWN_CHARS = Number(process.env.EXTRACT_MIN_MARKDOWN_CHARS ?? 40);
 const SAMPLE_CAP = 5;
@@ -43,6 +48,8 @@ export type RejectCounters = {
   pagesRejectedLocale: number;
   pagesRejectedChallenge: number;
   pagesRejectedExtractEmpty: number;
+  pagesRejectedRobots: number;
+  pagesRejectedRequestFailed: number;
 };
 
 export function emptyRejectCounters(): RejectCounters {
@@ -50,6 +57,8 @@ export function emptyRejectCounters(): RejectCounters {
     pagesRejectedLocale: 0,
     pagesRejectedChallenge: 0,
     pagesRejectedExtractEmpty: 0,
+    pagesRejectedRobots: 0,
+    pagesRejectedRequestFailed: 0,
   };
 }
 
@@ -64,26 +73,70 @@ export function bumpRejectCounter(counters: RejectCounters, reason: RejectReason
     case 'extract_empty':
       counters.pagesRejectedExtractEmpty += 1;
       break;
+    case 'robots_disallowed':
+      counters.pagesRejectedRobots += 1;
+      break;
+    case 'request_failed':
+      counters.pagesRejectedRequestFailed += 1;
+      break;
   }
+}
+
+export type RejectSample = {
+  url: string;
+  detail?: string;
+};
+
+function sanitizeSampleUrl(raw: string): string {
+  try {
+    const url = new URL(raw);
+    url.username = '';
+    url.password = '';
+    url.search = '';
+    url.hash = '';
+    return url.toString();
+  } catch {
+    return raw.split(/[?#]/, 1)[0].slice(0, 500);
+  }
+}
+
+export function sanitizeRejectDetail(raw: string | undefined): string | undefined {
+  if (!raw?.trim()) return undefined;
+  return raw
+    .replace(/[\r\n\t]+/g, ' ')
+    .replace(
+      /\b(authorization|api[-_ ]?key|token|password)\b\s*[:=]\s*\S+/gi,
+      '$1=[REDACTED]',
+    )
+    .trim()
+    .slice(0, 300);
 }
 
 /** Cap sample URLs per reject reason for logs / run meta (not HTML). */
 export class RejectSampleLog {
-  private readonly samples = new Map<RejectReason, string[]>();
+  private readonly samples = new Map<RejectReason, RejectSample[]>();
 
-  note(reason: RejectReason, url: string): string | null {
+  note(reason: RejectReason, url: string, detail?: string): RejectSample | null {
     const list = this.samples.get(reason) ?? [];
     if (list.length >= SAMPLE_CAP) return null;
-    list.push(url);
+    const sample = {
+      url: sanitizeSampleUrl(url),
+      ...(sanitizeRejectDetail(detail)
+        ? { detail: sanitizeRejectDetail(detail) }
+        : {}),
+    };
+    list.push(sample);
     this.samples.set(reason, list);
-    return url;
+    return sample;
   }
 
-  snapshot(): Record<RejectReason, string[]> {
+  snapshot(): Record<RejectReason, RejectSample[]> {
     return {
       locale_excluded: [...(this.samples.get('locale_excluded') ?? [])],
       challenge_page: [...(this.samples.get('challenge_page') ?? [])],
       extract_empty: [...(this.samples.get('extract_empty') ?? [])],
+      robots_disallowed: [...(this.samples.get('robots_disallowed') ?? [])],
+      request_failed: [...(this.samples.get('request_failed') ?? [])],
     };
   }
 }
@@ -94,6 +147,7 @@ export const REJECT_STATS_ORIGIN = '__crawlee_reject_stats__';
 export function rejectStatsHostProgressEntry(
   counters: RejectCounters,
   pagesSaved: number,
+  rejectSamples?: Record<RejectReason, RejectSample[]>,
 ): Record<string, unknown> {
   return {
     origin: REJECT_STATS_ORIGIN,
@@ -101,5 +155,8 @@ export function rejectStatsHostProgressEntry(
     pagesRejectedLocale: counters.pagesRejectedLocale,
     pagesRejectedChallenge: counters.pagesRejectedChallenge,
     pagesRejectedExtractEmpty: counters.pagesRejectedExtractEmpty,
+    pagesRejectedRobots: counters.pagesRejectedRobots,
+    pagesRejectedRequestFailed: counters.pagesRejectedRequestFailed,
+    ...(rejectSamples ? { rejectSamples } : {}),
   };
 }

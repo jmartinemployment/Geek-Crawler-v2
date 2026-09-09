@@ -11,6 +11,12 @@ export type ApiRunSnapshot = {
 };
 
 export type CreatedPage = { url: string; pageId: string };
+const MAX_LINKS_PER_BATCH = 2_000;
+const LINK_BATCH_ATTEMPTS = 3;
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function env(name: string): string | undefined {
   return process.env[name]?.trim() || undefined;
@@ -119,12 +125,30 @@ export class GeekApiClient {
     }>,
   ): Promise<number> {
     if (links.length === 0) return 0;
-    const result = await this.request<{ count?: number; Count?: number }>(
-      'POST',
-      `/api/geek-crawler/ingest/runs/${runId}/links/batch`,
-      { links },
-    );
-    return result.count ?? result.Count ?? links.length;
+    let inserted = 0;
+    for (let offset = 0; offset < links.length; offset += MAX_LINKS_PER_BATCH) {
+      const batch = links.slice(offset, offset + MAX_LINKS_PER_BATCH);
+      let lastError: unknown;
+      for (let attempt = 1; attempt <= LINK_BATCH_ATTEMPTS; attempt += 1) {
+        try {
+          const result = await this.request<{ count?: number; Count?: number }>(
+            'POST',
+            `/api/geek-crawler/ingest/runs/${runId}/links/batch`,
+            { links: batch },
+          );
+          inserted += result.count ?? result.Count ?? batch.length;
+          lastError = undefined;
+          break;
+        } catch (error) {
+          lastError = error;
+          if (attempt < LINK_BATCH_ATTEMPTS) {
+            await delay(100 * 2 ** (attempt - 1));
+          }
+        }
+      }
+      if (lastError) throw lastError;
+    }
+    return inserted;
   }
 }
 

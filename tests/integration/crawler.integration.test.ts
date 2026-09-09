@@ -48,6 +48,9 @@ test('real crawler follows nested sitemap, retries, renders SPA, and persists co
     assert.equal(result.persistMode, 'local');
     assert.ok(result.pagesSaved >= 6, `expected at least six persisted attempts, got ${result.pagesSaved}`);
     assert.ok(result.pagesRejectedChallenge >= 1);
+    assert.ok(result.pagesRejectedRobots >= 1);
+    assert.ok(result.pagesRejectedRequestFailed >= 1);
+    assert.ok(result.pagesRejectedExtractEmpty >= 2);
     assert.equal(result.pagesRejectedLocale, 0, 'locale sitemap entries should be filtered before fetch');
     assert.ok(fixture.requests('/retry') >= 3, '503 fixture should exercise Crawlee retries');
     assert.equal(fixture.requests('/fr/article'), 0);
@@ -59,6 +62,11 @@ test('real crawler follows nested sitemap, retries, renders SPA, and persists co
     const article = pages.find((page) => page.finalUrl === `${fixture.origin}/article`);
     const spa = pages.find((page) => page.finalUrl === `${fixture.origin}/spa`);
     const blocked = pages.find((page) => page.url === `${fixture.origin}/blocked`);
+    const failed = pages.find((page) => page.url === `${fixture.origin}/always-fail`);
+    const playwrightFailed = pages.find(
+      (page) => page.url === `${fixture.origin}/playwright-fail`,
+    );
+    const empty = pages.find((page) => page.url === `${fixture.origin}/empty`);
 
     assert.ok(article?.bodyKey);
     assert.ok(article?.markdownBodyKey);
@@ -66,8 +74,13 @@ test('real crawler follows nested sitemap, retries, renders SPA, and persists co
     assert.equal(spa?.fetchMode, 'playwright');
     assert.equal(spa?.title, 'SPA Fixture');
     assert.ok(spa?.markdownBodyKey);
-    assert.equal(blocked?.robotsAllowed, false);
-    assert.equal(blocked?.failureReason, 'robots_disallowed');
+    assert.equal(blocked, undefined);
+    assert.equal(failed, undefined);
+    assert.equal(playwrightFailed, undefined);
+    assert.equal(empty, undefined);
+    assert.ok(pages.every((page) => page.robotsAllowed));
+    assert.ok(pages.every((page) => !page.failureReason));
+    assert.ok(pages.every((page) => Boolean(page.markdownBodyKey)));
     assert.ok(links.some((link) => link.linkUrl.includes('/long')));
 
     const html = await readFile(path.join(dataDir, article!.bodyKey), 'utf8');

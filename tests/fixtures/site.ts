@@ -69,6 +69,8 @@ export async function startFixtureSite(options?: {
           <url><loc>${origin}/article?utm_source=duplicate</loc></url>
           <url><loc>${origin}/redirect</loc></url>
           <url><loc>${origin}/retry</loc></url>
+          <url><loc>${origin}/always-fail</loc></url>
+          <url><loc>${origin}/empty</loc></url>
           <url><loc>${origin}/blocked</loc></url>
           <url><loc>${origin}/fr/article</loc></url>
         </urlset>`,
@@ -81,6 +83,7 @@ export async function startFixtureSite(options?: {
         `<?xml version="1.0"?><urlset>
           <url><loc>${origin}/long</loc></url>
           <url><loc>${origin}/spa</loc></url>
+          <url><loc>${origin}/playwright-fail</loc></url>
           <url><loc>${origin}/challenge</loc></url>
           <url><loc>https://outside.invalid/not-crawled</loc></url>
         </urlset>`,
@@ -142,6 +145,15 @@ export async function startFixtureSite(options?: {
       }
       return send(200, page('Retried page', `<p>${articleText}</p>`));
     }
+    if (url.pathname === '/always-fail') {
+      return send(503, 'permanent fixture failure', 'text/plain');
+    }
+    if (url.pathname === '/empty') {
+      return send(
+        200,
+        '<!doctype html><html><head><title>Empty</title></head><body></body></html>',
+      );
+    }
     if (url.pathname === '/challenge') {
       return send(
         200,
@@ -156,6 +168,17 @@ export async function startFixtureSite(options?: {
         `<!doctype html><html><head><title>SPA Fixture</title></head><body><div id="root"></div>
          <script src="/spa.js"></script>${'<!-- fixture padding -->'.repeat(30)}</body></html>`,
       );
+    }
+    if (url.pathname === '/playwright-fail') {
+      if ((counts.get('/playwright-fail') ?? 0) === 1) {
+        return send(
+          200,
+          `<!doctype html><html><head><title>SPA failure fixture</title></head>
+           <body><div id="root"></div>${'<!-- fixture padding -->'.repeat(30)}</body></html>`,
+        );
+      }
+      res.destroy();
+      return;
     }
     if (url.pathname === '/spa.js') {
       return send(

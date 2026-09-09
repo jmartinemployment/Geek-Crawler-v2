@@ -1,9 +1,12 @@
 import { mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import type { RejectSample } from '../crawl/reject.js';
 import type { CrawlType } from '../crawl/types.js';
 
 export type CrawlRunMeta = {
   runId: string;
+  /** Version 2 stores accepted-page counts needed for safe resume readiness. */
+  storageContractVersion?: 2;
   crawlType: CrawlType;
   status: 'pending' | 'running' | 'complete' | 'failed' | 'cancelled';
   seeds: string[];
@@ -12,14 +15,19 @@ export type CrawlRunMeta = {
   completedAtUtc?: string;
   errorSummary?: string;
   pagesSaved: number;
+  pagesWithoutMarkdown?: number;
   linksSaved: number;
   pagesRejectedLocale?: number;
   pagesRejectedChallenge?: number;
   pagesRejectedExtractEmpty?: number;
+  pagesRejectedRobots?: number;
+  pagesRejectedRequestFailed?: number;
   rejectSamples?: {
-    locale_excluded?: string[];
-    challenge_page?: string[];
-    extract_empty?: string[];
+    locale_excluded?: RejectSample[];
+    challenge_page?: RejectSample[];
+    extract_empty?: RejectSample[];
+    robots_disallowed?: RejectSample[];
+    request_failed?: RejectSample[];
   };
 };
 
@@ -60,9 +68,13 @@ export type RunStore = {
       pagesRejectedLocale: number;
       pagesRejectedChallenge: number;
       pagesRejectedExtractEmpty: number;
+      pagesRejectedRobots: number;
+      pagesRejectedRequestFailed: number;
       rejectSamples?: CrawlRunMeta['rejectSamples'];
     },
   ): Promise<void>;
+  recordAcceptedPage(runId: string, hasMarkdown: boolean): Promise<void>;
+  recordAcceptedLinks(runId: string, count: number): Promise<void>;
   insertPage(runId: string, page: CrawlPageMeta): Promise<void>;
   insertLinks(runId: string, links: CrawlLinkMeta[]): Promise<void>;
   getRun(runId: string): Promise<CrawlRunMeta | null>;
@@ -134,11 +146,13 @@ export function createJsonRunStore(dataDir: string): RunStore {
       return withRunLock(runId, async () => {
         const run: CrawlRunMeta = {
           runId,
+          storageContractVersion: 2,
           crawlType,
           status: 'pending',
           seeds,
           createdAtUtc: new Date().toISOString(),
           pagesSaved: 0,
+          pagesWithoutMarkdown: 0,
           linksSaved: 0,
         };
         await saveRun(run);
@@ -184,7 +198,28 @@ export function createJsonRunStore(dataDir: string): RunStore {
         run.pagesRejectedLocale = stats.pagesRejectedLocale;
         run.pagesRejectedChallenge = stats.pagesRejectedChallenge;
         run.pagesRejectedExtractEmpty = stats.pagesRejectedExtractEmpty;
+        run.pagesRejectedRobots = stats.pagesRejectedRobots;
+        run.pagesRejectedRequestFailed = stats.pagesRejectedRequestFailed;
         if (stats.rejectSamples) run.rejectSamples = stats.rejectSamples;
+        await saveRun(run);
+      });
+    },
+
+    async recordAcceptedPage(runId, hasMarkdown) {
+      await withRunLock(runId, async () => {
+        const run = await loadRun(runId);
+        run.pagesSaved += 1;
+        run.pagesWithoutMarkdown =
+          (run.pagesWithoutMarkdown ?? 0) + (hasMarkdown ? 0 : 1);
+        await saveRun(run);
+      });
+    },
+
+    async recordAcceptedLinks(runId, count) {
+      if (count <= 0) return;
+      await withRunLock(runId, async () => {
+        const run = await loadRun(runId);
+        run.linksSaved += count;
         await saveRun(run);
       });
     },
@@ -195,6 +230,8 @@ export function createJsonRunStore(dataDir: string): RunStore {
         await mkdir(path.dirname(pagesPath(runId)), { recursive: true });
         await writeFile(pagesPath(runId), `${JSON.stringify(page)}\n`, { flag: 'a' });
         run.pagesSaved += 1;
+        run.pagesWithoutMarkdown =
+          (run.pagesWithoutMarkdown ?? 0) + (page.markdownBodyKey ? 0 : 1);
         await saveRun(run);
       });
     },

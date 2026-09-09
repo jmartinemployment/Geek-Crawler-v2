@@ -24,6 +24,9 @@ type ReportRow = {
   pagesRejectedLocale?: number;
   pagesRejectedChallenge?: number;
   pagesRejectedExtractEmpty?: number;
+  pagesRejectedRobots?: number;
+  pagesRejectedRequestFailed?: number;
+  rejectSamples?: Record<string, Array<{ url: string; detail?: string }>>;
 };
 
 const PAGE_SIZE = 100;
@@ -129,7 +132,7 @@ export function RunLiveView({ runId }: { runId: string }) {
 
   function downloadReportCsv() {
     const lines = [
-      "seedUrl,pageCount,sitemapUrlCount,sitemapPathCount,status,statusDescription,crawlType,completed,failureReason,pagesRejectedLocale,pagesRejectedChallenge,pagesRejectedExtractEmpty",
+      "seedUrl,pageCount,sitemapUrlCount,sitemapPathCount,status,statusDescription,crawlType,completed,failureReason,pagesRejectedLocale,pagesRejectedChallenge,pagesRejectedExtractEmpty,pagesRejectedRobots,pagesRejectedRequestFailed,rejectSamples",
     ];
     for (const row of reportRows) {
       lines.push(
@@ -146,6 +149,9 @@ export function RunLiveView({ runId }: { runId: string }) {
           row.pagesRejectedLocale ?? 0,
           row.pagesRejectedChallenge ?? 0,
           row.pagesRejectedExtractEmpty ?? 0,
+          row.pagesRejectedRobots ?? 0,
+          row.pagesRejectedRequestFailed ?? 0,
+          JSON.stringify(JSON.stringify(row.rejectSamples ?? {})),
         ].join(","),
       );
     }
@@ -221,6 +227,9 @@ export function RunLiveView({ runId }: { runId: string }) {
                 <th>rej locale</th>
                 <th>rej challenge</th>
                 <th>rej empty</th>
+                <th>rej robots</th>
+                <th>rej request</th>
+                <th>reject samples</th>
                 <th>sitemap URLs</th>
                 <th>sitemap paths</th>
                 <th>status</th>
@@ -238,6 +247,13 @@ export function RunLiveView({ runId }: { runId: string }) {
                   <td>{row.pagesRejectedLocale ?? 0}</td>
                   <td>{row.pagesRejectedChallenge ?? 0}</td>
                   <td>{row.pagesRejectedExtractEmpty ?? 0}</td>
+                  <td>{row.pagesRejectedRobots ?? 0}</td>
+                  <td>{row.pagesRejectedRequestFailed ?? 0}</td>
+                  <td>
+                    {row.rejectSamples
+                      ? JSON.stringify(row.rejectSamples)
+                      : "—"}
+                  </td>
                   <td>{row.sitemapUrlCount ?? "—"}</td>
                   <td>{row.sitemapPathCount ?? "—"}</td>
                   <td>{row.status}</td>

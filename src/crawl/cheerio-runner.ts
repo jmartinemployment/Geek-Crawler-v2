@@ -39,6 +39,8 @@ export type RunCrawlResult = {
   pagesRejectedLocale: number;
   pagesRejectedChallenge: number;
   pagesRejectedExtractEmpty: number;
+  pagesRejectedRobots: number;
+  pagesRejectedRequestFailed: number;
   dataDir: string;
   persistMode: string;
 };
@@ -194,13 +196,7 @@ async function executeCheerioCrawl(
       respectRobotsTxtFile: { userAgent: BOT.name },
       onSkippedRequest: async ({ url, reason }) => {
         if (reason === 'robotsTxt') {
-          const { pageId } = await persist.savePage({
-            url,
-            robotsAllowed: false,
-            failureReason: 'robots_disallowed',
-            fetchMode: 'cheerio',
-          });
-          void pageId;
+          persist.noteReject('robots_disallowed', url, 'robots.txt');
         }
       },
       preNavigationHooks: [
@@ -260,7 +256,7 @@ async function executeCheerioCrawl(
           return;
         }
 
-        const { pageId } = await persist.savePage({
+        const savedPage = await persist.savePage({
           url: request.url,
           finalUrl,
           statusCode,
@@ -271,6 +267,8 @@ async function executeCheerioCrawl(
           robotsAllowed: true,
           fetchMode: 'cheerio',
         });
+        if (!savedPage) return;
+        const { pageId } = savedPage;
 
         const links = extractHrefs($, finalUrl);
         await persist.saveLinks(
@@ -289,12 +287,11 @@ async function executeCheerioCrawl(
       },
       failedRequestHandler: async ({ request }, error) => {
         log.warning(`Request failed ${request.url}: ${error}`);
-        await persist.savePage({
-          url: request.url,
-          robotsAllowed: true,
-          failureReason: error instanceof Error ? error.message : String(error),
-          fetchMode: 'cheerio',
-        });
+        persist.noteReject(
+          'request_failed',
+          request.url,
+          error instanceof Error ? error.message : String(error),
+        );
       },
     },
     config,
@@ -324,6 +321,7 @@ async function executeCheerioCrawl(
       });
     }
 
+    persist.throwIfPersistenceFailed();
     await persist.markComplete();
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -339,6 +337,8 @@ async function executeCheerioCrawl(
     pagesRejectedLocale: stats.pagesRejectedLocale,
     pagesRejectedChallenge: stats.pagesRejectedChallenge,
     pagesRejectedExtractEmpty: stats.pagesRejectedExtractEmpty,
+    pagesRejectedRobots: stats.pagesRejectedRobots,
+    pagesRejectedRequestFailed: stats.pagesRejectedRequestFailed,
     dataDir: persist.dataDir,
     persistMode: persist.mode,
   };

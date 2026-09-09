@@ -94,7 +94,7 @@ export async function runPlaywrightPool(input: PlaywrightPoolInput): Promise<num
         }
 
         // Still non-viable (SPA shell etc.) but not challenge — save if extract produced markdown.
-        const { pageId } = await input.persist.savePage({
+        const savedPage = await input.persist.savePage({
           url: request.url,
           finalUrl,
           statusCode: 200,
@@ -105,6 +105,8 @@ export async function runPlaywrightPool(input: PlaywrightPoolInput): Promise<num
           robotsAllowed: true,
           fetchMode: 'playwright',
         });
+        if (!savedPage) return;
+        const { pageId } = savedPage;
         saved += 1;
 
         const links = extractHrefs($ as never, finalUrl);
@@ -119,12 +121,11 @@ export async function runPlaywrightPool(input: PlaywrightPoolInput): Promise<num
       },
       failedRequestHandler: async ({ request }, error) => {
         log.warning(`PlaywrightCrawler failed ${request.url}: ${error}`);
-        await input.persist.savePage({
-          url: request.url,
-          robotsAllowed: true,
-          failureReason: error instanceof Error ? error.message : String(error),
-          fetchMode: 'playwright',
-        });
+        input.persist.noteReject(
+          'request_failed',
+          request.url,
+          error instanceof Error ? error.message : String(error),
+        );
       },
     },
     config,
