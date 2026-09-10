@@ -45,6 +45,20 @@ async function hubAccessToken(): Promise<string> {
   return body.accessToken;
 }
 
+/**
+ * True when `/api/auth/hub-token` can mint a token. A 401 is not retryable,
+ * so callers probe once and skip SignalR entirely rather than letting
+ * withAutomaticReconnect log a failure per attempt.
+ */
+export async function hubTokenAvailable(): Promise<boolean> {
+  try {
+    const res = await fetch("/api/auth/hub-token", { cache: "no-store" });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 export function createCrawlHubConnection(): HubConnection {
   return new HubConnectionBuilder()
     .withUrl(hubUrl(), { accessTokenFactory: hubAccessToken })

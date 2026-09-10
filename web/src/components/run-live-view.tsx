@@ -1,8 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import type { HubConnection } from "@microsoft/signalr";
 import {
   createCrawlHubConnection,
+  hubTokenAvailable,
   joinCrawlRun,
   onCrawlEvent,
   type GeekCrawlerEvent,
@@ -105,17 +107,29 @@ export function RunLiveView({ runId }: { runId: string }) {
       }
     })();
 
-    const connection = createCrawlHubConnection();
-    const offEvent = onCrawlEvent(connection, (evt) => {
-      setLastEvent(evt);
-      void loadSnapshot();
-      void loadReport();
-      void loadUrls();
-    });
+    let connection: HubConnection | null = null;
+    let offEvent: (() => void) | null = null;
 
-    (async () => {
+    void (async () => {
+      // A 401 here is terminal, not transient. Probe once and skip SignalR
+      // rather than letting the client retry and log a failure per attempt.
+      if (!(await hubTokenAvailable())) {
+        if (!cancelled) setHubNote("Live updates off — no hub token");
+        return;
+      }
+      if (cancelled) return;
+
+      const conn = createCrawlHubConnection();
+      connection = conn;
+      offEvent = onCrawlEvent(conn, (evt) => {
+        setLastEvent(evt);
+        void loadSnapshot();
+        void loadReport();
+        void loadUrls();
+      });
+
       try {
-        await joinCrawlRun(connection, runId);
+        await joinCrawlRun(conn, runId);
         if (!cancelled) setHubNote("SignalR connected");
       } catch {
         if (!cancelled) setHubNote(null);
@@ -124,8 +138,8 @@ export function RunLiveView({ runId }: { runId: string }) {
 
     return () => {
       cancelled = true;
-      offEvent();
-      void connection.stop();
+      offEvent?.();
+      void connection?.stop();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- mount once per runId
   }, [runId]);
