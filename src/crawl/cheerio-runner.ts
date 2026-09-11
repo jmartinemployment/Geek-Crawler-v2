@@ -41,6 +41,8 @@ export type RunCrawlResult = {
   pagesRejectedExtractEmpty: number;
   pagesRejectedRobots: number;
   pagesRejectedRequestFailed: number;
+  /** Rows not written because the resolved final URL was already saved this run. */
+  duplicatePagesSkipped: number;
   dataDir: string;
   persistMode: string;
 };
@@ -249,7 +251,7 @@ async function executeCheerioCrawl(
         if (clean.truncated) {
           // Oversized page: markdown was cut at MAX_MARKDOWN_CHARS. These are
           // also the pages most likely to exhaust the handler timeout and retry.
-          log.warning(`markdown truncated at cap: ${finalUrl}`);
+          log.warning(`markdown truncated at cap [${new Date().toISOString()}]: ${finalUrl}`);
         }
         const extractReject = classifyReject({
           finalUrl,
@@ -349,6 +351,7 @@ async function executeCheerioCrawl(
     pagesRejectedExtractEmpty: stats.pagesRejectedExtractEmpty,
     pagesRejectedRobots: stats.pagesRejectedRobots,
     pagesRejectedRequestFailed: stats.pagesRejectedRequestFailed,
+    duplicatePagesSkipped: stats.duplicatePagesSkipped,
     dataDir: persist.dataDir,
     persistMode: persist.mode,
   };

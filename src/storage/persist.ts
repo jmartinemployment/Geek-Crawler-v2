@@ -101,6 +101,7 @@ export function createCrawlPersist(input: {
   async function flushRejectStatsToLocal(): Promise<void> {
     await localMeta.recordRejectStats(runId, {
       ...rejectCounters,
+      duplicatePagesSkipped,
       rejectSamples: rejectSamples.snapshot(),
     });
   }

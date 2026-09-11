@@ -86,7 +86,7 @@ export async function runPlaywrightPool(input: PlaywrightPoolInput): Promise<num
         if (clean.truncated) {
           // Oversized page: markdown was cut at MAX_MARKDOWN_CHARS. These are
           // also the pages most likely to exhaust the handler timeout and retry.
-          log.warning(`markdown truncated at cap: ${finalUrl}`);
+          log.warning(`markdown truncated at cap [${new Date().toISOString()}]: ${finalUrl}`);
         }
         const extractReject = classifyReject({
           finalUrl,

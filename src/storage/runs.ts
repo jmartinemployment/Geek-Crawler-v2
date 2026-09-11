@@ -22,6 +22,8 @@ export type CrawlRunMeta = {
   pagesRejectedExtractEmpty?: number;
   pagesRejectedRobots?: number;
   pagesRejectedRequestFailed?: number;
+  /** Rows not written because the resolved final URL was already saved this run. */
+  duplicatePagesSkipped?: number;
   rejectSamples?: {
     locale_excluded?: RejectSample[];
     challenge_page?: RejectSample[];
@@ -70,6 +72,7 @@ export type RunStore = {
       pagesRejectedExtractEmpty: number;
       pagesRejectedRobots: number;
       pagesRejectedRequestFailed: number;
+      duplicatePagesSkipped?: number;
       rejectSamples?: CrawlRunMeta['rejectSamples'];
     },
   ): Promise<void>;
@@ -198,6 +201,9 @@ export function createJsonRunStore(dataDir: string): RunStore {
         run.pagesRejectedLocale = stats.pagesRejectedLocale;
         run.pagesRejectedChallenge = stats.pagesRejectedChallenge;
         run.pagesRejectedExtractEmpty = stats.pagesRejectedExtractEmpty;
+        if (stats.duplicatePagesSkipped !== undefined) {
+          run.duplicatePagesSkipped = stats.duplicatePagesSkipped;
+        }
         run.pagesRejectedRobots = stats.pagesRejectedRobots;
         run.pagesRejectedRequestFailed = stats.pagesRejectedRequestFailed;
         if (stats.rejectSamples) run.rejectSamples = stats.rejectSamples;
