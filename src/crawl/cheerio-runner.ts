@@ -145,6 +145,10 @@ async function executeCheerioCrawl(
   seeds: string[],
   input: RunCrawlInput,
 ): Promise<RunCrawlResult> {
+  // Anchor same-site scope to the seed, not the post-redirect page URL:
+  // one off-host redirect must not move the crawl boundary.
+  const scopeUrl = seeds[0];
+
   const promoteToPlaywright = new Set<string>();
   const { minConcurrency, maxConcurrency, autoscaledPoolOptions } = concurrencyOptions({
     maxConcurrency: input.maxConcurrency,
@@ -233,7 +237,7 @@ async function executeCheerioCrawl(
 
           log.info(`Playwright backup (${viability.reason}): ${request.url}`);
           promoteToPlaywright.add(request.url);
-          const links = extractHrefs($, finalUrl);
+          const links = extractHrefs($, finalUrl, scopeUrl);
           const toEnqueue = filterEnqueueUrls(sameOriginUrls(links), siteMap);
           if (toEnqueue.length > 0) {
             await enqueueLinks({ urls: toEnqueue, strategy: 'all' });
@@ -247,7 +251,7 @@ async function executeCheerioCrawl(
           markdown: clean.markdown,
         });
         if (extractReject === 'extract_empty') {
-          const links = extractHrefs($, finalUrl);
+          const links = extractHrefs($, finalUrl, scopeUrl);
           const toEnqueue = filterEnqueueUrls(sameOriginUrls(links), siteMap);
           if (toEnqueue.length > 0) {
             await enqueueLinks({ urls: toEnqueue, strategy: 'all' });
@@ -270,7 +274,7 @@ async function executeCheerioCrawl(
         if (!savedPage) return;
         const { pageId } = savedPage;
 
-        const links = extractHrefs($, finalUrl);
+        const links = extractHrefs($, finalUrl, scopeUrl);
         await persist.saveLinks(
           pageId,
           links.map((l) => ({
@@ -318,6 +322,7 @@ async function executeCheerioCrawl(
         dataDir: input.dataDir,
         persist,
         siteMap,
+        scopeUrl,
       });
     }
 

@@ -34,8 +34,19 @@ export function isSameSite(pageUrl: string, linkUrl: string): boolean {
   }
 }
 
-/** Collect http(s) hrefs only — for BFS enqueue + link rows. Does not alter stored body. */
-export function extractHrefs($: CheerioLike, pageUrl: string): ExtractedLink[] {
+/**
+ * Collect http(s) hrefs only — for BFS enqueue + link rows. Does not alter stored body.
+ *
+ * `scopeUrl` anchors the same-site test. Pass the run's seed URL: `pageUrl` is the
+ * URL *after* redirects, so anchoring to it lets one off-host redirect move the
+ * crawl boundary and the BFS adopts the new host. Defaults to `pageUrl` for
+ * callers that have no seed to hand.
+ */
+export function extractHrefs(
+  $: CheerioLike,
+  pageUrl: string,
+  scopeUrl?: string,
+): ExtractedLink[] {
   let pageOriginOk = false;
   try {
     void new URL(pageUrl).origin;
@@ -44,6 +55,17 @@ export function extractHrefs($: CheerioLike, pageUrl: string): ExtractedLink[] {
     return [];
   }
   if (!pageOriginOk) return [];
+
+  // Anchor scope to the seed when given; fall back to the page itself.
+  let scope = pageUrl;
+  if (scopeUrl) {
+    try {
+      void new URL(scopeUrl).origin;
+      scope = scopeUrl;
+    } catch {
+      scope = pageUrl;
+    }
+  }
 
   const seen = new Set<string>();
   const out: ExtractedLink[] = [];
@@ -66,7 +88,7 @@ export function extractHrefs($: CheerioLike, pageUrl: string): ExtractedLink[] {
     seen.add(linkUrl);
     out.push({
       linkUrl,
-      isSameOrigin: isSameSite(pageUrl, linkUrl),
+      isSameOrigin: isSameSite(scope, linkUrl),
     });
   });
 

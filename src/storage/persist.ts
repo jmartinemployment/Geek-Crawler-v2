@@ -3,6 +3,7 @@ import { createGeekApiClient, isGeekApiConfigured, type GeekApiClient } from './
 import { createJsonRunStore, type CrawlLinkMeta, type CrawlPageMeta, type RunStore } from './runs.js';
 import { computeSeedKey, normalizeSeeds, originOf } from './seed-key.js';
 import type { CrawlType } from '../crawl/types.js';
+import { normalizeCrawlUrl } from '../crawl/sitemap.js';
 import {
   bumpRejectCounter,
   classifyReject,
@@ -51,6 +52,8 @@ export type CrawlPersist = {
     {
       pagesSaved: number;
       linksSaved: number;
+      /** Rows not written because the resolved final URL was already saved this run. */
+      duplicatePagesSkipped: number;
     } & RejectCounters
   >;
 };
@@ -81,6 +84,12 @@ export function createCrawlPersist(input: {
 
   let runId = input.runIdHint ?? randomUUID();
   let pagesSaved = 0;
+  // Dedup on the RESOLVED final URL. Enqueue-time dedup runs on the
+  // pre-redirect request URL, so distinct requests that redirect or
+  // canonicalize to one page each wrote their own row (n8n stored
+  // /integrations/set/ six times in one run).
+  const savedFinalUrls = new Set<string>();
+  let duplicatePagesSkipped = 0;
   let pagesWithoutMarkdown = 0;
   let resumeCountsVerified = true;
   let linksSaved = 0;
@@ -244,6 +253,14 @@ export function createCrawlPersist(input: {
         recordReject(rejectReason, finalUrl, page.failureReason);
         return null;
       }
+      const dedupKey = normalizeCrawlUrl(finalUrl) ?? finalUrl;
+      if (savedFinalUrls.has(dedupKey)) {
+        duplicatePagesSkipped += 1;
+        log.info(`duplicate page skipped (already saved this run): ${finalUrl}`);
+        return null;
+      }
+      savedFinalUrls.add(dedupKey);
+
       const origin = originOf(finalUrl);
 
       if (client) {
@@ -338,7 +355,7 @@ export function createCrawlPersist(input: {
     },
 
     async stats() {
-      return { pagesSaved, linksSaved, ...rejectCounters };
+      return { pagesSaved, linksSaved, duplicatePagesSkipped, ...rejectCounters };
     },
   };
 }

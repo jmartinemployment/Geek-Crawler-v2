@@ -14,12 +14,16 @@ export type PlaywrightPoolInput = {
   dataDir: string;
   persist: CrawlPersist;
   siteMap?: SiteMapIndex;
+  /** Seed URL anchoring the same-site scope; defaults to the first promoted URL. */
+  scopeUrl?: string;
 };
 
 /** Crawlee PlaywrightCrawler backup — promoted URLs only, capped concurrency. */
 export async function runPlaywrightPool(input: PlaywrightPoolInput): Promise<number> {
   const urls = [...new Set(input.urls)].filter(Boolean);
   if (urls.length === 0) return 0;
+  // Same-site scope anchors to the seed, never the post-redirect page URL.
+  const scopeUrl = input.scopeUrl ?? urls[0];
 
   const maxConcurrency = Number(process.env.PLAYWRIGHT_MAX_CONCURRENCY ?? 1);
   const proxyConfiguration = buildProxyConfiguration();
@@ -84,7 +88,7 @@ export async function runPlaywrightPool(input: PlaywrightPoolInput): Promise<num
           markdown: clean.markdown,
         });
         if (extractReject === 'extract_empty') {
-          const links = extractHrefs($ as never, finalUrl);
+          const links = extractHrefs($ as never, finalUrl, scopeUrl);
           const toEnqueue = filterEnqueueUrls(sameOriginUrls(links), siteMap);
           if (toEnqueue.length > 0) {
             await enqueueLinks({ urls: toEnqueue, strategy: 'all' });
@@ -109,7 +113,7 @@ export async function runPlaywrightPool(input: PlaywrightPoolInput): Promise<num
         const { pageId } = savedPage;
         saved += 1;
 
-        const links = extractHrefs($ as never, finalUrl);
+        const links = extractHrefs($ as never, finalUrl, scopeUrl);
         await input.persist.saveLinks(
           pageId,
           links.map((l) => ({
