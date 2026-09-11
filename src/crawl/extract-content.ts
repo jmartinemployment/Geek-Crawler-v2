@@ -14,6 +14,13 @@ export type CleanContent = {
   markdown: string | null;
   /** Short plain excerpt from Readability when available. */
   excerpt: string | null;
+  /**
+   * True when markdown hit MAX_MARKDOWN_CHARS and was cut. Truncated pages were
+   * previously indistinguishable from complete ones, so oversized pages were
+   * indexed as though whole. They are also the pages most likely to exhaust
+   * requestHandlerTimeoutSecs and be retried.
+   */
+  truncated: boolean;
 };
 
 /**
@@ -21,7 +28,7 @@ export type CleanContent = {
  */
 export function extractCleanContent(html: string, pageUrl: string): CleanContent {
   if (!html || html.length < 40) {
-    return { title: null, markdown: null, excerpt: null };
+    return { title: null, markdown: null, excerpt: null, truncated: false };
   }
 
   try {
@@ -35,7 +42,7 @@ export function extractCleanContent(html: string, pageUrl: string): CleanContent
         document.querySelector('article') ||
         document.querySelector('main') ||
         document.body;
-      if (!main) return { title: null, markdown: null, excerpt: null };
+      if (!main) return { title: null, markdown: null, excerpt: null, truncated: false };
       const title =
         document.querySelector('title')?.textContent?.trim() ||
         document.querySelector('h1')?.textContent?.trim() ||
@@ -45,13 +52,16 @@ export function extractCleanContent(html: string, pageUrl: string): CleanContent
         codeBlockStyle: 'fenced',
       });
       let markdown = turndown.turndown(main.innerHTML).trim();
+      let truncated = false;
       if (markdown.length > MAX_MARKDOWN_CHARS) {
         markdown = markdown.slice(0, MAX_MARKDOWN_CHARS);
+        truncated = true;
       }
       return {
         title,
         markdown: markdown.length > 0 ? markdown : null,
         excerpt: null,
+        truncated,
       };
     }
 
@@ -60,16 +70,19 @@ export function extractCleanContent(html: string, pageUrl: string): CleanContent
       codeBlockStyle: 'fenced',
     });
     let markdown = turndown.turndown(article.content).trim();
+    let truncated = false;
     if (markdown.length > MAX_MARKDOWN_CHARS) {
       markdown = markdown.slice(0, MAX_MARKDOWN_CHARS);
+      truncated = true;
     }
 
     return {
       title: article.title?.trim() || null,
       markdown: markdown.length > 0 ? markdown : null,
       excerpt: article.excerpt?.trim() || null,
+      truncated,
     };
   } catch {
-    return { title: null, markdown: null, excerpt: null };
+    return { title: null, markdown: null, excerpt: null, truncated: false };
   }
 }

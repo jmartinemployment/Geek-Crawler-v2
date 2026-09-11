@@ -246,6 +246,11 @@ async function executeCheerioCrawl(
         }
 
         const clean = extractCleanContent(rawHtml, finalUrl);
+        if (clean.truncated) {
+          // Oversized page: markdown was cut at MAX_MARKDOWN_CHARS. These are
+          // also the pages most likely to exhaust the handler timeout and retry.
+          log.warning(`markdown truncated at cap: ${finalUrl}`);
+        }
         const extractReject = classifyReject({
           finalUrl,
           markdown: clean.markdown,
