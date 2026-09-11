@@ -9,6 +9,24 @@ import TurndownService from 'turndown';
 
 const MAX_MARKDOWN_CHARS = 500_000;
 
+/**
+ * Framework-specific link-gallery containers that dwarf a page's real prose
+ * (e.g. n8n's /integrations/* directory pages: 5,857 workflow cards vs a few
+ * paragraphs of node description). Verified per-site, not a generic heuristic
+ * — see plans/oversized-directory-page-extraction.md. Add an entry per site
+ * family encountered; do not widen these into a generic density rule.
+ */
+const GALLERY_CONTAINER_SELECTORS = ['.grid:has(a.card--default)'];
+
+/** Strip known gallery containers before Readability scores the document. */
+function stripGalleryContainers(document: Document): void {
+  for (const selector of GALLERY_CONTAINER_SELECTORS) {
+    for (const el of Array.from(document.querySelectorAll(selector))) {
+      el.remove();
+    }
+  }
+}
+
 export type CleanContent = {
   title: string | null;
   markdown: string | null;
@@ -34,6 +52,7 @@ export function extractCleanContent(html: string, pageUrl: string): CleanContent
   try {
     const dom = new JSDOM(html, { url: pageUrl });
     const document = dom.window.document;
+    stripGalleryContainers(document);
     const reader = new Readability(document);
     const article = reader.parse();
     if (!article?.content) {
