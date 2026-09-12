@@ -7,6 +7,7 @@ import { buildProxyConfiguration } from './proxy.js';
 import { classifyReject } from './reject.js';
 import { filterEnqueueUrls, type SiteMapIndex } from './sitemap.js';
 import { isViableHtml } from './viability.js';
+import { htmlHash } from './dedup.js';
 
 export type PlaywrightPoolInput = {
   runId: string;
@@ -22,8 +23,9 @@ export type PlaywrightPoolInput = {
 export async function runPlaywrightPool(input: PlaywrightPoolInput): Promise<number> {
   const urls = [...new Set(input.urls)].filter(Boolean);
   if (urls.length === 0) return 0;
-  // Same-site scope anchors to the seed, never the post-redirect page URL.
   const scopeUrl = input.scopeUrl ?? urls[0];
+  const dedup = input.persist.dedup;
+  const enqueueOpts = { aliases: dedup.aliases, counters: dedup.counters };
 
   const maxConcurrency = Number(process.env.PLAYWRIGHT_MAX_CONCURRENCY ?? 1);
   const proxyConfiguration = buildProxyConfiguration();
@@ -40,6 +42,7 @@ export async function runPlaywrightPool(input: PlaywrightPoolInput): Promise<num
   });
 
   let saved = 0;
+  const HANDLER_TIMEOUT_MS = 90_000;
 
   const crawler = new PlaywrightCrawler(
     {
@@ -55,6 +58,8 @@ export async function runPlaywrightPool(input: PlaywrightPoolInput): Promise<num
       },
       preNavigationHooks: [
         async ({ page }, goOptions) => {
+          dedup.bump('browserRenders');
+          dedup.bump('httpRequests');
           const headers = defaultRequestHeaders();
           await page.setExtraHTTPHeaders({
             'Sec-Ch-Ua-Mobile': headers['Sec-Ch-Ua-Mobile'],
@@ -69,64 +74,156 @@ export async function runPlaywrightPool(input: PlaywrightPoolInput): Promise<num
         const rawHtml = await page.content();
         const finalUrl = page.url();
         const $ = await parseWithCheerio();
+        const owned = new Set<string>();
+        let urlKey: string | null = null;
+        let htmlKey: string | null = null;
+        let committed = false;
 
-        const localeReject = classifyReject({ finalUrl });
-        if (localeReject === 'locale_excluded') {
-          input.persist.noteReject('locale_excluded', finalUrl);
-          return;
-        }
-
-        const viability = isViableHtml(rawHtml, $ as never);
-        if (!viability.viable && viability.reason === 'challenge_page') {
-          input.persist.noteReject('challenge_page', finalUrl);
-          return;
-        }
-
-        const clean = extractCleanContent(rawHtml, finalUrl);
-        if (clean.truncated) {
-          // Oversized page: markdown was cut at MAX_MARKDOWN_CHARS. These are
-          // also the pages most likely to exhaust the handler timeout and retry.
-          log.warning(`markdown truncated at cap [${new Date().toISOString()}]: ${finalUrl}`);
-        }
-        const extractReject = classifyReject({
-          finalUrl,
-          markdown: clean.markdown,
-        });
-        if (extractReject === 'extract_empty') {
-          const links = extractHrefs($ as never, finalUrl, scopeUrl);
-          const toEnqueue = filterEnqueueUrls(sameOriginUrls(links), siteMap);
-          if (toEnqueue.length > 0) {
-            await enqueueLinks({ urls: toEnqueue, strategy: 'all' });
+        try {
+          const localeReject = classifyReject({ finalUrl });
+          if (localeReject === 'locale_excluded') {
+            input.persist.noteReject('locale_excluded', finalUrl);
+            return;
           }
-          input.persist.noteReject('extract_empty', finalUrl);
-          return;
+
+          dedup.learnRedirect(request.url, finalUrl, scopeUrl);
+          urlKey = dedup.resolveKey(finalUrl);
+          if (!urlKey) {
+            input.persist.noteReject('request_failed', finalUrl, 'invalid finalUrl key');
+            return;
+          }
+
+          const urlReserve = await dedup.reserve({ urlKey }, owned);
+          const urlWait = await dedup.awaitInFlight(urlReserve, HANDLER_TIMEOUT_MS);
+          if (urlWait.skip) {
+            await dedup.recordSkip({
+              v: 1,
+              at: new Date().toISOString(),
+              reason: urlWait.reason,
+              cause: urlWait.cause,
+              requestedUrl: request.url,
+              finalUrl,
+              finalUrlKey: urlKey,
+            });
+            return;
+          }
+
+          const viability = isViableHtml(rawHtml, $ as never);
+          if (!viability.viable && viability.reason === 'challenge_page') {
+            input.persist.noteReject('challenge_page', finalUrl);
+            return;
+          }
+
+          htmlKey = htmlHash(rawHtml);
+          const htmlReserve = await dedup.reserve({ urlKey, htmlHash: htmlKey }, owned);
+          const htmlWait = await dedup.awaitInFlight(htmlReserve, HANDLER_TIMEOUT_MS);
+          if (htmlWait.skip) {
+            const links = extractHrefs($ as never, finalUrl, scopeUrl);
+            const toEnqueue = filterEnqueueUrls(sameOriginUrls(links), siteMap, enqueueOpts);
+            if (toEnqueue.length > 0) {
+              await enqueueLinks({
+                urls: toEnqueue,
+                strategy: 'all',
+                transformRequestFunction: (req) => {
+                  req.uniqueKey = dedup.resolveKey(req.url) ?? req.url;
+                  return req;
+                },
+              });
+            }
+            await dedup.recordSkip({
+              v: 1,
+              at: new Date().toISOString(),
+              reason: htmlWait.reason,
+              cause: htmlWait.cause,
+              requestedUrl: request.url,
+              finalUrl,
+              finalUrlKey: urlKey,
+              htmlHash: htmlKey,
+            });
+            return;
+          }
+
+          dedup.bump('extractionInvocations');
+          const clean = extractCleanContent(rawHtml, finalUrl);
+          if (clean.truncated) {
+            log.warning(
+              `markdown truncated at cap [${new Date().toISOString()}]: ${finalUrl}`,
+            );
+          }
+          const extractReject = classifyReject({
+            finalUrl,
+            markdown: clean.markdown,
+          });
+          if (extractReject === 'extract_empty') {
+            const links = extractHrefs($ as never, finalUrl, scopeUrl);
+            const toEnqueue = filterEnqueueUrls(sameOriginUrls(links), siteMap, enqueueOpts);
+            if (toEnqueue.length > 0) {
+              await enqueueLinks({
+                urls: toEnqueue,
+                strategy: 'all',
+                transformRequestFunction: (req) => {
+                  req.uniqueKey = dedup.resolveKey(req.url) ?? req.url;
+                  return req;
+                },
+              });
+            }
+            input.persist.noteReject('extract_empty', finalUrl);
+            return;
+          }
+
+          const canonicalKey = dedup.parseCanonicalHref($ as never, finalUrl, scopeUrl);
+          const canonSkip = dedup.checkCanonicalAlias(urlKey, canonicalKey);
+          if (canonSkip) {
+            await dedup.recordSkip({
+              v: 1,
+              at: new Date().toISOString(),
+              reason: canonSkip,
+              cause: 'accepted',
+              requestedUrl: request.url,
+              finalUrl,
+              finalUrlKey: urlKey,
+              htmlHash: htmlKey,
+            });
+            return;
+          }
+
+          const savedPage = await input.persist.savePage({
+            url: request.url,
+            finalUrl,
+            statusCode: 200,
+            html: rawHtml,
+            markdown: clean.markdown,
+            title: clean.title,
+            excerpt: clean.excerpt,
+            robotsAllowed: true,
+            fetchMode: 'playwright',
+            dedup: {
+              owned,
+              urlKey,
+              requestedUrlKey: dedup.resolveKey(request.url) ?? urlKey,
+              htmlHash: htmlKey,
+              canonicalKey,
+            },
+          });
+          if (!savedPage) return;
+          committed = true;
+          const { pageId } = savedPage;
+          saved += 1;
+
+          const links = extractHrefs($ as never, finalUrl, scopeUrl);
+          await input.persist.saveLinks(
+            pageId,
+            links.map((l) => ({
+              fromUrl: finalUrl,
+              linkUrl: l.linkUrl,
+              isSameOrigin: l.isSameOrigin,
+            })),
+          );
+        } finally {
+          if (!committed) {
+            dedup.release({ urlKey, htmlHash: htmlKey });
+          }
         }
-
-        // Still non-viable (SPA shell etc.) but not challenge — save if extract produced markdown.
-        const savedPage = await input.persist.savePage({
-          url: request.url,
-          finalUrl,
-          statusCode: 200,
-          html: rawHtml,
-          markdown: clean.markdown,
-          title: clean.title,
-          excerpt: clean.excerpt,
-          robotsAllowed: true,
-          fetchMode: 'playwright',
-        });
-        if (!savedPage) return;
-        const { pageId } = savedPage;
-        saved += 1;
-
-        const links = extractHrefs($ as never, finalUrl, scopeUrl);
-        await input.persist.saveLinks(
-          pageId,
-          links.map((l) => ({
-            fromUrl: finalUrl,
-            linkUrl: l.linkUrl,
-            isSameOrigin: l.isSameOrigin,
-          })),
-        );
       },
       failedRequestHandler: async ({ request }, error) => {
         log.warning(`PlaywrightCrawler failed ${request.url}: ${error}`);
@@ -140,6 +237,11 @@ export async function runPlaywrightPool(input: PlaywrightPoolInput): Promise<num
     config,
   );
 
-  await crawler.run(urls);
+  await crawler.run(
+    urls.map((url) => ({
+      url,
+      uniqueKey: dedup.resolveKey(url) ?? url,
+    })),
+  );
   return saved;
 }

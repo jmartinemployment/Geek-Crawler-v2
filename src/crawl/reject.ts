@@ -148,6 +148,7 @@ export function rejectStatsHostProgressEntry(
   counters: RejectCounters,
   pagesSaved: number,
   rejectSamples?: Record<RejectReason, RejectSample[]>,
+  dedup?: Record<string, number | boolean>,
 ): Record<string, unknown> {
   return {
     origin: REJECT_STATS_ORIGIN,
@@ -158,5 +159,6 @@ export function rejectStatsHostProgressEntry(
     pagesRejectedRobots: counters.pagesRejectedRobots,
     pagesRejectedRequestFailed: counters.pagesRejectedRequestFailed,
     ...(rejectSamples ? { rejectSamples } : {}),
+    ...(dedup ?? {}),
   };
 }

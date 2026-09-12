@@ -19,6 +19,7 @@ import type { CrawlType } from './types.js';
 import { isViableHtml } from './viability.js';
 import { classifyReject } from './reject.js';
 import { normalizeSeeds } from '../storage/seed-key.js';
+import { htmlHash } from './dedup.js';
 
 export type RunCrawlInput = {
   runId?: string;
@@ -150,8 +151,14 @@ async function executeCheerioCrawl(
   // Anchor same-site scope to the seed, not the post-redirect page URL:
   // one off-host redirect must not move the crawl boundary.
   const scopeUrl = seeds[0];
+  const dedup = persist.dedup;
+  const enqueueOpts = {
+    aliases: dedup.aliases,
+    counters: dedup.counters,
+  };
 
-  const promoteToPlaywright = new Set<string>();
+  /** Dedup key → URL to render (first seen wins). */
+  const promoteToPlaywright = new Map<string, string>();
   const { minConcurrency, maxConcurrency, autoscaledPoolOptions } = concurrencyOptions({
     maxConcurrency: input.maxConcurrency,
   });
@@ -187,6 +194,26 @@ async function executeCheerioCrawl(
     },
   });
 
+  const applyUniqueKey = <T extends { url: string; uniqueKey?: string }>(req: T): T => {
+    req.uniqueKey = dedup.resolveKey(req.url) ?? req.url;
+    return req;
+  };
+
+  const enqueueFiltered = async (
+    enqueueLinks: (opts: Record<string, unknown>) => Promise<unknown>,
+    urls: string[],
+  ) => {
+    const toEnqueue = filterEnqueueUrls(urls, siteMap, enqueueOpts);
+    if (toEnqueue.length === 0) return;
+    await enqueueLinks({
+      urls: toEnqueue,
+      strategy: 'all',
+      transformRequestFunction: applyUniqueKey,
+    });
+  };
+
+  const HANDLER_TIMEOUT_MS = 60_000;
+
   const crawler = new CheerioCrawler(
     {
       proxyConfiguration,
@@ -207,6 +234,7 @@ async function executeCheerioCrawl(
       },
       preNavigationHooks: [
         async ({ request }, gotOptions) => {
+          dedup.bump('httpRequests');
           gotOptions.agent = { http: httpAgent, https: httpsAgent };
           gotOptions.headers = {
             ...gotOptions.headers,
@@ -223,77 +251,156 @@ async function executeCheerioCrawl(
         const rawHtml = typeof body === 'string' ? body : String(body ?? '');
         const statusCode = response?.statusCode;
         const finalUrl = request.loadedUrl ?? request.url;
+        const owned = new Set<string>();
+        let urlKey: string | null = null;
+        let htmlKey: string | null = null;
+        let committed = false;
 
-        const localeReject = classifyReject({ finalUrl });
-        if (localeReject === 'locale_excluded') {
-          persist.noteReject('locale_excluded', finalUrl);
-          return;
-        }
+        const releaseOwned = () => {
+          if (!committed) {
+            dedup.release({ urlKey, htmlHash: htmlKey });
+          }
+        };
 
-        const viability = isViableHtml(rawHtml, $ as never);
-        if (!viability.viable) {
-          if (viability.reason === 'challenge_page') {
-            persist.noteReject('challenge_page', finalUrl);
+        try {
+          const localeReject = classifyReject({ finalUrl });
+          if (localeReject === 'locale_excluded') {
+            persist.noteReject('locale_excluded', finalUrl);
             return;
           }
 
-          log.info(`Playwright backup (${viability.reason}): ${request.url}`);
-          promoteToPlaywright.add(request.url);
-          const links = extractHrefs($, finalUrl, scopeUrl);
-          const toEnqueue = filterEnqueueUrls(sameOriginUrls(links), siteMap);
-          if (toEnqueue.length > 0) {
-            await enqueueLinks({ urls: toEnqueue, strategy: 'all' });
+          dedup.learnRedirect(request.url, finalUrl, scopeUrl);
+          urlKey = dedup.resolveKey(finalUrl);
+          if (!urlKey) {
+            persist.noteReject('request_failed', finalUrl, 'invalid finalUrl key');
+            return;
           }
-          return;
-        }
 
-        const clean = extractCleanContent(rawHtml, finalUrl);
-        if (clean.truncated) {
-          // Oversized page: markdown was cut at MAX_MARKDOWN_CHARS. These are
-          // also the pages most likely to exhaust the handler timeout and retry.
-          log.warning(`markdown truncated at cap [${new Date().toISOString()}]: ${finalUrl}`);
-        }
-        const extractReject = classifyReject({
-          finalUrl,
-          markdown: clean.markdown,
-        });
-        if (extractReject === 'extract_empty') {
-          const links = extractHrefs($, finalUrl, scopeUrl);
-          const toEnqueue = filterEnqueueUrls(sameOriginUrls(links), siteMap);
-          if (toEnqueue.length > 0) {
-            await enqueueLinks({ urls: toEnqueue, strategy: 'all' });
+          const urlReserve = await dedup.reserve({ urlKey }, owned);
+          const urlWait = await dedup.awaitInFlight(urlReserve, HANDLER_TIMEOUT_MS);
+          if (urlWait.skip) {
+            await dedup.recordSkip({
+              v: 1,
+              at: new Date().toISOString(),
+              reason: urlWait.reason,
+              cause: urlWait.cause,
+              requestedUrl: request.url,
+              finalUrl,
+              requestedUrlKey: dedup.resolveKey(request.url) ?? undefined,
+              finalUrlKey: urlKey,
+            });
+            return;
           }
-          persist.noteReject('extract_empty', finalUrl);
-          return;
-        }
 
-        const savedPage = await persist.savePage({
-          url: request.url,
-          finalUrl,
-          statusCode,
-          html: rawHtml,
-          markdown: clean.markdown,
-          title: clean.title,
-          excerpt: clean.excerpt,
-          robotsAllowed: true,
-          fetchMode: 'cheerio',
-        });
-        if (!savedPage) return;
-        const { pageId } = savedPage;
+          const viability = isViableHtml(rawHtml, $ as never);
+          if (!viability.viable) {
+            if (viability.reason === 'challenge_page') {
+              persist.noteReject('challenge_page', finalUrl);
+              return;
+            }
 
-        const links = extractHrefs($, finalUrl, scopeUrl);
-        await persist.saveLinks(
-          pageId,
-          links.map((l) => ({
-            fromUrl: finalUrl,
-            linkUrl: l.linkUrl,
-            isSameOrigin: l.isSameOrigin,
-          })),
-        );
+            log.info(`Playwright backup (${viability.reason}): ${request.url}`);
+            if (!promoteToPlaywright.has(urlKey)) {
+              promoteToPlaywright.set(urlKey, request.url);
+            }
+            const links = extractHrefs($, finalUrl, scopeUrl);
+            await enqueueFiltered(enqueueLinks as never, sameOriginUrls(links));
+            return;
+          }
 
-        const toEnqueue = filterEnqueueUrls(sameOriginUrls(links), siteMap);
-        if (toEnqueue.length > 0) {
-          await enqueueLinks({ urls: toEnqueue, strategy: 'all' });
+          htmlKey = htmlHash(rawHtml);
+          const htmlReserve = await dedup.reserve({ urlKey, htmlHash: htmlKey }, owned);
+          const htmlWait = await dedup.awaitInFlight(htmlReserve, HANDLER_TIMEOUT_MS);
+          if (htmlWait.skip) {
+            // Still discover links from identical HTML at a different URL.
+            const links = extractHrefs($, finalUrl, scopeUrl);
+            await enqueueFiltered(enqueueLinks as never, sameOriginUrls(links));
+            await dedup.recordSkip({
+              v: 1,
+              at: new Date().toISOString(),
+              reason: htmlWait.reason,
+              cause: htmlWait.cause,
+              requestedUrl: request.url,
+              finalUrl,
+              requestedUrlKey: dedup.resolveKey(request.url) ?? undefined,
+              finalUrlKey: urlKey,
+              htmlHash: htmlKey,
+            });
+            return;
+          }
+
+          dedup.bump('extractionInvocations');
+          const clean = extractCleanContent(rawHtml, finalUrl);
+          if (clean.truncated) {
+            log.warning(
+              `markdown truncated at cap [${new Date().toISOString()}]: ${finalUrl}`,
+            );
+          }
+          const extractReject = classifyReject({
+            finalUrl,
+            markdown: clean.markdown,
+          });
+          if (extractReject === 'extract_empty') {
+            const links = extractHrefs($, finalUrl, scopeUrl);
+            await enqueueFiltered(enqueueLinks as never, sameOriginUrls(links));
+            persist.noteReject('extract_empty', finalUrl);
+            return;
+          }
+
+          const canonicalKey = dedup.parseCanonicalHref($ as never, finalUrl, scopeUrl);
+          const canonSkip = dedup.checkCanonicalAlias(urlKey, canonicalKey);
+          if (canonSkip) {
+            const links = extractHrefs($, finalUrl, scopeUrl);
+            await enqueueFiltered(enqueueLinks as never, sameOriginUrls(links));
+            await dedup.recordSkip({
+              v: 1,
+              at: new Date().toISOString(),
+              reason: canonSkip,
+              cause: 'accepted',
+              requestedUrl: request.url,
+              finalUrl,
+              requestedUrlKey: dedup.resolveKey(request.url) ?? undefined,
+              finalUrlKey: urlKey,
+              htmlHash: htmlKey,
+            });
+            return;
+          }
+
+          const savedPage = await persist.savePage({
+            url: request.url,
+            finalUrl,
+            statusCode,
+            html: rawHtml,
+            markdown: clean.markdown,
+            title: clean.title,
+            excerpt: clean.excerpt,
+            robotsAllowed: true,
+            fetchMode: 'cheerio',
+            dedup: {
+              owned,
+              urlKey,
+              requestedUrlKey: dedup.resolveKey(request.url) ?? urlKey,
+              htmlHash: htmlKey,
+              canonicalKey,
+            },
+          });
+          if (!savedPage) return;
+          committed = true;
+          const { pageId } = savedPage;
+
+          const links = extractHrefs($, finalUrl, scopeUrl);
+          await persist.saveLinks(
+            pageId,
+            links.map((l) => ({
+              fromUrl: finalUrl,
+              linkUrl: l.linkUrl,
+              isSameOrigin: l.isSameOrigin,
+            })),
+          );
+
+          await enqueueFiltered(enqueueLinks as never, sameOriginUrls(links));
+        } finally {
+          releaseOwned();
         }
       },
       failedRequestHandler: async ({ request }, error) => {
@@ -309,9 +416,7 @@ async function executeCheerioCrawl(
   );
 
   try {
-    // Resume and fresh starts both seed from the (locale-filtered) sitemap map.
-    // Crawlee skips already-handled request keys; bare run() no-ops on a drained queue.
-    const startUrls = initialCrawlUrls(seeds, siteMap);
+    const startUrls = initialCrawlUrls(seeds, siteMap, enqueueOpts);
     if (input.resume) {
       log.info(
         `Resuming run ${persist.runId} with ${startUrls.length} map URL(s) (handled keys skipped)`,
@@ -319,13 +424,26 @@ async function executeCheerioCrawl(
     } else {
       log.info(`Starting crawl with ${startUrls.length} URL(s)`);
     }
-    await crawler.run(startUrls);
+    await crawler.run(
+      startUrls.map((url) => applyUniqueKey({ url })),
+    );
+
+    // Best-effort: Crawlee queue stats for uniqueKey collisions when available.
+    try {
+      const qs = await crawler.getRequestQueue();
+      const info = await qs?.getInfo?.();
+      if (info && typeof (info as { handledRequestCount?: number }).handledRequestCount === 'number') {
+        // No direct suppressed-by-uniqueKey counter in all Crawlee versions — leave 0 if unknown.
+      }
+    } catch {
+      // ignore
+    }
 
     if (promoteToPlaywright.size > 0) {
       log.info(`Playwright backup pool: ${promoteToPlaywright.size} URL(s)`);
       await runPlaywrightPool({
         runId: persist.runId,
-        urls: [...promoteToPlaywright],
+        urls: [...promoteToPlaywright.values()],
         dataDir: input.dataDir,
         persist,
         siteMap,

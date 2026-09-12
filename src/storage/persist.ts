@@ -3,7 +3,6 @@ import { createGeekApiClient, isGeekApiConfigured, type GeekApiClient } from './
 import { createJsonRunStore, type CrawlLinkMeta, type CrawlPageMeta, type RunStore } from './runs.js';
 import { computeSeedKey, normalizeSeeds, originOf } from './seed-key.js';
 import type { CrawlType } from '../crawl/types.js';
-import { normalizeCrawlUrl } from '../crawl/sitemap.js';
 import {
   bumpRejectCounter,
   classifyReject,
@@ -13,6 +12,11 @@ import {
   type RejectCounters,
   type RejectReason,
 } from '../crawl/reject.js';
+import {
+  createPageDedupTracker,
+  type DedupCounters,
+  type PageDedupTracker,
+} from './page-dedup.js';
 import { randomUUID } from 'node:crypto';
 import { log } from 'crawlee';
 
@@ -28,23 +32,30 @@ export type PersistPageInput = {
   robotsAllowed: boolean;
   failureReason?: string;
   fetchMode: 'cheerio' | 'playwright';
+  /** Handler-plane dedup context (URL/HTML already reserved). */
+  dedup?: {
+    owned: Set<string>;
+    urlKey: string;
+    requestedUrlKey: string;
+    htmlHash: string;
+    canonicalKey: string | null;
+    aliasKeys?: string[];
+  };
 };
 
 export type CrawlPersist = {
   runId: string;
   mode: 'api' | 'local' | 'both';
   dataDir: string;
-  /** Local mirrors (always created for Crawlee storage path; may be empty of HTML if api-only). */
   rawBodyStore: RawBodyStore;
   localMeta: RunStore;
+  dedup: PageDedupTracker;
   begin(): Promise<void>;
-  /** Attach to an existing GeekAPI + local run (no createRun). */
   beginResume(): Promise<void>;
   markRunning(): Promise<void>;
   markComplete(): Promise<void>;
   markFailed(errorSummary: string): Promise<void>;
   throwIfPersistenceFailed(): void;
-  /** Count + sample-log a reject; never persists page HTML. */
   noteReject(reason: RejectReason, url: string, detail?: string): void;
   savePage(page: PersistPageInput): Promise<{ pageId: string } | null>;
   saveLinks(pageId: string, links: CrawlLinkMeta[]): Promise<void>;
@@ -52,9 +63,10 @@ export type CrawlPersist = {
     {
       pagesSaved: number;
       linksSaved: number;
-      /** Rows not written because the resolved final URL was already saved this run. */
       duplicatePagesSkipped: number;
-    } & RejectCounters
+      dedupLedgerBackfilled: boolean;
+    } & RejectCounters &
+      DedupCounters
   >;
 };
 
@@ -84,12 +96,6 @@ export function createCrawlPersist(input: {
 
   let runId = input.runIdHint ?? randomUUID();
   let pagesSaved = 0;
-  // Dedup on the RESOLVED final URL. Enqueue-time dedup runs on the
-  // pre-redirect request URL, so distinct requests that redirect or
-  // canonicalize to one page each wrote their own row (n8n stored
-  // /integrations/set/ six times in one run).
-  const savedFinalUrls = new Set<string>();
-  let duplicatePagesSkipped = 0;
   let pagesWithoutMarkdown = 0;
   let resumeCountsVerified = true;
   let linksSaved = 0;
@@ -97,11 +103,24 @@ export function createCrawlPersist(input: {
   const rejectCounters = emptyRejectCounters();
   const rejectSamples = new RejectSampleLog();
   const client: GeekApiClient | null = api;
+  let dedup = createPageDedupTracker({ dataDir: input.dataDir, runId });
+
+  function rebuildDedup(): void {
+    dedup = createPageDedupTracker({ dataDir: input.dataDir, runId });
+  }
 
   async function flushRejectStatsToLocal(): Promise<void> {
+    const d = dedup.counters;
     await localMeta.recordRejectStats(runId, {
       ...rejectCounters,
-      duplicatePagesSkipped,
+      duplicatePagesSkipped:
+        d.skippedUrl +
+        d.skippedHtml +
+        d.skippedCanonicalAlias +
+        d.skippedContent +
+        d.skippedNearDuplicate,
+      ...d,
+      dedupLedgerBackfilled: dedup.dedupLedgerBackfilled,
       rejectSamples: rejectSamples.snapshot(),
     });
   }
@@ -130,6 +149,9 @@ export function createCrawlPersist(input: {
     dataDir: input.dataDir,
     rawBodyStore,
     localMeta,
+    get dedup() {
+      return dedup;
+    },
 
     async begin() {
       if (client) {
@@ -140,6 +162,7 @@ export function createCrawlPersist(input: {
         const id = String(created.runId ?? '');
         if (!id) throw new Error(`GeekAPI createRun returned no runId: ${JSON.stringify(created)}`);
         runId = id;
+        rebuildDedup();
         console.log(
           `Persist mode=${mode} runId=${runId} seedKey=${seedKey.slice(0, 12)}… via GeekAPI → GeekRepository → Mongo`,
         );
@@ -149,8 +172,6 @@ export function createCrawlPersist(input: {
         );
       }
 
-      // Always create a local run stub so concurrent local mirrors / GET /crawls/:id work.
-      // HTML bodies are only written when mode is local|both.
       await localMeta.createRun({
         runId,
         crawlType: input.crawlType,
@@ -168,6 +189,12 @@ export function createCrawlPersist(input: {
         existing.pagesWithoutMarkdown ?? (existing.pagesSaved > 0 ? 1 : 0);
       resumeCountsVerified = existing.storageContractVersion === 2;
       linksSaved = existing.linksSaved;
+      rebuildDedup();
+      await dedup.rehydrate();
+      await localMeta.recordRejectStats(runId, {
+        ...rejectCounters,
+        dedupLedgerBackfilled: dedup.dedupLedgerBackfilled,
+      });
       if (client) {
         await client.patchRun(runId, {
           status: 'external',
@@ -185,8 +212,6 @@ export function createCrawlPersist(input: {
     },
 
     async markRunning() {
-      // Ingest create already sets status=external + startedAt on GeekAPI; keep that.
-      // Local stub still tracks running for the thin localhost API.
       await localMeta.markRunning(runId);
     },
 
@@ -201,12 +226,12 @@ export function createCrawlPersist(input: {
           completedAtUtc,
           markdownReadyAt: markdownReady ? completedAtUtc : undefined,
           clearMarkdownReadyAt: !markdownReady,
-          // Array form required by GeekAPI snapshot deserializer; synthetic origin carries rejects.
           hostProgressJson: JSON.stringify([
             rejectStatsHostProgressEntry(
               rejectCounters,
               pagesSaved,
               rejectSamples.snapshot(),
+              dedup.counters,
             ),
           ]),
         });
@@ -227,6 +252,7 @@ export function createCrawlPersist(input: {
               rejectCounters,
               pagesSaved,
               rejectSamples.snapshot(),
+              dedup.counters,
             ),
           ]),
         });
@@ -252,15 +278,73 @@ export function createCrawlPersist(input: {
           : classifyReject({ finalUrl, markdown: page.markdown });
       if (rejectReason) {
         recordReject(rejectReason, finalUrl, page.failureReason);
+        if (page.dedup) {
+          dedup.release({
+            urlKey: page.dedup.urlKey,
+            htmlHash: page.dedup.htmlHash,
+          });
+        }
         return null;
       }
-      const dedupKey = normalizeCrawlUrl(finalUrl) ?? finalUrl;
-      if (savedFinalUrls.has(dedupKey)) {
-        duplicatePagesSkipped += 1;
-        log.info(`duplicate page skipped (already saved this run): ${finalUrl}`);
+
+      const markdown = page.markdown ?? '';
+      const owned = page.dedup?.owned ?? new Set<string>();
+      const contentCheck = await dedup.checkContentAndNear({
+        markdown,
+        url: finalUrl,
+        title: page.title,
+        canonicalUrl: page.dedup?.canonicalKey,
+      });
+
+      if (contentCheck.skip) {
+        await dedup.recordSkip({
+          v: 1,
+          at: new Date().toISOString(),
+          reason: contentCheck.reason,
+          cause: 'accepted',
+          requestedUrl: page.url,
+          finalUrl,
+          requestedUrlKey: page.dedup?.requestedUrlKey,
+          finalUrlKey: page.dedup?.urlKey,
+          htmlHash: page.dedup?.htmlHash,
+          contentHash: contentCheck.contentHash,
+          near: contentCheck.near,
+        });
+        if (page.dedup) {
+          dedup.release({
+            urlKey: page.dedup.urlKey,
+            htmlHash: page.dedup.htmlHash,
+          });
+        }
         return null;
       }
-      savedFinalUrls.add(dedupKey);
+
+      const contentReserve = await dedup.reserve(
+        { contentHash: contentCheck.contentHash },
+        owned,
+      );
+      const contentWait = await dedup.awaitInFlight(contentReserve, 60_000);
+      if (contentWait.skip) {
+        await dedup.recordSkip({
+          v: 1,
+          at: new Date().toISOString(),
+          reason: contentWait.reason,
+          cause: contentWait.cause,
+          requestedUrl: page.url,
+          finalUrl,
+          requestedUrlKey: page.dedup?.requestedUrlKey,
+          finalUrlKey: page.dedup?.urlKey,
+          htmlHash: page.dedup?.htmlHash,
+          contentHash: contentCheck.contentHash,
+        });
+        if (page.dedup) {
+          dedup.release({
+            urlKey: page.dedup.urlKey,
+            htmlHash: page.dedup.htmlHash,
+          });
+        }
+        return null;
+      }
 
       const origin = originOf(finalUrl);
 
@@ -283,6 +367,11 @@ export function createCrawlPersist(input: {
           ]);
         } catch (error) {
           rememberPersistenceFailure(`page persistence ${finalUrl}`, error);
+          dedup.release({
+            urlKey: page.dedup?.urlKey,
+            htmlHash: page.dedup?.htmlHash,
+            contentHash: contentCheck.contentHash,
+          });
           return null;
         }
         if (!created[0]?.pageId) {
@@ -290,6 +379,11 @@ export function createCrawlPersist(input: {
             `page persistence ${finalUrl}`,
             'GeekAPI rejected page persistence',
           );
+          dedup.release({
+            urlKey: page.dedup?.urlKey,
+            htmlHash: page.dedup?.htmlHash,
+            contentHash: contentCheck.contentHash,
+          });
           return null;
         }
         pageId = created[0].pageId;
@@ -319,13 +413,43 @@ export function createCrawlPersist(input: {
           robotsAllowed: page.robotsAllowed,
           crawledAtUtc: new Date().toISOString(),
           failureReason: page.failureReason,
+          canonicalUrl: page.dedup?.canonicalKey ?? undefined,
         };
         await localMeta.insertPage(runId, metaPage);
       } else {
         await localMeta.recordAcceptedPage(runId, true);
       }
 
+      // Save-before-append: API/local row first, then ledger.
+      await dedup.commitAccepted({
+        v: 1,
+        pageId,
+        at: new Date().toISOString(),
+        requestedUrlKey: page.dedup?.requestedUrlKey ?? page.dedup?.urlKey ?? finalUrl,
+        finalUrlKey: page.dedup?.urlKey ?? finalUrl,
+        aliasKeys: page.dedup?.aliasKeys,
+        canonicalKey: page.dedup?.canonicalKey ?? undefined,
+        htmlHash: page.dedup?.htmlHash,
+        contentHash: contentCheck.contentHash,
+        simhash: contentCheck.simhash,
+        markdownLength: markdown.length,
+      });
+      if (page.dedup?.canonicalKey) {
+        dedup.registerCanonicalGroup(page.dedup.canonicalKey, pageId, page.dedup.urlKey);
+      }
+      dedup.noteContentAccepted({
+        simhash: contentCheck.simhash,
+        contentHash: contentCheck.contentHash,
+        pageId,
+        url: finalUrl,
+        title: page.title,
+        markdownLength: markdown.length,
+        canonicalUrl: page.dedup?.canonicalKey,
+        excerpt: markdown.replace(/\s+/g, ' ').trim().slice(0, 500),
+      });
+
       pagesSaved += 1;
+      if (!page.markdown?.trim()) pagesWithoutMarkdown += 1;
       return { pageId };
     },
 
@@ -356,7 +480,20 @@ export function createCrawlPersist(input: {
     },
 
     async stats() {
-      return { pagesSaved, linksSaved, duplicatePagesSkipped, ...rejectCounters };
+      const d = dedup.counters;
+      return {
+        pagesSaved,
+        linksSaved,
+        duplicatePagesSkipped:
+          d.skippedUrl +
+          d.skippedHtml +
+          d.skippedCanonicalAlias +
+          d.skippedContent +
+          d.skippedNearDuplicate,
+        dedupLedgerBackfilled: dedup.dedupLedgerBackfilled,
+        ...rejectCounters,
+        ...d,
+      };
     },
   };
 }

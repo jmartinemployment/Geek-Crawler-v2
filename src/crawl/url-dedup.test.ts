@@ -1,15 +1,16 @@
 /**
- * The persist-time dedup key: distinct request URLs that resolve to one page
- * must collapse to a single row. Run: npx tsx --test src/crawl/url-dedup.test.ts
+ * The persist-time / enqueue dedup key helpers.
+ * Run: npx tsx --test src/crawl/url-dedup.test.ts
  */
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import { crawlDedupKey } from './dedup.js';
 import { normalizeCrawlUrl } from './sitemap.js';
 
-/** Mirrors the guard in persist.savePage. */
+/** Mirrors enqueue+handler comparison key (default, non-aggressive). */
 function dedupKey(finalUrl: string): string {
-  return normalizeCrawlUrl(finalUrl) ?? finalUrl;
+  return crawlDedupKey(finalUrl) ?? finalUrl;
 }
 
 describe('final-url dedup key', () => {
@@ -35,7 +36,7 @@ describe('final-url dedup key', () => {
     );
   });
 
-  it('simulates the n8n case: six requests, one row', () => {
+  it('simulates the n8n case: six requests, one comparison key', () => {
     const requests = [
       'https://n8n.io/integrations/set/',
       'https://n8n.io/integrations/set/?utm_source=a',
@@ -57,6 +58,18 @@ describe('final-url dedup key', () => {
     assert.equal(saved.size, 1, 'should store one row');
     assert.equal(skipped, 5, 'should skip the other five');
   });
+
+  it('filter key is never the fetch URL when aggressive would rewrite host', () => {
+    const fetchable = normalizeCrawlUrl('https://www.example.com/path/?utm_source=x');
+    const compare = crawlDedupKey('https://www.example.com/path/?utm_source=x', {
+      aggressive: true,
+    });
+    assert.ok(fetchable);
+    assert.ok(compare);
+    // Fetchable keeps www; aggressive compare drops www — must not be requested.
+    assert.notEqual(fetchable, compare);
+    assert.match(fetchable!, /www\.example\.com/);
+  });
 });
 
 describe('oversized page truncation is visible', () => {
@@ -68,7 +81,8 @@ describe('oversized page truncation is visible', () => {
     assert.equal(bigResult.truncated, true, 'oversized page must report truncation');
     assert.ok((bigResult.markdown ?? '').length <= 500_000);
 
-    const small = '<html><body><article><h1>Hi</h1><p>Short article body here.</p></article></body></html>';
+    const small =
+      '<html><body><article><h1>Hi</h1><p>Short article body here.</p></article></body></html>';
     const smallResult = extractCleanContent(small, 'https://n8n.io/a/');
     assert.equal(smallResult.truncated, false, 'normal page must not be flagged');
   });

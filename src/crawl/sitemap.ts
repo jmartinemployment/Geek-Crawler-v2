@@ -1,6 +1,7 @@
 import { hostnameKey } from './links.js';
 import { localeNormalizeForMap } from './locale-path.js';
 import { BOT } from '../bot/identity.js';
+import { crawlDedupKey, type AliasTable } from './dedup.js';
 
 const MAX_SITEMAPS = 40;
 const MAX_URLS = 50_000;
@@ -197,41 +198,78 @@ export async function loadSiteMapIndex(seeds: string[]): Promise<SiteMapIndex> {
   };
 }
 
+export type EnqueueDedupOpts = {
+  /** Redirect alias table — compare on resolved dedup keys. */
+  aliases?: AliasTable;
+  /** Mutated: enqueueAttempts / enqueueSuppressedLocal. */
+  counters?: { enqueueAttempts: number; enqueueSuppressedLocal: number };
+};
+
+function compareKey(url: string, aliases?: AliasTable): string {
+  const k = crawlDedupKey(url) ?? url;
+  return aliases ? aliases.resolve(k) : k;
+}
+
 /**
  * Filter candidate same-site URLs for enqueue.
  * Sitemap present → only map members. No sitemap → all candidates (normalized).
+ * Local `seen` compares on crawlDedupKey (alias-resolved); pushed URL stays normalizeCrawlUrl.
  */
-export function filterEnqueueUrls(candidates: string[], map: SiteMapIndex): string[] {
+export function filterEnqueueUrls(
+  candidates: string[],
+  map: SiteMapIndex,
+  opts?: EnqueueDedupOpts,
+): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
   for (const c of candidates) {
+    if (opts?.counters) opts.counters.enqueueAttempts += 1;
     const localeOk = localeNormalizeForMap(c);
     if (!localeOk) continue;
     const n = normalizeCrawlUrl(localeOk);
-    if (!n || seen.has(n)) continue;
+    if (!n) continue;
+    const ck = compareKey(n, opts?.aliases);
+    if (seen.has(ck)) {
+      if (opts?.counters) opts.counters.enqueueSuppressedLocal += 1;
+      continue;
+    }
     if (map.hasMap && !map.urls.has(n)) continue;
-    seen.add(n);
+    seen.add(ck);
     out.push(n);
   }
   return out;
 }
 
 /** Start URLs: seeds always, plus full sitemap when it is the map. */
-export function initialCrawlUrls(seeds: string[], map: SiteMapIndex): string[] {
+export function initialCrawlUrls(
+  seeds: string[],
+  map: SiteMapIndex,
+  opts?: EnqueueDedupOpts,
+): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
   for (const s of seeds) {
+    if (opts?.counters) opts.counters.enqueueAttempts += 1;
     // Prefer stripped English form so seed matches map keys; keep non-English seeds as-is.
     const localeOk = localeNormalizeForMap(s) ?? s;
     const n = normalizeCrawlUrl(localeOk) ?? localeOk;
-    if (seen.has(n)) continue;
-    seen.add(n);
+    const ck = compareKey(n, opts?.aliases);
+    if (seen.has(ck)) {
+      if (opts?.counters) opts.counters.enqueueSuppressedLocal += 1;
+      continue;
+    }
+    seen.add(ck);
     out.push(n);
   }
   if (map.hasMap) {
     for (const u of map.urls) {
-      if (seen.has(u)) continue;
-      seen.add(u);
+      if (opts?.counters) opts.counters.enqueueAttempts += 1;
+      const ck = compareKey(u, opts?.aliases);
+      if (seen.has(ck)) {
+        if (opts?.counters) opts.counters.enqueueSuppressedLocal += 1;
+        continue;
+      }
+      seen.add(ck);
       out.push(u);
       if (out.length >= MAX_URLS + seeds.length) break;
     }

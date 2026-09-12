@@ -24,6 +24,21 @@ export type CrawlRunMeta = {
   pagesRejectedRequestFailed?: number;
   /** Rows not written because the resolved final URL was already saved this run. */
   duplicatePagesSkipped?: number;
+  dedupLedgerBackfilled?: boolean;
+  enqueueAttempts?: number;
+  enqueueSuppressedLocal?: number;
+  enqueueSuppressedQueue?: number;
+  httpRequests?: number;
+  browserRenders?: number;
+  extractionInvocations?: number;
+  skippedUrl?: number;
+  skippedHtml?: number;
+  skippedCanonicalAlias?: number;
+  skippedContent?: number;
+  skippedNearDuplicate?: number;
+  skipCauseAccepted?: number;
+  skipCauseInFlight?: number;
+  aliasesLearned?: number;
   rejectSamples?: {
     locale_excluded?: RejectSample[];
     challenge_page?: RejectSample[];
@@ -41,6 +56,8 @@ export type CrawlPageMeta = {
   /** Relative key for clean markdown body when local|both. */
   markdownBodyKey?: string;
   title?: string;
+  /** Same-site canonical URL key when declared. */
+  canonicalUrl?: string;
   /** cheerio = primary HTTP; playwright = backup for non-viable shells */
   fetchMode: 'cheerio' | 'playwright';
   robotsAllowed: boolean;
@@ -67,12 +84,27 @@ export type RunStore = {
   recordRejectStats(
     runId: string,
     stats: {
-      pagesRejectedLocale: number;
-      pagesRejectedChallenge: number;
-      pagesRejectedExtractEmpty: number;
-      pagesRejectedRobots: number;
-      pagesRejectedRequestFailed: number;
+      pagesRejectedLocale?: number;
+      pagesRejectedChallenge?: number;
+      pagesRejectedExtractEmpty?: number;
+      pagesRejectedRobots?: number;
+      pagesRejectedRequestFailed?: number;
       duplicatePagesSkipped?: number;
+      dedupLedgerBackfilled?: boolean;
+      enqueueAttempts?: number;
+      enqueueSuppressedLocal?: number;
+      enqueueSuppressedQueue?: number;
+      httpRequests?: number;
+      browserRenders?: number;
+      extractionInvocations?: number;
+      skippedUrl?: number;
+      skippedHtml?: number;
+      skippedCanonicalAlias?: number;
+      skippedContent?: number;
+      skippedNearDuplicate?: number;
+      skipCauseAccepted?: number;
+      skipCauseInFlight?: number;
+      aliasesLearned?: number;
       rejectSamples?: CrawlRunMeta['rejectSamples'];
     },
   ): Promise<void>;
@@ -198,14 +230,47 @@ export function createJsonRunStore(dataDir: string): RunStore {
     async recordRejectStats(runId, stats) {
       await withRunLock(runId, async () => {
         const run = await loadRun(runId);
-        run.pagesRejectedLocale = stats.pagesRejectedLocale;
-        run.pagesRejectedChallenge = stats.pagesRejectedChallenge;
-        run.pagesRejectedExtractEmpty = stats.pagesRejectedExtractEmpty;
+        if (stats.pagesRejectedLocale !== undefined) {
+          run.pagesRejectedLocale = stats.pagesRejectedLocale;
+        }
+        if (stats.pagesRejectedChallenge !== undefined) {
+          run.pagesRejectedChallenge = stats.pagesRejectedChallenge;
+        }
+        if (stats.pagesRejectedExtractEmpty !== undefined) {
+          run.pagesRejectedExtractEmpty = stats.pagesRejectedExtractEmpty;
+        }
         if (stats.duplicatePagesSkipped !== undefined) {
           run.duplicatePagesSkipped = stats.duplicatePagesSkipped;
         }
-        run.pagesRejectedRobots = stats.pagesRejectedRobots;
-        run.pagesRejectedRequestFailed = stats.pagesRejectedRequestFailed;
+        if (stats.pagesRejectedRobots !== undefined) {
+          run.pagesRejectedRobots = stats.pagesRejectedRobots;
+        }
+        if (stats.pagesRejectedRequestFailed !== undefined) {
+          run.pagesRejectedRequestFailed = stats.pagesRejectedRequestFailed;
+        }
+        const copyKeys = [
+          'dedupLedgerBackfilled',
+          'enqueueAttempts',
+          'enqueueSuppressedLocal',
+          'enqueueSuppressedQueue',
+          'httpRequests',
+          'browserRenders',
+          'extractionInvocations',
+          'skippedUrl',
+          'skippedHtml',
+          'skippedCanonicalAlias',
+          'skippedContent',
+          'skippedNearDuplicate',
+          'skipCauseAccepted',
+          'skipCauseInFlight',
+          'aliasesLearned',
+        ] as const;
+        for (const k of copyKeys) {
+          if (stats[k] !== undefined) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            (run as any)[k] = stats[k];
+          }
+        }
         if (stats.rejectSamples) run.rejectSamples = stats.rejectSamples;
         await saveRun(run);
       });
