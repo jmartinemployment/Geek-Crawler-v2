@@ -43,7 +43,11 @@ export const DEFAULT_SECTION_QUOTAS: ReadonlyMap<string, number> = new Map([
   ['topics', 0],
   // Interactive tool shells
   ['free-tools', 10],
-  ['tools', 10],
+  // Tool pages carry partner/vendor links, which is what HarvestTools reads from the
+  // anchors under a heading. Capping them at 10 starved the grounding. One number for
+  // every crawl type - own site, partner and competitor - since tool pages are evidence
+  // on any of them.
+  ['tools', 100],
   ['generators', 10],
   ['calculators', 10],
   // Editorial — real content, capped by volume
