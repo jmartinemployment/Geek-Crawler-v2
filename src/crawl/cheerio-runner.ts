@@ -1,12 +1,13 @@
 import { CheerioCrawler, Configuration, log } from 'crawlee';
-import { access } from 'node:fs/promises';
-import path from 'node:path';
 import { BOT, defaultRequestHeaders } from '../bot/identity.js';
-import { createCrawlPersist, type CrawlPersist } from '../storage/persist.js';
-import { createJsonRunStore } from '../storage/runs.js';
+import {
+  createCrawlPersist,
+  isPersistenceError,
+  type CrawlPersist,
+} from '../storage/persist.js';
+import { RobotsBlockedError } from '../storage/errors.js';
 import { extractHrefs, sameOriginUrls } from './links.js';
 import { extractCleanContent } from './extract-content.js';
-import { runPlaywrightPool } from './playwright-pool.js';
 import { buildProxyConfiguration } from './proxy.js';
 import {
   filterEnqueueUrls,
@@ -14,23 +15,23 @@ import {
   loadSiteMapIndex,
   type SiteMapIndex,
 } from './sitemap.js';
+import { createRobotsGate } from './robots.js';
 import { concurrencyOptions, httpAgent, httpsAgent } from './throttle.js';
 import type { CrawlType } from './types.js';
 import { isViableHtml } from './viability.js';
 import { classifyReject } from './reject.js';
 import { normalizeSeeds } from '../storage/seed-key.js';
 import { htmlHash } from './dedup.js';
+import { clearCancel, isCancelRequested } from './cancel-registry.js';
+import { MAX_PAGES_PER_SITE, clampToSiteCap } from './crawl-limits.js';
+import { createSectionQuota, resolveSectionQuotas } from './section-quota.js';
 
 export type RunCrawlInput = {
-  runId?: string;
   crawlType: CrawlType;
   seeds: string[];
   dataDir: string;
   maxRequestsPerCrawl?: number;
-  /** Cap parallel Cheerio requests for this run (1–32). */
   maxConcurrency?: number;
-  /** When true, do not re-seed; continue Crawlee request queue under .crawlee/<runId>. */
-  resume?: boolean;
 };
 
 export type RunCrawlResult = {
@@ -42,7 +43,6 @@ export type RunCrawlResult = {
   pagesRejectedExtractEmpty: number;
   pagesRejectedRobots: number;
   pagesRejectedRequestFailed: number;
-  /** Rows not written because the resolved final URL was already saved this run. */
   duplicatePagesSkipped: number;
   dataDir: string;
   persistMode: string;
@@ -55,13 +55,17 @@ export type PreparedCrawl = {
   run: () => Promise<RunCrawlResult>;
 };
 
-/** Create GeekAPI/local run and return immediately; call `run()` to crawl. */
 export async function prepareCheerioCrawl(input: RunCrawlInput): Promise<PreparedCrawl> {
   const seeds = normalizeSeeds(input.seeds);
   if (seeds.length === 0) throw new Error('No valid seed URLs');
 
+  const robots = createRobotsGate();
+  for (const seed of seeds) {
+    const origin = new URL(seed).origin;
+    await robots.requireOrigin(origin);
+  }
+
   const persist = createCrawlPersist({
-    runIdHint: input.runId,
     crawlType: input.crawlType,
     seeds,
     dataDir: input.dataDir,
@@ -73,69 +77,20 @@ export async function prepareCheerioCrawl(input: RunCrawlInput): Promise<Prepare
     runId: persist.runId,
     persistMode: persist.mode,
     dataDir: persist.dataDir,
-    run: () => executeCheerioCrawl(persist, seeds, input),
+    run: () => executeCheerioCrawl(persist, seeds, input, robots),
   };
 }
 
-/**
- * Resume an existing run: same runId, same `.crawlee/<runId>` queue, no GeekAPI createRun.
- * Processes remaining pending requests (already-handled URLs stay skipped by Crawlee).
- */
-export async function prepareResumeCheerioCrawl(input: {
+/** Resume of failed/incomplete runs is forbidden — start a new run. */
+export async function prepareResumeCheerioCrawl(_input: {
   runId: string;
   dataDir: string;
   maxRequestsPerCrawl?: number;
   maxConcurrency?: number;
 }): Promise<PreparedCrawl> {
-  const dataDir = path.resolve(input.dataDir);
-  const runId = input.runId;
-  const meta = createJsonRunStore(dataDir);
-  const existing = await meta.getRun(runId);
-  if (!existing) {
-    throw new Error(`Run not found locally: ${runId}`);
-  }
-  const queueDir = path.join(dataDir, '.crawlee', runId);
-  try {
-    await access(queueDir);
-  } catch {
-    throw new Error(
-      `Cannot resume — Crawlee storage missing at ${queueDir}. Resume needs the local request queue.`,
-    );
-  }
-
-  const seeds = normalizeSeeds(existing.seeds);
-  if (seeds.length === 0) {
-    throw new Error(`Cannot resume — run ${runId} has no seeds in local stub`);
-  }
-  const persist = createCrawlPersist({
-    runIdHint: runId,
-    crawlType: existing.crawlType,
-    seeds,
-    dataDir,
-  });
-  await persist.beginResume();
-  await persist.markRunning();
-
-  if (persist.runId !== runId) {
-    throw new Error(`Resume runId mismatch: expected ${runId}, got ${persist.runId}`);
-  }
-
-  const crawlInput: RunCrawlInput = {
-    runId,
-    crawlType: existing.crawlType,
-    seeds,
-    dataDir,
-    maxRequestsPerCrawl: input.maxRequestsPerCrawl,
-    maxConcurrency: input.maxConcurrency,
-    resume: true,
-  };
-
-  return {
-    runId: persist.runId,
-    persistMode: persist.mode,
-    dataDir: persist.dataDir,
-    run: () => executeCheerioCrawl(persist, seeds, crawlInput),
-  };
+  throw new Error(
+    'Resume is forbidden under fail-closed policy — start a new crawl run instead',
+  );
 }
 
 export async function runCheerioCrawl(input: RunCrawlInput): Promise<RunCrawlResult> {
@@ -147,18 +102,18 @@ async function executeCheerioCrawl(
   persist: CrawlPersist,
   seeds: string[],
   input: RunCrawlInput,
+  robots: ReturnType<typeof createRobotsGate>,
 ): Promise<RunCrawlResult> {
-  // Anchor same-site scope to the seed, not the post-redirect page URL:
-  // one off-host redirect must not move the crawl boundary.
-  const scopeUrl = seeds[0];
+  const scopeUrl = seeds[0]!;
   const dedup = persist.dedup;
+  let cancelled = false;
+  const quota = createSectionQuota(resolveSectionQuotas());
   const enqueueOpts = {
     aliases: dedup.aliases,
     counters: dedup.counters,
+    quota,
   };
 
-  /** Dedup key → URL to render (first seen wins). */
-  const promoteToPlaywright = new Map<string, string>();
   const { minConcurrency, maxConcurrency, autoscaledPoolOptions } = concurrencyOptions({
     maxConcurrency: input.maxConcurrency,
   });
@@ -174,21 +129,20 @@ async function executeCheerioCrawl(
   }
   log.info(`Concurrency min=${minConcurrency} max=${maxConcurrency}`);
 
-  /** Override if provided; else sitemap size; else uncapped. */
-  let maxRequestsPerCrawl: number | undefined;
+  let maxRequestsPerCrawl: number;
   if (input.maxRequestsPerCrawl != null && Number.isFinite(input.maxRequestsPerCrawl)) {
-    maxRequestsPerCrawl = Math.max(1, Math.floor(input.maxRequestsPerCrawl));
+    maxRequestsPerCrawl = clampToSiteCap(input.maxRequestsPerCrawl);
     log.info(`Request budget override: maxRequestsPerCrawl=${maxRequestsPerCrawl}`);
   } else if (siteMap.hasMap) {
-    maxRequestsPerCrawl = Math.max(siteMap.urls.size, seeds.length);
+    maxRequestsPerCrawl = clampToSiteCap(Math.max(siteMap.urls.size, seeds.length));
     log.info(`Request budget from sitemap: maxRequestsPerCrawl=${maxRequestsPerCrawl}`);
   } else {
-    log.info('Request budget: uncapped (no sitemap map)');
+    maxRequestsPerCrawl = MAX_PAGES_PER_SITE;
+    log.info(`Request budget: per-site cap maxRequestsPerCrawl=${maxRequestsPerCrawl}`);
   }
 
   const config = new Configuration({
-    // Resumes must preserve the request queue left by the prior process.
-    purgeOnStart: !input.resume,
+    purgeOnStart: true,
     storageClientOptions: {
       localDataDirectory: `${input.dataDir}/.crawlee/${persist.runId}`,
     },
@@ -203,6 +157,7 @@ async function executeCheerioCrawl(
     enqueueLinks: (opts: Record<string, unknown>) => Promise<unknown>,
     urls: string[],
   ) => {
+    if (persist.rootPersistenceError()) return;
     const toEnqueue = filterEnqueueUrls(urls, siteMap, enqueueOpts);
     if (toEnqueue.length === 0) return;
     await enqueueLinks({
@@ -222,8 +177,8 @@ async function executeCheerioCrawl(
       minConcurrency,
       maxConcurrency,
       autoscaledPoolOptions,
-      ...(maxRequestsPerCrawl != null ? { maxRequestsPerCrawl } : {}),
-      maxRequestRetries: 5,
+      maxRequestsPerCrawl,
+      maxRequestRetries: 0,
       requestHandlerTimeoutSecs: 60,
       additionalHttpErrorStatusCodes: [429, 503],
       respectRobotsTxtFile: { userAgent: BOT.name },
@@ -248,6 +203,19 @@ async function executeCheerioCrawl(
         },
       ],
       async requestHandler({ request, body, $, response, enqueueLinks }) {
+        if (persist.rootPersistenceError()) {
+          request.noRetry = true;
+          await crawler.stop();
+          return;
+        }
+
+        if (isCancelRequested(persist.runId)) {
+          cancelled = true;
+          request.noRetry = true;
+          await crawler.stop();
+          return;
+        }
+
         const rawHtml = typeof body === 'string' ? body : String(body ?? '');
         const statusCode = response?.statusCode;
         const finalUrl = request.loadedUrl ?? request.url;
@@ -263,6 +231,11 @@ async function executeCheerioCrawl(
         };
 
         try {
+          if (!(await robots.isAllowed(finalUrl))) {
+            persist.noteReject('robots_disallowed', finalUrl, 'robots.txt');
+            return;
+          }
+
           const localeReject = classifyReject({ finalUrl });
           if (localeReject === 'locale_excluded') {
             persist.noteReject('locale_excluded', finalUrl);
@@ -298,11 +271,7 @@ async function executeCheerioCrawl(
               persist.noteReject('challenge_page', finalUrl);
               return;
             }
-
-            log.info(`Playwright backup (${viability.reason}): ${request.url}`);
-            if (!promoteToPlaywright.has(urlKey)) {
-              promoteToPlaywright.set(urlKey, request.url);
-            }
+            persist.noteReject('extract_empty', finalUrl, viability.reason);
             const links = extractHrefs($, finalUrl, scopeUrl);
             await enqueueFiltered(enqueueLinks as never, sameOriginUrls(links));
             return;
@@ -312,7 +281,6 @@ async function executeCheerioCrawl(
           const htmlReserve = await dedup.reserve({ urlKey, htmlHash: htmlKey }, owned);
           const htmlWait = await dedup.awaitInFlight(htmlReserve, HANDLER_TIMEOUT_MS);
           if (htmlWait.skip) {
-            // Still discover links from identical HTML at a different URL.
             const links = extractHrefs($, finalUrl, scopeUrl);
             await enqueueFiltered(enqueueLinks as never, sameOriginUrls(links));
             await dedup.recordSkip({
@@ -366,44 +334,57 @@ async function executeCheerioCrawl(
             return;
           }
 
-          const savedPage = await persist.savePage({
-            url: request.url,
-            finalUrl,
-            statusCode,
-            html: rawHtml,
-            markdown: clean.markdown,
-            title: clean.title,
-            excerpt: clean.excerpt,
-            robotsAllowed: true,
-            fetchMode: 'cheerio',
-            dedup: {
-              owned,
-              urlKey,
-              requestedUrlKey: dedup.resolveKey(request.url) ?? urlKey,
-              htmlHash: htmlKey,
-              canonicalKey,
-            },
-          });
-          if (!savedPage) return;
-          committed = true;
-          const { pageId } = savedPage;
+          try {
+            const savedPage = await persist.savePage({
+              url: request.url,
+              finalUrl,
+              statusCode,
+              html: rawHtml,
+              markdown: clean.markdown,
+              title: clean.title,
+              excerpt: clean.excerpt,
+              robotsAllowed: true,
+              fetchMode: 'cheerio',
+              dedup: {
+                owned,
+                urlKey,
+                requestedUrlKey: dedup.resolveKey(request.url) ?? urlKey,
+                htmlHash: htmlKey,
+                canonicalKey,
+              },
+            });
+            if (!savedPage) return;
+            committed = true;
+            const { pageId } = savedPage;
 
-          const links = extractHrefs($, finalUrl, scopeUrl);
-          await persist.saveLinks(
-            pageId,
-            links.map((l) => ({
-              fromUrl: finalUrl,
-              linkUrl: l.linkUrl,
-              isSameOrigin: l.isSameOrigin,
-            })),
-          );
+            const links = extractHrefs($, finalUrl, scopeUrl);
+            await persist.saveLinks(
+              pageId,
+              links.map((l) => ({
+                fromUrl: finalUrl,
+                linkUrl: l.linkUrl,
+                isSameOrigin: l.isSameOrigin,
+              })),
+            );
 
-          await enqueueFiltered(enqueueLinks as never, sameOriginUrls(links));
+            await enqueueFiltered(enqueueLinks as never, sameOriginUrls(links));
+          } catch (err) {
+            if (isPersistenceError(err)) {
+              request.noRetry = true;
+              await crawler.stop();
+              throw err;
+            }
+            throw err;
+          }
         } finally {
           releaseOwned();
         }
       },
       failedRequestHandler: async ({ request }, error) => {
+        if (isPersistenceError(error)) {
+          request.noRetry = true;
+          return;
+        }
         log.warning(`Request failed ${request.url}: ${error}`);
         persist.noteReject(
           'request_failed',
@@ -417,46 +398,25 @@ async function executeCheerioCrawl(
 
   try {
     const startUrls = initialCrawlUrls(seeds, siteMap, enqueueOpts);
-    if (input.resume) {
-      log.info(
-        `Resuming run ${persist.runId} with ${startUrls.length} map URL(s) (handled keys skipped)`,
-      );
-    } else {
-      log.info(`Starting crawl with ${startUrls.length} URL(s)`);
-    }
-    await crawler.run(
-      startUrls.map((url) => applyUniqueKey({ url })),
-    );
-
-    // Best-effort: Crawlee queue stats for uniqueKey collisions when available.
-    try {
-      const qs = await crawler.getRequestQueue();
-      const info = await qs?.getInfo?.();
-      if (info && typeof (info as { handledRequestCount?: number }).handledRequestCount === 'number') {
-        // No direct suppressed-by-uniqueKey counter in all Crawlee versions — leave 0 if unknown.
-      }
-    } catch {
-      // ignore
-    }
-
-    if (promoteToPlaywright.size > 0) {
-      log.info(`Playwright backup pool: ${promoteToPlaywright.size} URL(s)`);
-      await runPlaywrightPool({
-        runId: persist.runId,
-        urls: [...promoteToPlaywright.values()],
-        dataDir: input.dataDir,
-        persist,
-        siteMap,
-        scopeUrl,
-      });
-    }
+    log.info(`Starting crawl with ${startUrls.length} URL(s)`);
+    await crawler.run(startUrls.map((url) => applyUniqueKey({ url })));
 
     persist.throwIfPersistenceFailed();
-    await persist.markComplete();
+    if (cancelled || isCancelRequested(persist.runId)) {
+      log.info(`Run ${persist.runId} cancelled — stopping with pages already saved`);
+      await persist.markCancelled('Cancelled by operator');
+    } else {
+      await persist.markComplete();
+    }
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const root = persist.rootPersistenceError();
+    const message = (root ?? err) instanceof Error
+      ? (root ?? err as Error).message
+      : String(root ?? err);
     await persist.markFailed(message);
-    throw err;
+    throw root ?? err;
+  } finally {
+    clearCancel(persist.runId);
   }
 
   const stats = await persist.stats();
@@ -474,3 +434,5 @@ async function executeCheerioCrawl(
     persistMode: persist.mode,
   };
 }
+
+export { RobotsBlockedError };

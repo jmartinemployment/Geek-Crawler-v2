@@ -1,6 +1,7 @@
 import { createFilesystemRawBodyStore, type RawBodyStore } from './raw-body.js';
-import { createGeekApiClient, isGeekApiConfigured, type GeekApiClient } from './geek-api-client.js';
-import { createJsonRunStore, type CrawlLinkMeta, type CrawlPageMeta, type RunStore } from './runs.js';
+import { createGeekApiClient, type GeekApiClient } from './geek-api-client.js';
+import { PersistenceError, isPersistenceError } from './errors.js';
+import { createJsonRunStore, type CrawlLinkMeta, type RunStore } from './runs.js';
 import { computeSeedKey, normalizeSeeds, originOf } from './seed-key.js';
 import type { CrawlType } from '../crawl/types.js';
 import {
@@ -17,7 +18,6 @@ import {
   type DedupCounters,
   type PageDedupTracker,
 } from './page-dedup.js';
-import { randomUUID } from 'node:crypto';
 import { log } from 'crawlee';
 
 export type PersistPageInput = {
@@ -25,14 +25,12 @@ export type PersistPageInput = {
   finalUrl?: string;
   statusCode?: number;
   html?: string;
-  /** Clean article markdown (Readability + Turndown). */
   markdown?: string | null;
   title?: string | null;
   excerpt?: string | null;
   robotsAllowed: boolean;
   failureReason?: string;
-  fetchMode: 'cheerio' | 'playwright';
-  /** Handler-plane dedup context (URL/HTML already reserved). */
+  fetchMode: 'cheerio';
   dedup?: {
     owned: Set<string>;
     urlKey: string;
@@ -45,17 +43,20 @@ export type PersistPageInput = {
 
 export type CrawlPersist = {
   runId: string;
-  mode: 'api' | 'local' | 'both';
+  mode: 'api';
   dataDir: string;
   rawBodyStore: RawBodyStore;
   localMeta: RunStore;
   dedup: PageDedupTracker;
   begin(): Promise<void>;
-  beginResume(): Promise<void>;
   markRunning(): Promise<void>;
   markComplete(): Promise<void>;
+  /** One patchRun(failed) attempt; never writes local authority on failure. */
   markFailed(errorSummary: string): Promise<void>;
+  /** One patchRun(cancelled) attempt. Terminal — cancel is never a pause. */
+  markCancelled(reason: string): Promise<void>;
   throwIfPersistenceFailed(): void;
+  rootPersistenceError(): PersistenceError | null;
   noteReject(reason: RejectReason, url: string, detail?: string): void;
   savePage(page: PersistPageInput): Promise<{ pageId: string } | null>;
   saveLinks(pageId: string, links: CrawlLinkMeta[]): Promise<void>;
@@ -70,59 +71,71 @@ export type CrawlPersist = {
   >;
 };
 
-function keepLocalData(): boolean {
-  return process.env.KEEP_LOCAL_DATA === '1' || process.env.KEEP_LOCAL_DATA === 'true';
+/** Serialize GeekAPI writes; first failure is terminal (no new outbound writes). */
+function createPersistCoordinator() {
+  let chain: Promise<void> = Promise.resolve();
+  let rootFailure: PersistenceError | null = null;
+
+  return {
+    rootFailure(): PersistenceError | null {
+      return rootFailure;
+    },
+    setFailed(err: PersistenceError): void {
+      rootFailure ??= err;
+    },
+    async run<T>(fn: () => Promise<T>): Promise<T> {
+      const runExclusive = async (): Promise<T> => {
+        if (rootFailure) throw rootFailure;
+        try {
+          const result = await fn();
+          if (rootFailure) throw rootFailure;
+          return result;
+        } catch (err) {
+          const pe = isPersistenceError(err)
+            ? err
+            : new PersistenceError(err instanceof Error ? err.message : String(err), {
+                cause: err,
+              });
+          rootFailure ??= pe;
+          throw rootFailure;
+        }
+      };
+      const next = chain.then(runExclusive, runExclusive);
+      chain = next.then(
+        () => undefined,
+        () => undefined,
+      );
+      return next;
+    },
+  };
 }
 
 export function createCrawlPersist(input: {
-  runIdHint?: string;
   crawlType: CrawlType;
   seeds: string[];
   dataDir: string;
 }): CrawlPersist {
   const seeds = normalizeSeeds(input.seeds);
-  if (seeds.length === 0) throw new Error('No valid seed URLs');
+  if (seeds.length === 0) throw new PersistenceError('No valid seed URLs');
 
-  const api = createGeekApiClient();
-  const mode: CrawlPersist['mode'] = api
-    ? keepLocalData()
-      ? 'both'
-      : 'api'
-    : 'local';
+  const client: GeekApiClient = createGeekApiClient();
+  const mode = 'api' as const;
 
   const rawBodyStore = createFilesystemRawBodyStore(input.dataDir);
   const localMeta = createJsonRunStore(input.dataDir);
   const seedKey = computeSeedKey(seeds);
+  const coordinator = createPersistCoordinator();
 
-  let runId = input.runIdHint ?? randomUUID();
+  let runId = '';
   let pagesSaved = 0;
   let pagesWithoutMarkdown = 0;
-  let resumeCountsVerified = true;
   let linksSaved = 0;
-  let persistenceFailure: Error | null = null;
   const rejectCounters = emptyRejectCounters();
   const rejectSamples = new RejectSampleLog();
-  const client: GeekApiClient | null = api;
-  let dedup = createPageDedupTracker({ dataDir: input.dataDir, runId });
+  let dedup = createPageDedupTracker({ dataDir: input.dataDir, runId: 'pending' });
 
   function rebuildDedup(): void {
     dedup = createPageDedupTracker({ dataDir: input.dataDir, runId });
-  }
-
-  async function flushRejectStatsToLocal(): Promise<void> {
-    const d = dedup.counters;
-    await localMeta.recordRejectStats(runId, {
-      ...rejectCounters,
-      duplicatePagesSkipped:
-        d.skippedUrl +
-        d.skippedHtml +
-        d.skippedCanonicalAlias +
-        d.skippedContent +
-        d.skippedNearDuplicate,
-      ...d,
-      dedupLedgerBackfilled: dedup.dedupLedgerBackfilled,
-      rejectSamples: rejectSamples.snapshot(),
-    });
   }
 
   function recordReject(reason: RejectReason, url: string, detail?: string): void {
@@ -135,10 +148,15 @@ export function createCrawlPersist(input: {
     }
   }
 
-  function rememberPersistenceFailure(context: string, error: unknown): void {
-    const detail = error instanceof Error ? error.message : String(error);
-    persistenceFailure ??= new Error(`${context}: ${detail}`);
-    recordReject('request_failed', context, detail);
+  function hostProgressJson(): string {
+    return JSON.stringify([
+      rejectStatsHostProgressEntry(
+        rejectCounters,
+        pagesSaved,
+        rejectSamples.snapshot(),
+        dedup.counters,
+      ),
+    ]);
   }
 
   return {
@@ -154,61 +172,27 @@ export function createCrawlPersist(input: {
     },
 
     async begin() {
-      if (client) {
-        const created = await client.createRun({
+      const created = await coordinator.run(() =>
+        client.createRun({
           crawlType: input.crawlType,
           seeds,
-        });
-        const id = String(created.runId ?? '');
-        if (!id) throw new Error(`GeekAPI createRun returned no runId: ${JSON.stringify(created)}`);
-        runId = id;
-        rebuildDedup();
-        console.log(
-          `Persist mode=${mode} runId=${runId} seedKey=${seedKey.slice(0, 12)}… via GeekAPI → GeekRepository → Mongo`,
-        );
-      } else {
-        console.log(
-          `Persist mode=local (set GEEK_API_URL + GEEK_BACKEND_API_KEY + GEEK_USER_ID for Mongo via GeekAPI)`,
-        );
+        }),
+      );
+      const id = typeof created.runId === 'string' ? created.runId.trim() : '';
+      if (!id) {
+        throw new PersistenceError(`GeekAPI createRun returned no runId`);
       }
-
+      runId = id;
+      rebuildDedup();
+      // Engine scratch for in-process control plane only — not crawl authority.
       await localMeta.createRun({
         runId,
         crawlType: input.crawlType,
         seeds,
       });
-    },
-
-    async beginResume() {
-      const existing = await localMeta.getRun(runId);
-      if (!existing) {
-        throw new Error(`Cannot resume — local run stub missing for ${runId}`);
-      }
-      pagesSaved = existing.pagesSaved;
-      pagesWithoutMarkdown =
-        existing.pagesWithoutMarkdown ?? (existing.pagesSaved > 0 ? 1 : 0);
-      resumeCountsVerified = existing.storageContractVersion === 2;
-      linksSaved = existing.linksSaved;
-      rebuildDedup();
-      await dedup.rehydrate();
-      await localMeta.recordRejectStats(runId, {
-        ...rejectCounters,
-        dedupLedgerBackfilled: dedup.dedupLedgerBackfilled,
-      });
-      if (client) {
-        await client.patchRun(runId, {
-          status: 'external',
-          errorSummary: null,
-          completedAtUtc: null,
-          startedAtUtc: new Date().toISOString(),
-          clearMarkdownReadyAt: true,
-        });
-        console.log(
-          `Resume persist mode=${mode} runId=${runId} — reusing GeekAPI run + Crawlee queue`,
-        );
-      } else {
-        console.log(`Resume persist mode=local runId=${runId}`);
-      }
+      console.log(
+        `Persist mode=api runId=${runId} seedKey=${seedKey.slice(0, 12)}… via GeekAPI`,
+      );
     },
 
     async markRunning() {
@@ -217,51 +201,77 @@ export function createCrawlPersist(input: {
 
     async markComplete() {
       const completedAtUtc = new Date().toISOString();
-      await flushRejectStatsToLocal();
-      if (client) {
-        const markdownReady =
-          resumeCountsVerified && pagesSaved > 0 && pagesWithoutMarkdown === 0;
-        await client.patchRun(runId, {
+      const markdownReady = pagesSaved > 0 && pagesWithoutMarkdown === 0;
+      await coordinator.run(() =>
+        client.patchRun(runId, {
           status: 'complete',
           completedAtUtc,
           markdownReadyAt: markdownReady ? completedAtUtc : undefined,
           clearMarkdownReadyAt: !markdownReady,
-          hostProgressJson: JSON.stringify([
-            rejectStatsHostProgressEntry(
-              rejectCounters,
-              pagesSaved,
-              rejectSamples.snapshot(),
-              dedup.counters,
-            ),
-          ]),
-        });
-      }
+          hostProgressJson: hostProgressJson(),
+        }),
+      );
       await localMeta.markComplete(runId);
     },
 
-    async markFailed(errorSummary: string) {
+    async markCancelled(reason: string) {
+      const bounded = reason.slice(0, 500);
       const completedAtUtc = new Date().toISOString();
-      await flushRejectStatsToLocal();
-      if (client) {
-        await client.patchRun(runId, {
-          status: 'failed',
-          errorSummary,
-          completedAtUtc,
-          hostProgressJson: JSON.stringify([
-            rejectStatsHostProgressEntry(
-              rejectCounters,
-              pagesSaved,
-              rejectSamples.snapshot(),
-              dedup.counters,
-            ),
-          ]),
-        });
+      try {
+        await coordinator.run(() =>
+          client.patchRun(runId, {
+            status: 'cancelled',
+            errorSummary: bounded,
+            completedAtUtc,
+            clearMarkdownReadyAt: true,
+            hostProgressJson: hostProgressJson(),
+          }),
+        );
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err);
+        console.error(
+          JSON.stringify({
+            code: 'STATUS_PATCH_FAILED',
+            runId,
+            message: detail.slice(0, 500),
+            rootError: bounded,
+          }),
+        );
       }
-      await localMeta.markFailed(runId, errorSummary);
+    },
+
+    async markFailed(errorSummary: string) {
+      const bounded = errorSummary.slice(0, 500);
+      const completedAtUtc = new Date().toISOString();
+      try {
+        await coordinator.run(() =>
+          client.patchRun(runId, {
+            status: 'failed',
+            errorSummary: bounded,
+            completedAtUtc,
+            hostProgressJson: hostProgressJson(),
+          }),
+        );
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err);
+        console.error(
+          JSON.stringify({
+            code: 'STATUS_PATCH_FAILED',
+            runId,
+            message: detail.slice(0, 500),
+            rootError: bounded,
+          }),
+        );
+      }
     },
 
     throwIfPersistenceFailed() {
-      if (persistenceFailure) throw persistenceFailure;
+      const root = coordinator.rootFailure();
+      if (root) throw root;
+    },
+
+    rootPersistenceError() {
+      return coordinator.rootFailure();
     },
 
     noteReject(reason, url, detail) {
@@ -269,7 +279,6 @@ export function createCrawlPersist(input: {
     },
 
     async savePage(page) {
-      let pageId: string = randomUUID();
       const finalUrl = page.finalUrl || page.url;
       const rejectReason = !page.robotsAllowed
         ? 'robots_disallowed'
@@ -348,10 +357,10 @@ export function createCrawlPersist(input: {
 
       const origin = originOf(finalUrl);
 
-      if (client) {
-        let created;
-        try {
-          created = await client.createPagesBatch(runId, [
+      let pageId: string;
+      try {
+        const created = await coordinator.run(() =>
+          client.createPagesBatch(runId, [
             {
               origin,
               url: page.url,
@@ -364,63 +373,22 @@ export function createCrawlPersist(input: {
               excerpt: page.excerpt ?? null,
               failureReason: page.failureReason ?? null,
             },
-          ]);
-        } catch (error) {
-          rememberPersistenceFailure(`page persistence ${finalUrl}`, error);
-          dedup.release({
-            urlKey: page.dedup?.urlKey,
-            htmlHash: page.dedup?.htmlHash,
-            contentHash: contentCheck.contentHash,
-          });
-          return null;
-        }
-        if (!created[0]?.pageId) {
-          rememberPersistenceFailure(
-            `page persistence ${finalUrl}`,
-            'GeekAPI rejected page persistence',
-          );
-          dedup.release({
-            urlKey: page.dedup?.urlKey,
-            htmlHash: page.dedup?.htmlHash,
-            contentHash: contentCheck.contentHash,
-          });
-          return null;
-        }
-        pageId = created[0].pageId;
+          ]),
+        );
+        pageId = created[0]!.pageId;
+      } catch (error) {
+        dedup.release({
+          urlKey: page.dedup?.urlKey,
+          htmlHash: page.dedup?.htmlHash,
+          contentHash: contentCheck.contentHash,
+        });
+        throw isPersistenceError(error)
+          ? error
+          : new PersistenceError(`page persistence ${finalUrl}`, { cause: error });
       }
 
-      if (mode !== 'api') {
-        let bodyKey = '';
-        let markdownBodyKey: string | undefined;
-        if (page.html) {
-          bodyKey = await rawBodyStore.put(runId, page.url, page.html);
-        }
-        if (page.markdown) {
-          markdownBodyKey = await rawBodyStore.putMarkdown(
-            runId,
-            page.url,
-            page.markdown,
-          );
-        }
-        const metaPage: CrawlPageMeta = {
-          url: page.url,
-          finalUrl: page.finalUrl,
-          statusCode: page.statusCode,
-          bodyKey,
-          markdownBodyKey,
-          title: page.title ?? undefined,
-          fetchMode: page.fetchMode,
-          robotsAllowed: page.robotsAllowed,
-          crawledAtUtc: new Date().toISOString(),
-          failureReason: page.failureReason,
-          canonicalUrl: page.dedup?.canonicalKey ?? undefined,
-        };
-        await localMeta.insertPage(runId, metaPage);
-      } else {
-        await localMeta.recordAcceptedPage(runId, true);
-      }
+      await localMeta.recordAcceptedPage(runId, true);
 
-      // Save-before-append: API/local row first, then ledger.
       await dedup.commitAccepted({
         v: 1,
         pageId,
@@ -455,27 +423,18 @@ export function createCrawlPersist(input: {
 
     async saveLinks(pageId, links) {
       if (links.length === 0) return;
-      if (client) {
-        try {
-          await client.createLinksBatch(
-            runId,
-            links.map((l) => ({
-              pageId,
-              fromUrl: l.fromUrl,
-              linkUrl: l.linkUrl,
-              isSameOrigin: l.isSameOrigin,
-            })),
-          );
-        } catch (error) {
-          rememberPersistenceFailure(`link persistence pageId=${pageId}`, error);
-          return;
-        }
-      }
-      if (mode !== 'api') {
-        await localMeta.insertLinks(runId, links);
-      } else {
-        await localMeta.recordAcceptedLinks(runId, links.length);
-      }
+      await coordinator.run(() =>
+        client.createLinksBatch(
+          runId,
+          links.map((l) => ({
+            pageId,
+            fromUrl: l.fromUrl,
+            linkUrl: l.linkUrl,
+            isSameOrigin: l.isSameOrigin,
+          })),
+        ),
+      );
+      await localMeta.recordAcceptedLinks(runId, links.length);
       linksSaved += links.length;
     },
 
@@ -498,4 +457,5 @@ export function createCrawlPersist(input: {
   };
 }
 
-export { isGeekApiConfigured };
+export { isGeekApiConfigured } from './geek-api-client.js';
+export { PersistenceError, ConfigError, RobotsBlockedError, isPersistenceError } from './errors.js';

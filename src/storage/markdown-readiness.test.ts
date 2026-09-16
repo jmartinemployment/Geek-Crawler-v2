@@ -5,8 +5,9 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { createCrawlPersist } from './persist.js';
+import { PersistenceError } from './errors.js';
 
-test('API persistence marks completed Markdown runs ready and clears on resume', async () => {
+test('API persistence marks completed Markdown runs ready', async () => {
   const patches: Array<Record<string, unknown>> = [];
   const runId = '11111111-2222-4333-8444-555555555555';
   const server = createServer(async (req, res) => {
@@ -93,14 +94,10 @@ test('API persistence marks completed Markdown runs ready and clears on resume',
       fetchMode: 'cheerio',
     });
     await persist.markComplete();
-    await persist.beginResume();
-    await persist.markComplete();
 
     assert.equal(patches[0]?.status, 'complete');
     assert.equal(patches[0]?.markdownReadyAt, patches[0]?.completedAtUtc);
     assert.equal(patches[0]?.clearMarkdownReadyAt, false);
-    assert.equal(patches[1]?.clearMarkdownReadyAt, true);
-    assert.equal(patches[2]?.markdownReadyAt, patches[2]?.completedAtUtc);
     const stats = await persist.stats();
     assert.equal(stats.pagesSaved, 1);
     assert.equal(stats.pagesRejectedRequestFailed, 1);
@@ -119,7 +116,7 @@ test('API persistence marks completed Markdown runs ready and clears on resume',
   }
 });
 
-test('terminal link persistence failure is fatal without creating a failure page', async () => {
+test('terminal link persistence failure throws once', async () => {
   const runId = '22222222-3333-4444-8555-666666666666';
   let pageWrites = 0;
   let linkAttempts = 0;
@@ -172,18 +169,21 @@ test('terminal link persistence failure is fatal without creating a failure page
       fetchMode: 'cheerio',
     });
     assert.ok(saved);
-    await persist.saveLinks(saved.pageId, [
-      {
-        fromUrl: 'https://example.com',
-        linkUrl: 'https://example.com/next',
-        isSameOrigin: true,
-      },
-    ]);
+    await assert.rejects(
+      () =>
+        persist.saveLinks(saved.pageId, [
+          {
+            fromUrl: 'https://example.com',
+            linkUrl: 'https://example.com/next',
+            isSameOrigin: true,
+          },
+        ]),
+      (err: unknown) => err instanceof PersistenceError,
+    );
 
-    assert.throws(() => persist.throwIfPersistenceFailed(), /link persistence/);
+    assert.throws(() => persist.throwIfPersistenceFailed(), PersistenceError);
     assert.equal(pageWrites, 1);
-    assert.equal(linkAttempts, 3);
-    assert.equal((await persist.stats()).pagesRejectedRequestFailed, 1);
+    assert.equal(linkAttempts, 1);
   } finally {
     if (oldEnv.url === undefined) delete process.env.GEEK_API_URL;
     else process.env.GEEK_API_URL = oldEnv.url;

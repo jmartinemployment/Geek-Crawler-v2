@@ -1,0 +1,8 @@
+---
+description: "Every required operation has one selected implementation, one request attempt, one response schema, and one terminal result: success or failure. A failure stops the affected run and is never redirected, replayed, retried, substituted, locally persisted, or converted into partial/degraded success."
+alwaysApply: true
+---
+
+# Every Required Operation Has
+
+Every required operation has one selected implementation, one request attempt, one response schema, and one terminal result: success or failure. A failure stops the affected run and is never redirected, replayed, retried, substituted, locally persisted, or converted into partial/degraded success.

@@ -1,0 +1,68 @@
+---
+description: "---
+description: Prohibit polling and require event-driven, push-based, or explicitly user-triggered updates.
+globs:
+  - \"**/*\"
+alwaysApply: true
+---
+
+# No Polling
+
+Do not implement polling, periodic refresh loops, retry loops, interval-based status checks, or repeated requests that exist only to discover whether state has changed.
+
+For any required operation, make one request and handle its terminal result. Do not schedule another request after a timeout, error, empty result, or unchanged result.
+
+Use one of these designs instead:
+
+- Event-driven delivery: webhooks, callbacks, queues, streams, subscriptions, or server-sent events.
+- A request that remains open until the server has a terminal result, subject to its normal timeout.
+- An explicit user action that starts a new request.
+
+Disallowed examples include:
+
+- `setInterval`, recurring `setTimeout`, or a loop that periodically fetches status.
+- Repeated `GET` requests for a job, crawl, deployment, upload, or report status.
+- Exponential backoff, \"try again later,\" or retry-after-delay behavior.
+- Background refresh that silently replaces stale data with a later response.
+
+Allowed exceptions are limited to platform-managed event subscriptions and UI rendering primitives that do not issue network requests. A loading indicator may wait for an already-started request, but must not initiate periodic network activity.
+
+If an upstream API exposes only a polling interface, fail the integration at its boundary with a clear error. Do not emulate an event-driven interface by polling.
+
+Tests must prove that a failed, timed-out, or unchanged operation does not cause a second outbound request without a new explicit user action."
+alwaysApply: true
+---
+
+# Description Prohibit Polling
+
+---
+description: Prohibit polling and require event-driven, push-based, or explicitly user-triggered updates.
+globs:
+  - "**/*"
+alwaysApply: true
+---
+
+# No Polling
+
+Do not implement polling, periodic refresh loops, retry loops, interval-based status checks, or repeated requests that exist only to discover whether state has changed.
+
+For any required operation, make one request and handle its terminal result. Do not schedule another request after a timeout, error, empty result, or unchanged result.
+
+Use one of these designs instead:
+
+- Event-driven delivery: webhooks, callbacks, queues, streams, subscriptions, or server-sent events.
+- A request that remains open until the server has a terminal result, subject to its normal timeout.
+- An explicit user action that starts a new request.
+
+Disallowed examples include:
+
+- `setInterval`, recurring `setTimeout`, or a loop that periodically fetches status.
+- Repeated `GET` requests for a job, crawl, deployment, upload, or report status.
+- Exponential backoff, "try again later," or retry-after-delay behavior.
+- Background refresh that silently replaces stale data with a later response.
+
+Allowed exceptions are limited to platform-managed event subscriptions and UI rendering primitives that do not issue network requests. A loading indicator may wait for an already-started request, but must not initiate periodic network activity.
+
+If an upstream API exposes only a polling interface, fail the integration at its boundary with a clear error. Do not emulate an event-driven interface by polling.
+
+Tests must prove that a failed, timed-out, or unchanged operation does not cause a second outbound request without a new explicit user action.

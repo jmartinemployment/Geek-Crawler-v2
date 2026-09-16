@@ -13,6 +13,7 @@
     "test": "tsx --test src/**/*.test.ts",
     "test:integration": "tsx --test tests/**/*.test.ts",
     "test:all": "npm test && npm run test:integration",
+    "check:fail-closed": "node scripts/check-fail-closed.mjs",
     "web:dev": "npm run dev --prefix web",
     "web:build": "npm run build --prefix web"
   },

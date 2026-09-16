@@ -1,7 +1,9 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { prepareCrawl, prepareResumeCrawl, findRunIdBySeedUrl, startCrawl } from '../crawl/orchestrator.js';
+import { prepareCrawl, startCrawl } from '../crawl/orchestrator.js';
+import { createGeekApiClient, requireGeekApiEnv } from '../storage/geek-api-client.js';
+import { requestCancel } from '../crawl/cancel-registry.js';
 import { createJsonRunStore } from '../storage/runs.js';
 
 type Json = Record<string, unknown>;
@@ -19,17 +21,8 @@ function send(res: ServerResponse, status: number, body: Json | unknown) {
   res.end(JSON.stringify(body));
 }
 
-const cancellations = new Set<string>();
-
-export function isCancelRequested(runId: string): boolean {
-  return cancellations.has(runId);
-}
-
-export function clearCancelRequested(runId: string): void {
-  cancellations.delete(runId);
-}
-
 export function createCrawlApiServer(options?: { dataDir?: string; port?: number }) {
+  requireGeekApiEnv();
   const dataDir = path.resolve(options?.dataDir ?? process.env.DATA_DIR ?? './data');
   const port = options?.port ?? Number(process.env.PORT ?? 8787);
   const meta = createJsonRunStore(dataDir);
@@ -133,191 +126,58 @@ export function createCrawlApiServer(options?: { dataDir?: string; port?: number
         return send(res, 200, run as unknown as Json);
       }
 
-      const resumeByUrlMatch = pathname === '/crawls/resume-by-url';
-      if (req.method === 'POST' && resumeByUrlMatch) {
-        const raw = await readBody(req);
-        const body = raw ? (JSON.parse(raw) as Json) : {};
-        const url = String(body.url ?? body.seed ?? '').trim();
-        if (!url) {
-          return send(res, 400, { error: 'url (seed) required' });
-        }
-        const found = await findRunIdBySeedUrl({ url, dataDir });
-        if (!found) {
-          return send(res, 404, {
-            error: `no local run found for seed URL: ${url}`,
-          });
-        }
-        const runId = found.run.runId;
-        if (inFlight.has(runId)) {
-          return send(res, 409, {
-            error: 'run already in flight on this serve process',
-            runId,
-          });
-        }
-        const maxRequestsPerCrawl = body.maxRequestsPerCrawl
-          ? Number(body.maxRequestsPerCrawl)
-          : undefined;
-        const maxConcurrency = body.maxConcurrency
-          ? Number(body.maxConcurrency)
-          : undefined;
-
-        clearCancelRequested(runId);
-        const prepared = await prepareResumeCrawl({
-          runId,
-          dataDir,
-          maxRequestsPerCrawl,
-          maxConcurrency,
-        });
-
-        const work = prepared.run().catch((err) => {
-          console.error(`Resume crawl ${prepared.runId} failed:`, err);
-          return err;
-        });
-        inFlight.set(prepared.runId, work);
-        void work.finally(() => inFlight.delete(prepared.runId));
-
-        return send(res, 202, {
-          ok: true,
-          runId: prepared.runId,
-          seedUrl: url,
-          persistMode: prepared.persistMode,
-          dataDir: prepared.dataDir,
-          status: 'running',
-          resumed: true,
-          multiSeed: found.multiSeed,
-          note: found.multiSeed
-            ? 'Matched a legacy multi-seed run; resume continues the shared Crawlee queue.'
-            : undefined,
-        });
-      }
-
-      /** Re-attach every local stub still marked running (e.g. after serve restart). */
-      if (req.method === 'POST' && pathname === '/crawls/resume-running') {
-        const raw = await readBody(req);
-        const body = raw ? (JSON.parse(raw) as Json) : {};
-        const maxConcurrencyRaw = body.maxConcurrency
-          ? Number(body.maxConcurrency)
-          : 1;
-        const maxConcurrency = Number.isFinite(maxConcurrencyRaw)
-          ? Math.max(1, Math.min(32, Math.floor(maxConcurrencyRaw)))
-          : 1;
-        const maxRequestsPerCrawl = body.maxRequestsPerCrawl
-          ? Number(body.maxRequestsPerCrawl)
-          : undefined;
-
-        const runs = await meta.listRuns();
-        const candidates = runs.filter((r) => r.status === 'running');
-        const resumed: { runId: string; seedUrl: string }[] = [];
-        const skipped: { runId: string; seedUrl: string; reason: string }[] = [];
-        const failed: { runId: string; seedUrl: string; error: string }[] = [];
-
-        for (const run of candidates) {
-          const seedUrl = (run.seeds ?? [])[0] ?? '';
-          if (!seedUrl) {
-            skipped.push({
-              runId: run.runId,
-              seedUrl: '',
-              reason: 'no seed URL on stub',
-            });
-            continue;
-          }
-          if (inFlight.has(run.runId)) {
-            skipped.push({
-              runId: run.runId,
-              seedUrl,
-              reason: 'already in flight on this serve process',
-            });
-            continue;
-          }
-          try {
-            clearCancelRequested(run.runId);
-            const prepared = await prepareResumeCrawl({
-              runId: run.runId,
-              dataDir,
-              maxRequestsPerCrawl:
-                Number.isFinite(maxRequestsPerCrawl) && (maxRequestsPerCrawl as number) > 0
-                  ? maxRequestsPerCrawl
-                  : undefined,
-              maxConcurrency,
-            });
-            const work = prepared.run().catch((err) => {
-              console.error(`Resume crawl ${prepared.runId} failed:`, err);
-              return err;
-            });
-            inFlight.set(prepared.runId, work);
-            void work.finally(() => inFlight.delete(prepared.runId));
-            resumed.push({ runId: prepared.runId, seedUrl });
-          } catch (err) {
-            failed.push({
-              runId: run.runId,
-              seedUrl,
-              error: err instanceof Error ? err.message : String(err),
-            });
-          }
-        }
-
-        return send(res, 200, {
-          ok: true,
-          maxConcurrency,
-          candidateCount: candidates.length,
-          resumed,
-          skipped,
-          failed,
-        });
-      }
-
-      const resumeMatch = pathname.match(/^\/crawls\/([^/]+)\/resume$/);
-      if (req.method === 'POST' && resumeMatch) {
-        const runId = decodeURIComponent(resumeMatch[1]!);
-        if (inFlight.has(runId)) {
-          return send(res, 409, {
-            error: 'run already in flight on this serve process',
-            runId,
-          });
-        }
-        const raw = await readBody(req);
-        const body = raw ? (JSON.parse(raw) as Json) : {};
-        const maxRequestsPerCrawl = body.maxRequestsPerCrawl
-          ? Number(body.maxRequestsPerCrawl)
-          : undefined;
-        const maxConcurrency = body.maxConcurrency
-          ? Number(body.maxConcurrency)
-          : undefined;
-
-        clearCancelRequested(runId);
-        const prepared = await prepareResumeCrawl({
-          runId,
-          dataDir,
-          maxRequestsPerCrawl,
-          maxConcurrency,
-        });
-
-        const work = prepared.run().catch((err) => {
-          console.error(`Resume crawl ${prepared.runId} failed:`, err);
-          return err;
-        });
-        inFlight.set(prepared.runId, work);
-        void work.finally(() => inFlight.delete(prepared.runId));
-
-        return send(res, 202, {
-          ok: true,
-          runId: prepared.runId,
-          persistMode: prepared.persistMode,
-          dataDir: prepared.dataDir,
-          status: 'running',
-          resumed: true,
+      if (
+        req.method === 'POST' &&
+        (pathname === '/crawls/resume-by-url' ||
+          pathname === '/crawls/resume-running' ||
+          /^\/crawls\/[^/]+\/resume$/.test(pathname))
+      ) {
+        return send(res, 409, {
+          error:
+            'Resume is forbidden under fail-closed policy — start a new crawl run instead',
+          code: 'RESUME_FORBIDDEN',
         });
       }
 
       const cancelMatch = pathname.match(/^\/crawls\/([^/]+)\/cancel$/);
       if (req.method === 'POST' && cancelMatch) {
         const runId = decodeURIComponent(cancelMatch[1]!);
-        cancellations.add(runId);
+        const live = inFlight.has(runId);
+
+        // A live run stops itself and writes its own terminal status, keeping
+        // one writer per run. An orphan has no writer, so the API is it.
+        if (live) {
+          requestCancel(runId);
+          return send(res, 202, { ok: true, runId, cancelling: true, orphan: false });
+        }
+
+        const snapshot = await createGeekApiClient().patchRun(runId, {
+          status: 'cancelled',
+          errorSummary: 'Cancelled by operator (no live crawl process)',
+          completedAtUtc: new Date().toISOString(),
+          clearMarkdownReadyAt: true,
+        });
         return send(res, 200, {
           ok: true,
           runId,
-          note: 'Cancel flag set; in-flight Crawlee stop hooks arrive in a later polish.',
+          cancelling: false,
+          orphan: true,
+          status: snapshot.status,
         });
+      }
+
+      const deleteMatch = pathname.match(/^\/crawls\/([^/]+)$/);
+      if (req.method === 'DELETE' && deleteMatch) {
+        const runId = decodeURIComponent(deleteMatch[1]!);
+        if (inFlight.has(runId)) {
+          return send(res, 409, {
+            error: 'Run is in flight — cancel it before deleting',
+            code: 'RUN_IN_FLIGHT',
+            runId,
+          });
+        }
+        const result = await createGeekApiClient().deleteRun(runId);
+        return send(res, 200, { ok: true, runId, ...result });
       }
 
       const pagesMatch = pathname.match(/^\/crawls\/([^/]+)\/pages$/);
@@ -352,9 +212,7 @@ export function createCrawlApiServer(options?: { dataDir?: string; port?: number
           console.log(`  GET  /health`);
           console.log(`  GET  /crawls`);
           console.log(`  POST /crawls  { seed|seeds[1], crawlType?, maxRequestsPerCrawl?, maxConcurrency? } → 202`);
-          console.log(`  POST /crawls/resume-by-url  { url } → 202 continue queue for that seed`);
-          console.log(`  POST /crawls/resume-running  → 200 re-attach all local status=running stubs`);
-          console.log(`  POST /crawls/:runId/resume  → 202 continue .crawlee queue`);
+          console.log(`  POST /crawls/resume-*  → 409 RESUME_FORBIDDEN (start a new run)`);
           console.log(`  GET  /crawls/:runId`);
           console.log(`  GET  /crawls/:runId/pages`);
           console.log(`  POST /crawls/:runId/cancel`);

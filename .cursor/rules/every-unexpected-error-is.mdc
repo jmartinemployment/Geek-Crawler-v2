@@ -1,0 +1,8 @@
+---
+description: Every unexpected error is terminal, observable, and owned. A failed run is evidence of something to correct—not a cue to invent a backup path, return partial success, or retry until it looks successful.
+alwaysApply: true
+---
+
+# Every Unexpected Error Is
+
+Every unexpected error is terminal, observable, and owned. A failed run is evidence of something to correct—not a cue to invent a backup path, return partial success, or retry until it looks successful.
