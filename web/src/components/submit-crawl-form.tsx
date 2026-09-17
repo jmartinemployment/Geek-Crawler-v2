@@ -3,7 +3,9 @@
 import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
 
-type CrawlType = "partner" | "competitors" | "local";
+/** Mirrors src/crawl/types.ts. Keep in sync — the crawler rejects unknown values. */
+const CRAWL_TYPES = ["partner", "competitors", "local", "project-site"] as const;
+type CrawlType = (typeof CRAWL_TYPES)[number];
 
 export function SubmitCrawlForm() {
   const router = useRouter();
@@ -70,9 +72,11 @@ export function SubmitCrawlForm() {
           value={crawlType}
           onChange={(e) => setCrawlType(e.target.value as CrawlType)}
         >
-          <option value="partner">partner</option>
-          <option value="competitors">competitors</option>
-          <option value="local">local</option>
+          {CRAWL_TYPES.map((t) => (
+            <option key={t} value={t}>
+              {t}
+            </option>
+          ))}
         </select>
       </label>
       <label className="field">

@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { prepareCrawl, startCrawl } from '../crawl/orchestrator.js';
+import { CRAWL_TYPE_VALUES } from '../crawl/types.js';
 import { createGeekApiClient, requireGeekApiEnv } from '../storage/geek-api-client.js';
 import { requestCancel } from '../crawl/cancel-registry.js';
 import { createJsonRunStore } from '../storage/runs.js';
@@ -211,7 +212,10 @@ export function createCrawlApiServer(options?: { dataDir?: string; port?: number
           console.log(`geek-crawler-v2 API on http://127.0.0.1:${port}`);
           console.log(`  GET  /health`);
           console.log(`  GET  /crawls`);
-          console.log(`  POST /crawls  { seed|seeds[1], crawlType?, maxRequestsPerCrawl?, maxConcurrency? } → 202`);
+          console.log(`  POST /crawls  { seed|seeds[1], crawlType?, maxRequestsPerCrawl?, maxConcurrency? } → 202`
+          );
+          console.log(
+            `        crawlType: ${CRAWL_TYPE_VALUES.join(' | ')}`);
           console.log(`  POST /crawls/resume-*  → 409 RESUME_FORBIDDEN (start a new run)`);
           console.log(`  GET  /crawls/:runId`);
           console.log(`  GET  /crawls/:runId/pages`);
