@@ -164,17 +164,36 @@ async function executeCheerioCrawl(
     return req;
   };
 
+  let depthSuppressed = 0;
+
+  /**
+   * `parentDepth` is the depth of the page whose links these are; seeds are depth 0. Enqueue is
+   * refused once the children would exceed the profile's cap, so a capped crawl stops widening
+   * instead of silently running to the page budget.
+   */
   const enqueueFiltered = async (
     enqueueLinks: (opts: Record<string, unknown>) => Promise<unknown>,
     urls: string[],
+    parentDepth: number,
   ) => {
     if (persist.rootPersistenceError()) return;
+
+    const childDepth = parentDepth + 1;
+    if (profile.maxDepth !== null && childDepth > profile.maxDepth) {
+      depthSuppressed += urls.length;
+      return;
+    }
+
     const toEnqueue = filterEnqueueUrls(urls, siteMap, enqueueOpts);
     if (toEnqueue.length === 0) return;
     await enqueueLinks({
       urls: toEnqueue,
       strategy: 'all',
-      transformRequestFunction: applyUniqueKey,
+      transformRequestFunction: (req: { url: string; uniqueKey?: string; userData?: unknown }) => {
+        const out = applyUniqueKey(req);
+        out.userData = { ...(out.userData as object | undefined), depth: childDepth };
+        return out;
+      },
     });
   };
 
@@ -214,6 +233,7 @@ async function executeCheerioCrawl(
         },
       ],
       async requestHandler({ request, body, $, response, enqueueLinks }) {
+        const currentDepth = Number((request.userData as { depth?: number } | undefined)?.depth ?? 0);
         if (persist.rootPersistenceError()) {
           request.noRetry = true;
           await crawler.stop();
@@ -284,7 +304,7 @@ async function executeCheerioCrawl(
             }
             persist.noteReject('extract_empty', finalUrl, viability.reason);
             const links = extractHrefs($, finalUrl, scopeUrl);
-            await enqueueFiltered(enqueueLinks as never, sameOriginUrls(links));
+            await enqueueFiltered(enqueueLinks as never, sameOriginUrls(links), currentDepth);
             return;
           }
 
@@ -293,7 +313,7 @@ async function executeCheerioCrawl(
           const htmlWait = await dedup.awaitInFlight(htmlReserve, HANDLER_TIMEOUT_MS);
           if (htmlWait.skip) {
             const links = extractHrefs($, finalUrl, scopeUrl);
-            await enqueueFiltered(enqueueLinks as never, sameOriginUrls(links));
+            await enqueueFiltered(enqueueLinks as never, sameOriginUrls(links), currentDepth);
             await dedup.recordSkip({
               v: 1,
               at: new Date().toISOString(),
@@ -321,7 +341,7 @@ async function executeCheerioCrawl(
           });
           if (extractReject === 'extract_empty') {
             const links = extractHrefs($, finalUrl, scopeUrl);
-            await enqueueFiltered(enqueueLinks as never, sameOriginUrls(links));
+            await enqueueFiltered(enqueueLinks as never, sameOriginUrls(links), currentDepth);
             persist.noteReject('extract_empty', finalUrl);
             return;
           }
@@ -330,7 +350,7 @@ async function executeCheerioCrawl(
           const canonSkip = dedup.checkCanonicalAlias(urlKey, canonicalKey);
           if (canonSkip) {
             const links = extractHrefs($, finalUrl, scopeUrl);
-            await enqueueFiltered(enqueueLinks as never, sameOriginUrls(links));
+            await enqueueFiltered(enqueueLinks as never, sameOriginUrls(links), currentDepth);
             await dedup.recordSkip({
               v: 1,
               at: new Date().toISOString(),
@@ -378,7 +398,7 @@ async function executeCheerioCrawl(
               })),
             );
 
-            await enqueueFiltered(enqueueLinks as never, sameOriginUrls(links));
+            await enqueueFiltered(enqueueLinks as never, sameOriginUrls(links), currentDepth);
           } catch (err) {
             if (isPersistenceError(err)) {
               request.noRetry = true;
