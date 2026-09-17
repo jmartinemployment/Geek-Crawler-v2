@@ -24,7 +24,8 @@ import { normalizeSeeds } from '../storage/seed-key.js';
 import { htmlHash } from './dedup.js';
 import { clearCancel, isCancelRequested } from './cancel-registry.js';
 import { MAX_PAGES_PER_SITE, clampToSiteCap } from './crawl-limits.js';
-import { createSectionQuota, resolveSectionQuotas } from './section-quota.js';
+import { createSectionQuota } from './section-quota.js';
+import { crawlProfileFor, sectionQuotasFor } from './crawl-profile.js';
 
 export type RunCrawlInput = {
   crawlType: CrawlType;
@@ -107,7 +108,15 @@ async function executeCheerioCrawl(
   const scopeUrl = seeds[0]!;
   const dedup = persist.dedup;
   let cancelled = false;
-  const quota = createSectionQuota(resolveSectionQuotas());
+  // Scope policy is per crawl type. project-site disables section quotas: they exist to stop a
+  // third party's page farm eating the budget, and on the operator's own site they would starve
+  // the very directories the heading hierarchy is built from.
+  const profile = crawlProfileFor(input.crawlType);
+  const quotaLimits = sectionQuotasFor(input.crawlType);
+  const quota = quotaLimits === null ? undefined : createSectionQuota(quotaLimits);
+  if (quotaLimits === null) {
+    log.info(`Section quotas disabled for crawlType=${input.crawlType}`);
+  }
   const enqueueOpts = {
     aliases: dedup.aliases,
     counters: dedup.counters,
@@ -137,8 +146,10 @@ async function executeCheerioCrawl(
     maxRequestsPerCrawl = clampToSiteCap(Math.max(siteMap.urls.size, seeds.length));
     log.info(`Request budget from sitemap: maxRequestsPerCrawl=${maxRequestsPerCrawl}`);
   } else {
-    maxRequestsPerCrawl = MAX_PAGES_PER_SITE;
-    log.info(`Request budget: per-site cap maxRequestsPerCrawl=${maxRequestsPerCrawl}`);
+    maxRequestsPerCrawl = clampToSiteCap(profile.defaultMaxPages);
+    log.info(
+      `Request budget from ${input.crawlType} profile: maxRequestsPerCrawl=${maxRequestsPerCrawl}`,
+    );
   }
 
   const config = new Configuration({
