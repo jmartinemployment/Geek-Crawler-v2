@@ -37,16 +37,16 @@ describe('challenge fixture', () => {
 });
 
 describe('extract-empty fixture', () => {
-  it('classifies empty extract after Readability', () => {
+  it('classifies empty extract', () => {
     const clean = extractCleanContent(EMPTY_ARTICLE, 'https://example.com/wp-login.php');
     const reason = classifyReject({
       finalUrl: 'https://example.com/wp-login.php',
-      markdown: clean.markdown,
+      text: clean.text,
     });
     assert.equal(
       reason,
       'extract_empty',
-      `md=${JSON.stringify(clean.markdown)?.slice(0, 120)}`,
+      `md=${JSON.stringify(clean.text)?.slice(0, 120)}`,
     );
   });
 });

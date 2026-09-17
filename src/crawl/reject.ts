@@ -12,15 +12,20 @@ export type RejectReason =
   | 'robots_disallowed'
   | 'request_failed';
 
-const MIN_MARKDOWN_CHARS = Number(process.env.EXTRACT_MIN_MARKDOWN_CHARS ?? 40);
+const MIN_TEXT_CHARS = Number(process.env.EXTRACT_MIN_TEXT_CHARS ?? 40);
 const SAMPLE_CAP = 5;
 
 export type RejectClassifyInput = {
   finalUrl: string;
   /** From isViableHtml when HTML was fetched. */
   viabilityReason?: string;
-  /** Set after extractCleanContent; omit to skip extract_empty check. */
-  markdown?: string | null;
+  /**
+   * Prose only, from extractCleanContent's `text`; omit to skip the
+   * extract_empty check. Deliberately not the emitted HTML: measuring the
+   * fragment would count tag bytes as content, and a page carrying nothing but
+   * markup would clear the floor with no prose in it at all.
+   */
+  text?: string | null;
 };
 
 /** Return reject reason, or null if the page may be persisted as corpus. */
@@ -31,17 +36,17 @@ export function classifyReject(input: RejectClassifyInput): RejectReason | null 
   if (input.viabilityReason === 'challenge_page') {
     return 'challenge_page';
   }
-  if (input.markdown !== undefined && isExtractEmptyMarkdown(input.markdown)) {
+  if (input.text !== undefined && isExtractEmptyText(input.text)) {
     return 'extract_empty';
   }
   return null;
 }
 
-export function isExtractEmptyMarkdown(markdown: string | null | undefined): boolean {
-  if (markdown == null) return true;
-  const trimmed = markdown.trim();
+export function isExtractEmptyText(text: string | null | undefined): boolean {
+  if (text == null) return true;
+  const trimmed = text.trim();
   if (!trimmed) return true;
-  return trimmed.length < MIN_MARKDOWN_CHARS;
+  return trimmed.length < MIN_TEXT_CHARS;
 }
 
 export type RejectCounters = {

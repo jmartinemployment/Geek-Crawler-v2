@@ -54,7 +54,7 @@ export type DedupLedgerAccepted = {
   htmlHash?: string;
   contentHash?: string;
   simhash?: string;
-  markdownLength?: number;
+  contentLength?: number;
 };
 
 export type DedupLedgerSkip = {
@@ -71,12 +71,12 @@ export type DedupLedgerSkip = {
   near?: {
     keptUrl: string;
     keptContentHash: string;
-    keptMarkdownLength: number;
+    keptContentLength: number;
     keptTitle?: string | null;
     keptCanonicalUrl?: string | null;
     keptExcerpt: string;
     droppedContentHash: string;
-    droppedMarkdownLength: number;
+    droppedContentLength: number;
     droppedTitle?: string | null;
     droppedExcerpt: string;
     hamming: number;
@@ -145,7 +145,7 @@ export type PageDedupTracker = {
     declaredCanonicalKey: string | null,
   ): HandlerSkipReason | null;
   checkContentAndNear(input: {
-    markdown: string;
+    text: string;
     url: string;
     title?: string | null;
     canonicalUrl?: string | null;
@@ -329,7 +329,7 @@ export function createPageDedupTracker(input: {
             contentHash: row.contentHash,
             pageId: row.pageId,
             url: row.finalUrlKey,
-            markdownLength: row.markdownLength ?? 0,
+            contentLength: row.contentLength ?? 0,
             excerpt: '',
           });
         }
@@ -466,7 +466,7 @@ export function createPageDedupTracker(input: {
     },
 
     async checkContentAndNear(meta) {
-      const md = meta.markdown;
+      const md = meta.text;
       const ch = contentHash(md);
       const collapsedLen = md.replace(/\s+/g, ' ').trim().length;
       const sim =
@@ -484,12 +484,12 @@ export function createPageDedupTracker(input: {
           const nearMeta: DedupLedgerSkip['near'] = {
             keptUrl: near.entry.url,
             keptContentHash: near.entry.contentHash,
-            keptMarkdownLength: near.entry.markdownLength,
+            keptContentLength: near.entry.contentLength,
             keptTitle: near.entry.title,
             keptCanonicalUrl: near.entry.canonicalUrl,
             keptExcerpt: near.entry.excerpt,
             droppedContentHash: ch,
-            droppedMarkdownLength: md.length,
+            droppedContentLength: md.length,
             droppedTitle: meta.title,
             droppedExcerpt,
             hamming: near.distance,
@@ -521,7 +521,7 @@ export function createPageDedupTracker(input: {
 
     noteContentAccepted(entry) {
       commitOne(contentSlots, entry.contentHash, 'duplicate_content');
-      if (entry.markdownLength >= cfg.minChars) {
+      if (entry.contentLength >= cfg.minChars) {
         simIndex.add(entry);
       }
     },

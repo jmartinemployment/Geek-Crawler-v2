@@ -29,7 +29,7 @@ export type IngestPageInput = {
   statusCode: number;
   robotsAllowed: boolean;
   html?: string | null;
-  markdown?: string | null;
+  contentHtml?: string | null;
   title?: string | null;
   excerpt?: string | null;
   failureReason?: string | null;
@@ -201,8 +201,8 @@ export class GeekApiClient {
       hostProgressJson?: string | null;
       startedAtUtc?: string | null;
       completedAtUtc?: string | null;
-      markdownReadyAt?: string | null;
-      clearMarkdownReadyAt?: boolean;
+      contentReadyAt?: string | null;
+      clearContentReadyAt?: boolean;
       /**
        * Completion report. Sent only on a terminal transition.
        *

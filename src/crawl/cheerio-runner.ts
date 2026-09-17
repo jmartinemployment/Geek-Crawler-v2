@@ -332,12 +332,12 @@ async function executeCheerioCrawl(
           const clean = extractCleanContent(rawHtml, finalUrl);
           if (clean.truncated) {
             log.warning(
-              `markdown truncated at cap [${new Date().toISOString()}]: ${finalUrl}`,
+              `content truncated at cap [${new Date().toISOString()}]: ${finalUrl}`,
             );
           }
           const extractReject = classifyReject({
             finalUrl,
-            markdown: clean.markdown,
+            text: clean.text,
           });
           if (extractReject === 'extract_empty') {
             const links = extractHrefs($, finalUrl, scopeUrl);
@@ -371,7 +371,8 @@ async function executeCheerioCrawl(
               finalUrl,
               statusCode,
               html: rawHtml,
-              markdown: clean.markdown,
+              contentHtml: clean.contentHtml,
+              text: clean.text,
               title: clean.title,
               excerpt: clean.excerpt,
               robotsAllowed: true,

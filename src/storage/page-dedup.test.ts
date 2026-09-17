@@ -123,18 +123,18 @@ describe('PageDedupTracker reservations', () => {
       contentHash: contentHash(md),
       pageId: 'p1',
       url: 'https://n8n.io/a',
-      markdownLength: md.length,
+      contentLength: md.length,
       excerpt: md.slice(0, 40),
     });
     const dup = await t.checkContentAndNear({
-      markdown: md,
+      text: md,
       url: 'https://n8n.io/b',
     });
     assert.equal(dup.skip, true);
     if (dup.skip) assert.equal(dup.reason, 'duplicate_content');
 
     const cased = await t.checkContentAndNear({
-      markdown: md.toLowerCase(),
+      text: md.toLowerCase(),
       url: 'https://n8n.io/c',
     });
     // May be near-dup or accept depending on simhash; must not be exact content hash match

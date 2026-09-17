@@ -173,7 +173,7 @@ export function createCrawlApiServer(options?: { dataDir?: string; port?: number
           status: 'cancelled',
           errorSummary: 'Cancelled by operator (no live crawl process)',
           completedAtUtc: new Date().toISOString(),
-          clearMarkdownReadyAt: true,
+          clearContentReadyAt: true,
         });
         return send(res, 200, {
           ok: true,

@@ -104,7 +104,7 @@ describe('fingerprints', () => {
       contentHash: contentHash(base),
       pageId: '1',
       url: 'https://n8n.io/a',
-      markdownLength: base.length,
+      contentLength: base.length,
       excerpt: base.slice(0, 40),
     });
     const d = hammingHex64(a, near);

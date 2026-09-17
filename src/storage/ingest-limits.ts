@@ -17,7 +17,7 @@ export type PageSizeFields = {
   url?: string | null;
   finalUrl?: string | null;
   html?: string | null;
-  markdown?: string | null;
+  contentHtml?: string | null;
   title?: string | null;
   excerpt?: string | null;
   failureReason?: string | null;
@@ -40,7 +40,7 @@ export function estimatePageDocumentBytes(fields: PageSizeFields): number {
     stringContribution(fields.url) +
     stringContribution(fields.finalUrl) +
     stringContribution(fields.html) +
-    stringContribution(fields.markdown) +
+    stringContribution(fields.contentHtml) +
     stringContribution(fields.title) +
     stringContribution(fields.excerpt) +
     stringContribution(fields.failureReason)

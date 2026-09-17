@@ -10,7 +10,7 @@ import {
   emptyRejectCounters,
   bumpRejectCounter,
   RejectSampleLog,
-  isExtractEmptyMarkdown,
+  isExtractEmptyText,
   rejectStatsHostProgressEntry,
   REJECT_STATS_ORIGIN,
   sanitizeRejectDetail,
@@ -30,13 +30,13 @@ describe('classifyReject', () => {
 
   it('keeps /us/ and bare paths for locale', () => {
     assert.equal(
-      classifyReject({ finalUrl: 'https://example.com/us/docs', markdown: '# Enough markdown content here for corpus' }),
+      classifyReject({ finalUrl: 'https://example.com/us/docs', text: 'Enough prose content here for the corpus to accept it' }),
       null,
     );
     assert.equal(
       classifyReject({
         finalUrl: 'https://example.com/docs',
-        markdown: '# Enough markdown content here for corpus',
+        text: 'Enough prose content here for the corpus to accept it',
       }),
       null,
     );
@@ -47,36 +47,36 @@ describe('classifyReject', () => {
       classifyReject({
         finalUrl: 'https://example.com/',
         viabilityReason: 'challenge_page',
-        markdown: '# ignored',
+        text: '# ignored',
       }),
       'challenge_page',
     );
   });
 
-  it('rejects extract_empty when markdown blank', () => {
+  it('rejects extract_empty when prose blank', () => {
     assert.equal(
-      classifyReject({ finalUrl: 'https://example.com/login', markdown: null }),
+      classifyReject({ finalUrl: 'https://example.com/login', text: null }),
       'extract_empty',
     );
     assert.equal(
-      classifyReject({ finalUrl: 'https://example.com/login', markdown: '   ' }),
+      classifyReject({ finalUrl: 'https://example.com/login', text: '   ' }),
       'extract_empty',
     );
   });
 
   it('locale wins over extract_empty', () => {
     assert.equal(
-      classifyReject({ finalUrl: 'https://example.com/gb/x', markdown: null }),
+      classifyReject({ finalUrl: 'https://example.com/gb/x', text: null }),
       'locale_excluded',
     );
   });
 });
 
-describe('isExtractEmptyMarkdown', () => {
-  it('treats short markdown as empty', () => {
-    assert.equal(isExtractEmptyMarkdown('hi'), true);
+describe('isExtractEmptyText', () => {
+  it('treats short prose as empty', () => {
+    assert.equal(isExtractEmptyText('hi'), true);
     assert.equal(
-      isExtractEmptyMarkdown('# Long enough markdown body for a real page extract'),
+      isExtractEmptyText('Long enough prose body for a real page extract'),
       false,
     );
   });

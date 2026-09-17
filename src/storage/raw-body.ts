@@ -4,8 +4,8 @@ import path from 'node:path';
 
 export type RawBodyStore = {
   put(runId: string, url: string, rawHtml: string): Promise<string>;
-  /** Optional markdown sibling under bodies/ (same url hash, .md). */
-  putMarkdown(runId: string, url: string, markdown: string): Promise<string>;
+  /** Clean semantic HTML sibling under bodies/ (same url hash, .content.html). */
+  putContentHtml(runId: string, url: string, contentHtml: string): Promise<string>;
   rootDir: string;
 };
 
@@ -27,12 +27,13 @@ export function createFilesystemRawBodyStore(dataDir: string): RawBodyStore {
       await writeFile(abs, rawHtml, 'utf8');
       return path.posix.join('runs', runId, 'bodies', key);
     },
-    async putMarkdown(runId, url, markdown) {
+    async putContentHtml(runId, url, contentHtml) {
       const dir = path.join(rootDir, 'runs', runId, 'bodies');
       await mkdir(dir, { recursive: true });
-      const key = `${urlKey(url)}.md`;
+      // Distinct from the raw body's `.html`, which is the untouched wire bytes.
+      const key = `${urlKey(url)}.content.html`;
       const abs = path.join(dir, key);
-      await writeFile(abs, markdown, 'utf8');
+      await writeFile(abs, contentHtml, 'utf8');
       return path.posix.join('runs', runId, 'bodies', key);
     },
   };

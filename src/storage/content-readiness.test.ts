@@ -7,7 +7,7 @@ import test from 'node:test';
 import { createCrawlPersist } from './persist.js';
 import { PersistenceError } from './errors.js';
 
-test('API persistence marks completed Markdown runs ready', async () => {
+test('API persistence marks completed content runs ready', async () => {
   const patches: Array<Record<string, unknown>> = [];
   const runId = '11111111-2222-4333-8444-555555555555';
   const server = createServer(async (req, res) => {
@@ -68,7 +68,7 @@ test('API persistence marks completed Markdown runs ready', async () => {
     assert.equal(
       await persist.savePage({
         url: 'https://example.com/blocked',
-        markdown: '# This content is long enough but robots denied persistence',
+        contentHtml: '# This content is long enough but robots denied persistence',
         robotsAllowed: false,
         fetchMode: 'cheerio',
       }),
@@ -77,7 +77,7 @@ test('API persistence marks completed Markdown runs ready', async () => {
     assert.equal(
       await persist.savePage({
         url: 'https://example.com/fr/docs',
-        markdown: '# This locale content must not enter the English corpus',
+        contentHtml: '# This locale content must not enter the English corpus',
         robotsAllowed: true,
         fetchMode: 'cheerio',
       }),
@@ -86,7 +86,7 @@ test('API persistence marks completed Markdown runs ready', async () => {
     assert.equal(
       await persist.savePage({
         url: 'https://example.com/empty',
-        markdown: ' ',
+        contentHtml: ' ',
         robotsAllowed: true,
         fetchMode: 'cheerio',
       }),
@@ -95,15 +95,16 @@ test('API persistence marks completed Markdown runs ready', async () => {
     await persist.savePage({
       url: 'https://example.com',
       html: '<main>Example</main>',
-      markdown: '# Example page with enough useful content for the corpus',
+      contentHtml: '<p>Example page with enough useful content for the corpus</p>',
+      text: 'Example page with enough useful content for the corpus',
       robotsAllowed: true,
       fetchMode: 'cheerio',
     });
     await persist.markComplete();
 
     assert.equal(patches[0]?.status, 'complete');
-    assert.equal(patches[0]?.markdownReadyAt, patches[0]?.completedAtUtc);
-    assert.equal(patches[0]?.clearMarkdownReadyAt, false);
+    assert.equal(patches[0]?.contentReadyAt, patches[0]?.completedAtUtc);
+    assert.equal(patches[0]?.clearContentReadyAt, false);
     const stats = await persist.stats();
     assert.equal(stats.pagesSaved, 1);
     assert.equal(stats.pagesRejectedRequestFailed, 1);
@@ -176,7 +177,8 @@ test('terminal link persistence failure throws once', async () => {
     const saved = await persist.savePage({
       url: 'https://example.com',
       html: '<main>Example</main>',
-      markdown: '# Example page with enough useful content for the corpus',
+      contentHtml: '<p>Example page with enough useful content for the corpus</p>',
+      text: 'Example page with enough useful content for the corpus',
       robotsAllowed: true,
       fetchMode: 'cheerio',
     });

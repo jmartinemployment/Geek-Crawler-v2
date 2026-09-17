@@ -138,7 +138,7 @@ test('pages/batch fails on first 5xx without retry', async () => {
             url: 'https://example.com',
             statusCode: 200,
             robotsAllowed: true,
-            markdown: '# hi',
+            contentHtml: '# hi',
           },
         ]),
       /500/,
@@ -181,7 +181,7 @@ test('pages/batch omits oversized html before network and succeeds', async () =>
         statusCode: 200,
         robotsAllowed: true,
         html: hugeHtml,
-        markdown: 'ok',
+        contentHtml: 'ok',
       },
     ]);
     assert.equal(created[0]?.pageId, 'p1');
@@ -191,7 +191,7 @@ test('pages/batch omits oversized html before network and succeeds', async () =>
   }
 });
 
-test('pages/batch rejects markdown that exceeds document limit without calling network', async () => {
+test('pages/batch rejects a body that exceeds document limit without calling network', async () => {
   let attempts = 0;
   const server = createServer((_req, res) => {
     attempts += 1;
@@ -205,7 +205,7 @@ test('pages/batch rejects markdown that exceeds document limit without calling n
     'test-key',
     'test-user',
   );
-  const hugeMarkdown = 'm'.repeat(MAX_PAGE_DOCUMENT_BYTES + 10_000);
+  const hugeBody = 'm'.repeat(MAX_PAGE_DOCUMENT_BYTES + 10_000);
   try {
     await assert.rejects(
       () =>
@@ -215,7 +215,7 @@ test('pages/batch rejects markdown that exceeds document limit without calling n
             url: 'https://example.com/md',
             statusCode: 200,
             robotsAllowed: true,
-            markdown: hugeMarkdown,
+            contentHtml: hugeBody,
           },
         ]),
       /page_document_too_large/,
@@ -232,7 +232,7 @@ test('applyHtmlOmit keeps mongo overflow html from being persistable', () => {
     origin: 'https://example.com',
     url: 'https://example.com/overflow',
     html: overMongo,
-    markdown: 'safe',
+    contentHtml: 'safe',
   });
   assert.equal(result.fits, true);
   assert.equal(result.html, null);

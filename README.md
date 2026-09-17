@@ -1,6 +1,6 @@
 # Geek-Crawler v2
 
-Standalone **Crawlee** crawler (Cheerio primary, Playwright backup). Does not modify Geek-Crawler v1.
+Standalone **Crawlee** crawler: **CheerioCrawler only**, static HTML, no browser and no JavaScript execution. Does not modify Geek-Crawler v1.
 
 **Normal use is local:** crawl egress comes from your machine (politer than cloud IPs). The operator UI and `serve` API both run on localhost.
 
@@ -11,17 +11,17 @@ Geek-Crawler v2 builds clean, citation-ready research corpora from partner and c
 ### Capabilities
 
 - Sitemap-first inventory with same-origin discovery when no sitemap applies
-- Cheerio primary crawl; explicit Playwright backup path for non-viable static HTML (logged, contract-preserving)
+- One renderer, one path: static HTML via CheerioCrawler. A page whose content does not exist until JavaScript runs is rejected, not promoted to a browser
 - Tracking-parameter normalization and US/English locale filtering
 - `robots.txt` handling, configurable concurrency, and durable resume queues (Crawlee request-queue behavior for **source-page fetching** is not GeekAPI ingest retry)
 - Cloudflare/challenge, locale, and empty-content rejection before corpus storage
-- Mozilla Readability + Turndown extraction into title, excerpt, and Markdown
+- Deterministic selector-based extraction into title, excerpt, and clean semantic HTML (`<p>`, `<h2>`, `<li>`, `<table>`) plus the same content as typed blocks
 - Local storage or authenticated GeekAPI ingestion (**no application-level retries** on `pages/batch` / `links/batch` — fail closed; see sibling Rag `plans/rules.md` §3a)
 - Next.js operator UI with OAuth, SignalR progress, coverage reports, and CSV export
 
 ### Technology
 
-Node.js, TypeScript, Crawlee, Cheerio, Playwright, Mozilla Readability, Turndown, Next.js, React, OAuth 2.0 PKCE, and Microsoft SignalR.
+Node.js, TypeScript, Crawlee, Cheerio, Next.js, React, OAuth 2.0 PKCE, and Microsoft SignalR. No headless browser and no Markdown converter in the crawl path.
 
 ## Place in the Geek content platform
 
@@ -48,8 +48,9 @@ cp web/.env.example web/.env.local
 # plus GEEK_* keys matching root .env.local
 
 npm install
-npx playwright install chromium
-cd web && npm install && cd ..
+cd web && npm install && npx playwright install chromium && cd ..
+# Playwright belongs to the web package only, for UI end-to-end tests.
+# The crawler itself has no browser dependency.
 ```
 
 ### Every day (two terminals)
@@ -81,7 +82,7 @@ Then on the home page: enter one seed URL, set max requests / max concurrency, *
 - **Max concurrency** = parallel fetches *for that run* (default 1 in the UI)
 - **Request budget** = locale-filtered sitemap URL count when a map exists (no Max requests field), clamped to the per-site cap of **2,500 pages** (`MAX_PAGES_PER_SITE` in `src/crawl/crawl-limits.ts`). Optional API/CLI `--max` / `maxRequestsPerCrawl` overrides are clamped to the same cap. Known low-quality directories carry per-section page quotas (`src/crawl/section-quota.ts`, override with `SECTION_PAGE_QUOTA`).
 - **Locale filter on sitemap map** (crawl + report): **keep** `/us/…`; **drop** other region dirt (`/gb/`, `/uk/`, `/au/`, …) and non-English languages (`/fr/`, `/de/`, …); **strip** English language prefixes only (`/en/`, `/en-us/`, …) to the bare path
-- **Unusable pages are not stored** — Cloudflare/challenge interstitials, locale-excluded final URLs, and empty Readability extracts are **rejected** (counters + capped URL samples on the run / seed report). Corpus HTML/markdown is only saved for viable pages.
+- **Unusable pages are not stored** — Cloudflare/challenge interstitials, locale-excluded final URLs, and extracts carrying too little prose are **rejected** (counters + capped URL samples on the run / seed report). The floor measures prose, not markup, so a page of pure boilerplate cannot clear it. Corpus content is only saved for viable pages.
 - **Sign in** (nav) is only needed for live SignalR; crawls and reports work without it. Without a token the run page shows `Live updates off — no hub token` and skips the connection entirely — no console errors, no retries. Set `GEEK_USER_ACCESS_TOKEN` in `web/.env.local` to get live status without signing in. See [web/README.md](./web/README.md#live-status-signalr-is-optional)
 - **Resume by URL** on the home page continues a local `.crawlee/<runId>` queue and re-seeds from the same locale-filtered sitemap map (Crawlee skips already-handled URLs)
 - **Resume all running** on the home page re-attaches every local stub still marked `running` (useful after a `serve` restart orphans in-memory workers; skips already in-flight)
@@ -114,19 +115,19 @@ When `GEEK_API_URL` + `GEEK_BACKEND_API_KEY` + `GEEK_USER_ID` are set:
 
 ```text
 Crawlee (localhost)
-  → Readability + Turndown (title + markdown alongside HTML)
+  → Cheerio extraction (title + clean semantic HTML alongside the raw HTML)
   → GeekAPI (/api/geek-crawler/ingest/*)
     → GeekRepository (X-Repo-Key)
       → Hostinger MongoDB (db geek_crawler)
 ```
 
-Each successful page save includes raw **HTML** plus clean **title** / **markdown** (and optional excerpt). GeekBackend stores those fields for Mongo. Historical pages without Markdown are handled by the Geek-Crawler-Rag backfill; see [`plans/rag-markdown-backfill.md`](./plans/rag-markdown-backfill.md).
+Each successful page save includes the raw **HTML** plus clean **title** / **contentHtml** (and optional excerpt). GeekBackend stores those fields for Mongo.
 
 After all page batches flush, successful API-backed crawls set the run-level
-`MarkdownReadyAt` marker. Resumes clear that marker until the crawl completes
+`ContentReadyAt` marker. Resumes clear that marker until the crawl completes
 again, so the RAG scheduler never selects a partial recrawl.
 
-Without those env vars, data stays under `./data/` (or `DATA_DIR`) only (`.html` + sibling `.md` bodies when local).
+Without those env vars, data stays under `./data/` (or `DATA_DIR`) only (`.html` raw bodies + sibling `.content.html` extracts when local).
 
 Do **not** point this crawler at GeekRepository (`REPO_*`) — that bypasses GeekAPI.
 

@@ -21,18 +21,12 @@
     "node": ">=24"
   },
   "dependencies": {
-    "@mozilla/readability": "^0.6.0",
+    "cheerio": "^1.0.0-rc.12",
     "crawlee": "^3.18.1",
-    "dotenv": "^16.4.7",
-    "jsdom": "^29.1.1",
-    "playwright": "^1.63.0",
-    "turndown": "^7.2.4"
+    "dotenv": "^16.4.7"
   },
   "devDependencies": {
-    "@types/jsdom": "^30.0.0",
-    "@types/mozilla__readability": "^0.4.2",
     "@types/node": "^24.13.5",
-    "@types/turndown": "^5.0.6",
     "tsx": "^4.19.3",
     "typescript": "^5.8.2"
   },

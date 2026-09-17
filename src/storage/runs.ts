@@ -15,7 +15,7 @@ export type CrawlRunMeta = {
   completedAtUtc?: string;
   errorSummary?: string;
   pagesSaved: number;
-  pagesWithoutMarkdown?: number;
+  pagesWithoutContent?: number;
   linksSaved: number;
   pagesRejectedLocale?: number;
   pagesRejectedChallenge?: number;
@@ -54,13 +54,13 @@ export type CrawlPageMeta = {
   finalUrl?: string;
   statusCode?: number;
   bodyKey: string;
-  /** Relative key for clean markdown body when local|both. */
-  markdownBodyKey?: string;
+  /** Relative key for the clean semantic HTML body when local|both. */
+  contentBodyKey?: string;
   title?: string;
   /** Same-site canonical URL key when declared. */
   canonicalUrl?: string;
-  /** cheerio = primary HTTP; playwright = backup for non-viable shells */
-  fetchMode: 'cheerio' | 'playwright';
+  /** cheerio is the only fetch mode: static HTML, one renderer, one path. */
+  fetchMode: 'cheerio';
   robotsAllowed: boolean;
   crawledAtUtc: string;
   failureReason?: string;
@@ -110,7 +110,7 @@ export type RunStore = {
       rejectSamples?: CrawlRunMeta['rejectSamples'];
     },
   ): Promise<void>;
-  recordAcceptedPage(runId: string, hasMarkdown: boolean): Promise<void>;
+  recordAcceptedPage(runId: string, hasContent: boolean): Promise<void>;
   recordAcceptedLinks(runId: string, count: number): Promise<void>;
   insertPage(runId: string, page: CrawlPageMeta): Promise<void>;
   insertLinks(runId: string, links: CrawlLinkMeta[]): Promise<void>;
@@ -189,7 +189,7 @@ export function createJsonRunStore(dataDir: string): RunStore {
           seeds,
           createdAtUtc: new Date().toISOString(),
           pagesSaved: 0,
-          pagesWithoutMarkdown: 0,
+          pagesWithoutContent: 0,
           linksSaved: 0,
         };
         await saveRun(run);
@@ -279,12 +279,12 @@ export function createJsonRunStore(dataDir: string): RunStore {
       });
     },
 
-    async recordAcceptedPage(runId, hasMarkdown) {
+    async recordAcceptedPage(runId, hasContent) {
       await withRunLock(runId, async () => {
         const run = await loadRun(runId);
         run.pagesSaved += 1;
-        run.pagesWithoutMarkdown =
-          (run.pagesWithoutMarkdown ?? 0) + (hasMarkdown ? 0 : 1);
+        run.pagesWithoutContent =
+          (run.pagesWithoutContent ?? 0) + (hasContent ? 0 : 1);
         await saveRun(run);
       });
     },
@@ -304,8 +304,8 @@ export function createJsonRunStore(dataDir: string): RunStore {
         await mkdir(path.dirname(pagesPath(runId)), { recursive: true });
         await writeFile(pagesPath(runId), `${JSON.stringify(page)}\n`, { flag: 'a' });
         run.pagesSaved += 1;
-        run.pagesWithoutMarkdown =
-          (run.pagesWithoutMarkdown ?? 0) + (page.markdownBodyKey ? 0 : 1);
+        run.pagesWithoutContent =
+          (run.pagesWithoutContent ?? 0) + (page.contentBodyKey ? 0 : 1);
         await saveRun(run);
       });
     },

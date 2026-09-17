@@ -29,7 +29,10 @@ export type PersistPageInput = {
   finalUrl?: string;
   statusCode?: number;
   html?: string;
-  markdown?: string | null;
+  /** Clean semantic HTML fragment: the corpus body. */
+  contentHtml?: string | null;
+  /** Prose only. Drives the reject floor, the content hash and the simhash. */
+  text?: string | null;
   title?: string | null;
   excerpt?: string | null;
   robotsAllowed: boolean;
@@ -139,7 +142,7 @@ export function createCrawlPersist(input: {
 
   let runId = '';
   let pagesSaved = 0;
-  let pagesWithoutMarkdown = 0;
+  let pagesWithoutContent = 0;
   let linksSaved = 0;
   const rejectCounters = emptyRejectCounters();
   const rejectSamples = new RejectSampleLog();
@@ -237,14 +240,14 @@ export function createCrawlPersist(input: {
 
     async markComplete() {
       const completedAtUtc = new Date().toISOString();
-      const markdownReady = pagesSaved > 0 && pagesWithoutMarkdown === 0;
+      const contentReady = pagesSaved > 0 && pagesWithoutContent === 0;
       await coordinator.run(() =>
         client.patchRun(runId, {
           status: 'complete',
           report: crawlReport(),
           completedAtUtc,
-          markdownReadyAt: markdownReady ? completedAtUtc : undefined,
-          clearMarkdownReadyAt: !markdownReady,
+          contentReadyAt: contentReady ? completedAtUtc : undefined,
+          clearContentReadyAt: !contentReady,
           hostProgressJson: hostProgressJson(),
         }),
       );
@@ -261,7 +264,7 @@ export function createCrawlPersist(input: {
             report: crawlReport(),
             errorSummary: bounded,
             completedAtUtc,
-            clearMarkdownReadyAt: true,
+            clearContentReadyAt: true,
             hostProgressJson: hostProgressJson(),
           }),
         );
@@ -404,7 +407,13 @@ export function createCrawlPersist(input: {
         ? 'robots_disallowed'
         : page.failureReason?.trim()
           ? 'request_failed'
-          : classifyReject({ finalUrl, markdown: page.markdown });
+          // A body supplied with no prose measurement is a caller that forgot
+          // `text`; treat the prose as empty and reject rather than admit a page
+          // nothing has measured.
+          : classifyReject({
+              finalUrl,
+              text: page.contentHtml === undefined ? page.text : (page.text ?? ''),
+            });
       if (rejectReason) {
         recordReject(rejectReason, finalUrl, page.failureReason);
         if (page.dedup) {
@@ -416,10 +425,13 @@ export function createCrawlPersist(input: {
         return null;
       }
 
-      const markdown = page.markdown ?? '';
+      // Hashing and near-duplicate detection run over prose, not over the
+      // fragment: tags are identical on every page of a site, so a simhash of
+      // markup is dominated by boilerplate tokens and stops discriminating.
+      const text = page.text ?? '';
       const owned = page.dedup?.owned ?? new Set<string>();
       const contentCheck = await dedup.checkContentAndNear({
-        markdown,
+        text,
         url: finalUrl,
         title: page.title,
         canonicalUrl: page.dedup?.canonicalKey,
@@ -488,7 +500,7 @@ export function createCrawlPersist(input: {
               statusCode: page.statusCode ?? 0,
               robotsAllowed: page.robotsAllowed,
               html: page.html ?? null,
-              markdown: page.markdown ?? null,
+              contentHtml: page.contentHtml ?? null,
               title: page.title ?? null,
               excerpt: page.excerpt ?? null,
               failureReason: page.failureReason ?? null,
@@ -520,7 +532,7 @@ export function createCrawlPersist(input: {
         htmlHash: page.dedup?.htmlHash,
         contentHash: contentCheck.contentHash,
         simhash: contentCheck.simhash,
-        markdownLength: markdown.length,
+        contentLength: text.length,
       });
       if (page.dedup?.canonicalKey) {
         dedup.registerCanonicalGroup(page.dedup.canonicalKey, pageId, page.dedup.urlKey);
@@ -531,13 +543,13 @@ export function createCrawlPersist(input: {
         pageId,
         url: finalUrl,
         title: page.title,
-        markdownLength: markdown.length,
+        contentLength: text.length,
         canonicalUrl: page.dedup?.canonicalKey,
-        excerpt: markdown.replace(/\s+/g, ' ').trim().slice(0, 500),
+        excerpt: text.replace(/\s+/g, ' ').trim().slice(0, 500),
       });
 
       pagesSaved += 1;
-      if (!page.markdown?.trim()) pagesWithoutMarkdown += 1;
+      if (!page.contentHtml?.trim()) pagesWithoutContent += 1;
       return { pageId };
     },
 

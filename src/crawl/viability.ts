@@ -1,4 +1,4 @@
-/** Cheap viability check — promote non-viable shells to PlaywrightCrawler. */
+/** Cheap viability check — a non-viable shell becomes an extract_empty reject. */
 
 export type ViabilityResult = {
   viable: boolean;

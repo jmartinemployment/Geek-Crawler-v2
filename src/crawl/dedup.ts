@@ -149,13 +149,13 @@ export function htmlHash(html: string): string {
 }
 
 /** Whitespace collapsed only; case preserved (identity, not similarity). */
-export function contentHash(markdown: string): string {
-  const collapsed = markdown.replace(/\s+/g, ' ').trim();
+export function contentHash(text: string): string {
+  const collapsed = text.replace(/\s+/g, ' ').trim();
   return createHash('sha256').update(collapsed).digest('hex');
 }
 
-function tokenizeForSimhash(markdown: string): string[] {
-  return markdown
+function tokenizeForSimhash(text: string): string[] {
+  return text
     .toLowerCase()
     .replace(/[^\p{L}\p{N}\s]+/gu, ' ')
     .split(/\s+/)
@@ -163,8 +163,8 @@ function tokenizeForSimhash(markdown: string): string[] {
 }
 
 /** 64-bit SimHash over word n-shingles; returns 16-char hex. */
-export function simhash64(markdown: string, shingle = 5): string {
-  const tokens = tokenizeForSimhash(markdown);
+export function simhash64(text: string, shingle = 5): string {
+  const tokens = tokenizeForSimhash(text);
   const n = Math.max(1, Math.min(12, Math.floor(shingle)));
   const weights = new Float64Array(64);
 
@@ -232,7 +232,7 @@ export type SimhashEntry = {
   pageId: string;
   url: string;
   title?: string | null;
-  markdownLength: number;
+  contentLength: number;
   canonicalUrl?: string | null;
   excerpt: string;
 };

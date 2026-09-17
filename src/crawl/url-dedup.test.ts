@@ -73,13 +73,13 @@ describe('final-url dedup key', () => {
 });
 
 describe('oversized page truncation is visible', () => {
-  it('flags truncated markdown and leaves normal pages unflagged', async () => {
+  it('flags truncated content and leaves normal pages unflagged', async () => {
     const { extractCleanContent } = await import('./extract-content.js');
 
     const big = '<html><body><article>' + 'word '.repeat(200_000) + '</article></body></html>';
     const bigResult = extractCleanContent(big, 'https://n8n.io/integrations/set/');
     assert.equal(bigResult.truncated, true, 'oversized page must report truncation');
-    assert.ok((bigResult.markdown ?? '').length <= 500_000);
+    assert.ok((bigResult.contentHtml ?? '').length <= 500_000);
 
     const small =
       '<html><body><article><h1>Hi</h1><p>Short article body here.</p></article></body></html>';
