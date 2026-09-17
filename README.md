@@ -127,7 +127,14 @@ After all page batches flush, successful API-backed crawls set the run-level
 `ContentReadyAt` marker. Resumes clear that marker until the crawl completes
 again, so the RAG scheduler never selects a partial recrawl.
 
-Without those env vars, data stays under `./data/` (or `DATA_DIR`) only (`.html` raw bodies + sibling `.content.html` extracts when local).
+Without those env vars, nothing leaves the machine, but note what local mode
+actually keeps: run stubs and counters under `DATA_DIR/runs/`, the Crawlee
+request queue under `DATA_DIR/.crawlee/<runId>/`, and post-mortems under
+`DATA_DIR/failures/`. **Page bodies are not written locally.** The body store
+exists (`src/storage/raw-body.ts`, `put` for the raw wire HTML and
+`putContentHtml` for the clean fragment) but nothing calls it, and
+`CrawlPageMeta.bodyKey` / `contentBodyKey` are set by nothing. Local mode is a
+progress ledger, not a corpus.
 
 Do **not** point this crawler at GeekRepository (`REPO_*`) — that bypasses GeekAPI.
 

@@ -139,6 +139,33 @@ taxjar.com still shows 87 chars. Measure that page before adding any selector �
 the Tailwind rule was written from evidence, the Bootstrap rule was written from
 evidence, and the next one should be too.
 
+### 2c-bis. TaxJar's last 87 duplicate chars: a bespoke `.hide`
+
+Measured. The two repeated CTA blocks are a paired shown/hidden duplicate:
+
+```
+div.button-group.ctas_a       < div.content < div.content-row
+div.button-group.ctas_b.hide  < div.content < div.content-row
+```
+
+Class **`hide`** — neither Tailwind `hidden` nor Bootstrap `d-none`, but the
+site's own CSS. Not acted on: one site is not evidence, and a blanket `.hide`
+rule carries the same risk as stripping bare `hidden` — it is also what a
+JS-toggled panel looks like. 87 chars is not worth that trade. Revisit if more
+sites show the same shape.
+
+### 2c-ter. Local body persistence is unwired
+
+Separate from the format change and pre-existing. `persist.ts:138` creates
+`rawBodyStore` and never calls it; neither `put` nor `putContentHtml` has a
+caller. Local mode records counters only — `recordAcceptedPage(runId, true)`,
+with `true` hardcoded, so `pagesWithoutContent` never increments locally either.
+`CrawlPageMeta.bodyKey` and `contentBodyKey` are set by nothing.
+
+Either wire it or delete the store, the two `CrawlPageMeta` keys and the
+counter argument. Until then `persistMode: local` is a progress ledger, not a
+corpus, and the README said otherwise until this commit.
+
 ### 2d. Capture the seed list BEFORE deleting
 
 Step 3 re-crawls "the runs deleted in step 2", but deleting a run destroys its
