@@ -22,11 +22,17 @@ async function startMockGeekApi(): Promise<{
     res.setHeader('content-type', 'application/json');
     if (req.method === 'POST' && req.url?.endsWith('/ingest/runs')) {
       runSeq += 1;
+      const parsedSeeds = (JSON.parse(body) as { seeds?: string[] }).seeds ?? [];
       return res.end(
         JSON.stringify({
-          runId: `00000000-0000-4000-8000-${String(runSeq).padStart(12, '0')}`,
-          status: 'external',
-          crawlType: 'partner',
+          run: {
+            runId: `00000000-0000-4000-8000-${String(runSeq).padStart(12, '0')}`,
+            status: 'external',
+            crawlType: 'partner',
+            seedUrls: parsedSeeds,
+          },
+          seedsAccepted: parsedSeeds.length,
+          rejected: [],
         }),
       );
     }

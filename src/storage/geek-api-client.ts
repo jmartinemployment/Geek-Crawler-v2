@@ -148,11 +148,49 @@ export class GeekApiClient {
     }
   }
 
-  createRun(input: { crawlType: string; seeds: string[] }): Promise<ApiRunSnapshot> {
-    return this.request<ApiRunSnapshot>('POST', '/api/geek-crawler/ingest/runs', {
+  /**
+   * Create the run. One attempt, one schema.
+   *
+   * This is the only ingest response that wraps the run: `{ run, seedsAccepted, rejected }`.
+   * `patchRun` returns the snapshot flat. The envelope is read here, once, so nothing downstream
+   * has to guess which shape it holds.
+   *
+   * A seed the server rejected is not a crawlable run — it would fetch nothing and report
+   * complete — so a short seed acceptance fails the run here rather than at the first empty batch.
+   */
+  async createRun(input: { crawlType: string; seeds: string[] }): Promise<ApiRunSnapshot> {
+    const ack = await this.request<{
+      run?: ApiRunSnapshot;
+      seedsAccepted?: number;
+      rejected?: Array<{ url?: string; reason?: string }>;
+    }>('POST', '/api/geek-crawler/ingest/runs', {
       crawlType: input.crawlType,
       seeds: input.seeds,
     });
+
+    const run = ack?.run;
+    const runId = typeof run?.runId === 'string' ? run.runId.trim() : '';
+    if (!run || !runId) {
+      throw new PersistenceError('runs acknowledgment missing run.runId');
+    }
+    if (ack.seedsAccepted !== input.seeds.length) {
+      const rejected = Array.isArray(ack.rejected)
+        ? ack.rejected
+            .map((r) => `${r?.url ?? '?'}: ${r?.reason ?? 'rejected'}`)
+            .join('; ')
+            .slice(0, 300)
+        : '';
+      throw new PersistenceError(
+        `runs accepted ${ack.seedsAccepted ?? 0} of ${input.seeds.length} seeds${rejected ? ` — ${rejected}` : ''}`,
+      );
+    }
+
+    return {
+      runId,
+      crawlType: run.crawlType,
+      status: run.status,
+      seedUrls: run.seedUrls,
+    };
   }
 
   patchRun(
@@ -275,16 +313,24 @@ export class GeekApiClient {
   /**
    * Delete a run and its pages and links. One attempt, no retry.
    * Requires `DELETE /api/geek-crawler/ingest/runs/{runId}` on GeekAPI.
+   *
+   * The server reports what it purged as booleans, not row counts. Reporting counts it never sent
+   * meant every delete claimed "0 pages, 0 links" no matter what it removed.
    */
-  async deleteRun(runId: string): Promise<{ pagesDeleted: number; linksDeleted: number }> {
-    const result = await this.request<{ pagesDeleted?: number; linksDeleted?: number }>(
-      'DELETE',
-      `/api/geek-crawler/ingest/runs/${runId}`,
-      undefined,
-    );
+  async deleteRun(
+    runId: string,
+  ): Promise<{ vectorsPurged: boolean; crawlDataDeleted: boolean }> {
+    const result = await this.request<{
+      vectorsPurged?: boolean;
+      crawlDataDeleted?: boolean;
+    }>('DELETE', `/api/geek-crawler/ingest/runs/${runId}`, undefined);
+
+    if (typeof result?.crawlDataDeleted !== 'boolean') {
+      throw new PersistenceError('delete acknowledgment missing crawlDataDeleted');
+    }
     return {
-      pagesDeleted: typeof result?.pagesDeleted === 'number' ? result.pagesDeleted : 0,
-      linksDeleted: typeof result?.linksDeleted === 'number' ? result.linksDeleted : 0,
+      vectorsPurged: result.vectorsPurged === true,
+      crawlDataDeleted: result.crawlDataDeleted,
     };
   }
 }

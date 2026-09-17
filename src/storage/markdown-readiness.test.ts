@@ -18,7 +18,13 @@ test('API persistence marks completed Markdown runs ready', async () => {
     });
     res.setHeader('content-type', 'application/json');
     if (req.method === 'POST' && req.url?.endsWith('/ingest/runs')) {
-      return res.end(JSON.stringify({ runId, status: 'external', crawlType: 'partner' }));
+      return res.end(
+        JSON.stringify({
+          run: { runId, status: 'external', crawlType: 'partner' },
+          seedsAccepted: 1,
+          rejected: [],
+        }),
+      );
     }
     if (req.method === 'POST' && req.url?.endsWith('/pages/batch')) {
       return res.end(JSON.stringify({ pages: [{ url: 'https://example.com', pageId: 'page-1' }] }));
@@ -123,7 +129,13 @@ test('terminal link persistence failure throws once', async () => {
   const server = createServer(async (req, res) => {
     res.setHeader('content-type', 'application/json');
     if (req.method === 'POST' && req.url?.endsWith('/ingest/runs')) {
-      return res.end(JSON.stringify({ runId, status: 'external', crawlType: 'partner' }));
+      return res.end(
+        JSON.stringify({
+          run: { runId, status: 'external', crawlType: 'partner' },
+          seedsAccepted: 1,
+          rejected: [],
+        }),
+      );
     }
     if (req.method === 'POST' && req.url?.endsWith('/pages/batch')) {
       pageWrites += 1;

@@ -205,11 +205,9 @@ export function createCrawlPersist(input: {
           seeds,
         }),
       );
-      const id = typeof created.runId === 'string' ? created.runId.trim() : '';
-      if (!id) {
-        throw new PersistenceError(`GeekAPI createRun returned no runId`);
-      }
-      runId = id;
+      // createRun validates the acknowledgment and throws on a runless one, so a snapshot that
+      // gets here always carries a runId.
+      runId = created.runId;
       rebuildDedup();
       // Engine scratch for in-process control plane only — not crawl authority.
       await localMeta.createRun({
