@@ -1,11 +1,12 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { readFile } from 'node:fs/promises';
+import { readdir, readFile, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { prepareCrawl, startCrawl } from '../crawl/orchestrator.js';
 import { CRAWL_TYPE_VALUES } from '../crawl/types.js';
 import { createGeekApiClient, requireGeekApiEnv } from '../storage/geek-api-client.js';
 import { requestCancel } from '../crawl/cancel-registry.js';
 import { createJsonRunStore } from '../storage/runs.js';
+import { listFailures, readFailure } from '../storage/failure-archive.js';
 
 type Json = Record<string, unknown>;
 
@@ -20,6 +21,22 @@ async function readBody(req: IncomingMessage): Promise<string> {
 function send(res: ServerResponse, status: number, body: Json | unknown) {
   res.writeHead(status, { 'content-type': 'application/json' });
   res.end(JSON.stringify(body));
+}
+
+/** Recursive byte total, so a sweep can report what it actually reclaimed. */
+async function directorySize(dir: string): Promise<number> {
+  let total = 0;
+  const entries = await readdir(dir, { withFileTypes: true });
+  for (const entry of entries) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      total += await directorySize(full);
+    } else {
+      const info = await stat(full);
+      total += info.size;
+    }
+  }
+  return total;
 }
 
 export function createCrawlApiServer(options?: { dataDir?: string; port?: number }) {
@@ -177,8 +194,38 @@ export function createCrawlApiServer(options?: { dataDir?: string; port?: number
             runId,
           });
         }
+        // Authority first. GeekAPI owns the pages, links, and vectors; if that purge fails the
+        // local record stays and the run is still accounted for. Clearing scratch first would
+        // leave rows alive with nothing on this machine pointing at them.
         const result = await createGeekApiClient().deleteRun(runId);
-        return send(res, 200, { ok: true, runId, ...result });
+
+        // The rest of the run's footprint on this machine. `GET /crawls/:runId` reads local meta,
+        // so a run whose rows are gone keeps rendering with its old page count until these go.
+        const localPaths = [
+          path.join(dataDir, 'runs', runId),
+          path.join(dataDir, '.crawlee', runId),
+        ];
+        const localRemoved: string[] = [];
+        const localFailed: Array<{ path: string; error: string }> = [];
+        for (const target of localPaths) {
+          try {
+            await rm(target, { recursive: true, force: true });
+            localRemoved.push(target);
+          } catch (err) {
+            localFailed.push({
+              path: target,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+        }
+
+        return send(res, 200, {
+          ok: true,
+          runId,
+          ...result,
+          localRemoved,
+          ...(localFailed.length > 0 ? { localFailed } : {}),
+        });
       }
 
       const pagesMatch = pathname.match(/^\/crawls\/([^/]+)\/pages$/);
@@ -196,6 +243,63 @@ export function createCrawlApiServer(options?: { dataDir?: string; port?: number
         } catch {
           return send(res, 404, { error: 'pages not found' });
         }
+      }
+
+      // Post-mortems for purged runs. The runs themselves are gone; this is what is left of them,
+      // and it is what the failure report at /runs renders.
+      if (req.method === 'GET' && pathname === '/failures') {
+        const failures = await listFailures(dataDir);
+        return send(res, 200, { ok: true, failures });
+      }
+
+      const failureMatch = pathname.match(/^\/failures\/([^/]+)$/);
+      if (req.method === 'GET' && failureMatch) {
+        const runId = decodeURIComponent(failureMatch[1]!);
+        const failure = await readFailure(dataDir, runId);
+        if (!failure) return send(res, 404, { error: 'no post-mortem for that run' });
+        return send(res, 200, failure);
+      }
+
+      // Request-queue directories whose run is already gone. Pure engine scratch — no run owns
+      // them, nothing reads them, and they are where the reclaimable disk actually is.
+      if (req.method === 'POST' && pathname === '/maintenance/sweep-scratch') {
+        const scratchDir = path.join(dataDir, '.crawlee');
+        let scratchIds: string[];
+        try {
+          scratchIds = await readdir(scratchDir);
+        } catch {
+          return send(res, 200, { ok: true, swept: [], bytesFreed: 0 });
+        }
+
+        const swept: string[] = [];
+        const failures: Array<{ runId: string; error: string }> = [];
+        let bytesFreed = 0;
+        for (const id of scratchIds) {
+          const runDir = path.join(dataDir, 'runs', id);
+          try {
+            await stat(runDir);
+            continue; // the run still exists — not orphaned
+          } catch {
+            // no run directory, so this queue belongs to nothing
+          }
+          const target = path.join(scratchDir, id);
+          try {
+            bytesFreed += await directorySize(target);
+            await rm(target, { recursive: true, force: true });
+            swept.push(id);
+          } catch (err) {
+            failures.push({
+              runId: id,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+        }
+        return send(res, 200, {
+          ok: true,
+          swept,
+          bytesFreed,
+          ...(failures.length > 0 ? { failures } : {}),
+        });
       }
 
       return send(res, 404, { error: 'not found' });

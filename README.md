@@ -244,3 +244,34 @@ curl -sS -X POST http://127.0.0.1:8787/crawls/resume-by-url \
 Or use **Resume by URL** / **Resume all running** on the home page. Requires `DATA_DIR/.crawlee/<runId>` on disk. **Resume all running** re-attaches stubs left in `status=running` after a `serve` restart.
 
 Legacy multi-seed runs can still be matched by any of their seeds; resume continues the shared queue.
+
+## Failed and cancelled runs are destroyed
+
+A run that does not end in success leaves nothing behind but its explanation.
+On `failed` or `cancelled`, the crawler writes a post-mortem and then purges the
+run: GeekAPI pages and links, Qdrant vectors, `DATA_DIR/runs/<runId>/`, and
+`DATA_DIR/.crawlee/<runId>/`.
+
+The post-mortem lands at `DATA_DIR/failures/<runId>.json` — reject counters, up
+to five sample URLs per reason, `errorSummary`, and what the purge actually
+managed to remove. It is written **before** anything is destroyed: if the
+archive cannot be written, the purge does not run. Nothing reads this directory
+to decide what to crawl, resume, or dedup, so it is diagnostics and never crawl
+authority.
+
+Read it at `http://localhost:3000/runs` under **Purged Runs**, or from the API:
+
+```
+GET  /failures            # every post-mortem, newest purge first
+GET  /failures/:runId     # one, or 404
+```
+
+Cancel is destructive. Cancelling a crawl 400 pages in discards those 400 pages;
+only the report survives.
+
+Orphaned request queues — `.crawlee/<id>` directories whose run is already gone —
+are swept separately, since nothing owns them:
+
+```
+POST /maintenance/sweep-scratch   # → { swept: [...], bytesFreed }
+```

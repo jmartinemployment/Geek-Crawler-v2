@@ -7,9 +7,10 @@ type Props = { runId: string };
 /**
  * Cancel and Delete for one run.
  *
- * Cancel is terminal: the crawl stops, keeps the pages it already saved, and
- * lands in `cancelled`. Delete removes the run's pages, links, and vectors and
- * cannot be undone, so it asks first.
+ * Both are destructive and neither can be undone. Cancel stops the crawl and
+ * then discards it — pages, links, vectors and local scratch — keeping only the
+ * post-mortem, which appears in the Purged Runs report. Delete does the same to
+ * a run that has already finished.
  */
 export function RunActions({ runId }: Props) {
   const [pending, setPending] = useState<null | "cancel" | "delete">(null);
@@ -35,10 +36,19 @@ export function RunActions({ runId }: Props) {
         setMessage(
           body.orphan
             ? "No crawl process owned this run — marked cancelled."
-            : "Cancelling — the crawl stops after its current page.",
+            : "Cancelling — the crawl stops after its current page, then the run is discarded. Its report stays in Purged Runs.",
         );
       } else {
-        setMessage("Deleted. Pages, links, and vectors removed.");
+        // localFailed only appears when scratch survived the purge. The rows are gone either
+        // way, so this is a leftover-directory notice, not a failed delete.
+        const leftover = Array.isArray(body.localFailed) ? body.localFailed.length : 0;
+        setMessage(
+          leftover > 0
+            ? `Deleted. Pages, links, and vectors removed; ${leftover} local ${
+                leftover === 1 ? "directory" : "directories"
+              } could not be cleared.`
+            : "Deleted. Pages, links, vectors, and all local traces removed.",
+        );
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -73,7 +83,8 @@ export function RunActions({ runId }: Props) {
 
       {confirming ? (
         <p className="muted">
-          This removes every page, link, and vector for this run. It cannot be undone.
+          This removes every page, link, vector, and local trace of this run. Only its
+          report survives, in Purged Runs. It cannot be undone.
         </p>
       ) : null}
       {message ? <p className="muted">{message}</p> : null}

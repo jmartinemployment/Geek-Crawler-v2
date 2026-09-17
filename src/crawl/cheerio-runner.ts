@@ -434,8 +434,11 @@ async function executeCheerioCrawl(
 
     persist.throwIfPersistenceFailed();
     if (cancelled || isCancelRequested(persist.runId)) {
-      log.info(`Run ${persist.runId} cancelled — stopping with pages already saved`);
+      // Cancel is destructive: the partial corpus is discarded along with the run. What survives is
+      // the post-mortem, which archiveAndPurge writes before anything is destroyed.
+      log.info(`Run ${persist.runId} cancelled — discarding the run, keeping its report`);
       await persist.markCancelled('Cancelled by operator');
+      await persist.archiveAndPurge('cancelled', 'Cancelled by operator');
     } else {
       await persist.markComplete();
     }
@@ -445,6 +448,7 @@ async function executeCheerioCrawl(
       ? (root ?? err as Error).message
       : String(root ?? err);
     await persist.markFailed(message);
+    await persist.archiveAndPurge('failed', message);
     throw root ?? err;
   } finally {
     clearCancel(persist.runId);

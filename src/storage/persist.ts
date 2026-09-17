@@ -1,6 +1,9 @@
+import { rm } from 'node:fs/promises';
+import path from 'node:path';
 import { createFilesystemRawBodyStore, type RawBodyStore } from './raw-body.js';
 import { createGeekApiClient, type CrawlReport, type GeekApiClient } from './geek-api-client.js';
 import { PersistenceError, isPersistenceError } from './errors.js';
+import { archiveRun, type PurgeOutcome } from './failure-archive.js';
 import { createJsonRunStore, type CrawlLinkMeta, type RunStore } from './runs.js';
 import { computeSeedKey, normalizeSeeds, originOf } from './seed-key.js';
 import type { CrawlType } from '../crawl/types.js';
@@ -12,6 +15,7 @@ import {
   rejectStatsHostProgressEntry,
   type RejectCounters,
   type RejectReason,
+  type RejectSample,
 } from '../crawl/reject.js';
 import {
   createPageDedupTracker,
@@ -55,6 +59,13 @@ export type CrawlPersist = {
   markFailed(errorSummary: string): Promise<void>;
   /** One patchRun(cancelled) attempt. Terminal — cancel is never a pause. */
   markCancelled(reason: string): Promise<void>;
+  /**
+   * Write the post-mortem, then destroy everything else the run owns.
+   *
+   * Called only after a terminal non-success transition. The archive is written first: a purge
+   * that leaves no explanation behind is the one outcome this exists to prevent.
+   */
+  archiveAndPurge(status: 'failed' | 'cancelled', errorSummary: string): Promise<void>;
   throwIfPersistenceFailed(): void;
   rootPersistenceError(): PersistenceError | null;
   noteReject(reason: RejectReason, url: string, detail?: string): void;
@@ -291,6 +302,87 @@ export function createCrawlPersist(input: {
           }),
         );
       }
+    },
+
+    async archiveAndPurge(status: 'failed' | 'cancelled', errorSummary: string) {
+      const purgedAtUtc = new Date().toISOString();
+      const errors: string[] = [];
+
+      // The authority purge and the local sweep are attempted after the archive, and their outcome
+      // is recorded rather than retried. A run whose rows survive is reported as such; there is no
+      // second attempt and no alternate route.
+      let vectorsPurged = false;
+      let crawlDataDeleted = false;
+      const localRemoved: string[] = [];
+
+      const record = {
+        runId,
+        seed: seeds[0] ?? '',
+        crawlType: input.crawlType,
+        status,
+        errorSummary: errorSummary.slice(0, 500) || null,
+        createdAtUtc: purgedAtUtc,
+        purgedAtUtc,
+        pagesSaved,
+        linksSaved,
+        report: crawlReport(),
+        rejectSamples: rejectSamples.snapshot() as Record<string, RejectSample[]>,
+        dedup: { ...dedup.counters } as Record<string, number | boolean>,
+        purge: { vectorsPurged, crawlDataDeleted, localRemoved } as PurgeOutcome,
+      };
+
+      // Archive before destroying anything. If this throws, the run keeps its data and the caller
+      // sees the failure — losing the corpus and the explanation together is the worst outcome.
+      await archiveRun(input.dataDir, record);
+
+      try {
+        const purged = await client.deleteRun(runId);
+        vectorsPurged = purged.vectorsPurged;
+        crawlDataDeleted = purged.crawlDataDeleted;
+      } catch (err) {
+        errors.push(`deleteRun: ${err instanceof Error ? err.message : String(err)}`);
+      }
+
+      // Only once the authority has actually dropped the run. A purge that failed leaves rows
+      // alive, and clearing the local record then would strand them with nothing on this machine
+      // pointing at them — the exact orphan state this plan exists to remove.
+      if (crawlDataDeleted) {
+        for (const target of [
+          path.join(input.dataDir, 'runs', runId),
+          path.join(input.dataDir, '.crawlee', runId),
+        ]) {
+          try {
+            await rm(target, { recursive: true, force: true });
+            localRemoved.push(target);
+          } catch (err) {
+            errors.push(`${target}: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
+      }
+
+      // Rewrite with what actually happened. The first write guaranteed the post-mortem exists;
+      // this one makes it accurate.
+      record.purge = {
+        vectorsPurged,
+        crawlDataDeleted,
+        localRemoved,
+        ...(errors.length > 0 ? { errors } : {}),
+      };
+      await archiveRun(input.dataDir, record);
+
+      console.log(
+        JSON.stringify({
+          event: 'run_purged',
+          runId,
+          status,
+          pagesSaved,
+          linksSaved,
+          vectorsPurged,
+          crawlDataDeleted,
+          localRemoved: localRemoved.length,
+          ...(errors.length > 0 ? { errors } : {}),
+        }),
+      );
     },
 
     throwIfPersistenceFailed() {
