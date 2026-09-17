@@ -7,6 +7,7 @@ import {
 import { parseCrawlType, type CrawlType } from './types.js';
 import { createJsonRunStore, type CrawlRunMeta } from '../storage/runs.js';
 import { seedHostKey } from '../storage/seed-key.js';
+import { requireGeekApiEnv } from '../storage/geek-api-client.js';
 
 export type StartCrawlOptions = {
   seeds: string[];
@@ -14,15 +15,14 @@ export type StartCrawlOptions = {
   dataDir?: string;
   maxRequestsPerCrawl?: number;
   maxConcurrency?: number;
-  runId?: string;
 };
 
 export async function startCrawl(options: StartCrawlOptions) {
+  requireGeekApiEnv();
   const crawlType: CrawlType = parseCrawlType(options.crawlType);
   const dataDir = path.resolve(options.dataDir ?? process.env.DATA_DIR ?? './data');
 
   return runCheerioCrawl({
-    runId: options.runId,
     crawlType,
     seeds: options.seeds,
     dataDir,
@@ -33,11 +33,11 @@ export async function startCrawl(options: StartCrawlOptions) {
 
 /** Begin persist (GeekAPI run id) then return; caller schedules `run()`. */
 export async function prepareCrawl(options: StartCrawlOptions) {
+  requireGeekApiEnv();
   const crawlType: CrawlType = parseCrawlType(options.crawlType);
   const dataDir = path.resolve(options.dataDir ?? process.env.DATA_DIR ?? './data');
 
   return prepareCheerioCrawl({
-    runId: options.runId,
     crawlType,
     seeds: options.seeds,
     dataDir,
@@ -46,7 +46,7 @@ export async function prepareCrawl(options: StartCrawlOptions) {
   });
 }
 
-/** Resume existing runId using persisted `.crawlee/<runId>` queue. */
+/** Resume is forbidden — start a new run. */
 export async function prepareResumeCrawl(options: {
   runId: string;
   dataDir?: string;
@@ -63,8 +63,8 @@ export async function prepareResumeCrawl(options: {
 }
 
 /**
- * Find a local run whose seeds include this URL (1 run ↔ 1 seed going forward).
- * Prefers incomplete runs, then newest.
+ * Find a local scratch run whose seeds include this URL (control plane only).
+ * Prefers incomplete runs, then newest. Not crawl authority.
  */
 export async function findRunIdBySeedUrl(options: {
   url: string;

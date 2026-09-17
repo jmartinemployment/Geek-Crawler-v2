@@ -85,7 +85,10 @@ export async function middleware(request: NextRequest) {
     }
     return response;
   } catch {
-    return NextResponse.next();
+    const dead = NextResponse.next();
+    dead.cookies.set(REFRESH_COOKIE, "", cookieOpts.clear);
+    dead.cookies.set(ACCESS_COOKIE, "", cookieOpts.clear);
+    return dead;
   }
 }
 

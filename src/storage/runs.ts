@@ -28,6 +28,7 @@ export type CrawlRunMeta = {
   enqueueAttempts?: number;
   enqueueSuppressedLocal?: number;
   enqueueSuppressedQueue?: number;
+  enqueueSuppressedSectionQuota?: number;
   httpRequests?: number;
   browserRenders?: number;
   extractionInvocations?: number;
@@ -94,6 +95,7 @@ export type RunStore = {
       enqueueAttempts?: number;
       enqueueSuppressedLocal?: number;
       enqueueSuppressedQueue?: number;
+      enqueueSuppressedSectionQuota?: number;
       httpRequests?: number;
       browserRenders?: number;
       extractionInvocations?: number;
@@ -253,6 +255,7 @@ export function createJsonRunStore(dataDir: string): RunStore {
           'enqueueAttempts',
           'enqueueSuppressedLocal',
           'enqueueSuppressedQueue',
+          'enqueueSuppressedSectionQuota',
           'httpRequests',
           'browserRenders',
           'extractionInvocations',

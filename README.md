@@ -10,13 +10,13 @@ Geek-Crawler v2 builds clean, citation-ready research corpora from partner and c
 
 ### Capabilities
 
-- Sitemap-first inventory with same-origin discovery fallback
-- Cheerio crawling with selective Playwright fallback for JavaScript shells
+- Sitemap-first inventory with same-origin discovery when no sitemap applies
+- Cheerio primary crawl; explicit Playwright backup path for non-viable static HTML (logged, contract-preserving)
 - Tracking-parameter normalization and US/English locale filtering
-- `robots.txt` handling, retries, configurable concurrency, and durable resume queues
+- `robots.txt` handling, configurable concurrency, and durable resume queues (Crawlee request-queue behavior for **source-page fetching** is not GeekAPI ingest retry)
 - Cloudflare/challenge, locale, and empty-content rejection before corpus storage
 - Mozilla Readability + Turndown extraction into title, excerpt, and Markdown
-- Local storage or authenticated GeekAPI ingestion
+- Local storage or authenticated GeekAPI ingestion (**no application-level retries** on `pages/batch` / `links/batch` — fail closed; see sibling Rag `plans/rules.md` §3a)
 - Next.js operator UI with OAuth, SignalR progress, coverage reports, and CSV export
 
 ### Technology
@@ -79,7 +79,7 @@ Then on the home page: enter one seed URL, set max requests / max concurrency, *
 
 - **One seed URL = one `runId`**
 - **Max concurrency** = parallel fetches *for that run* (default 1 in the UI)
-- **Request budget** = locale-filtered sitemap URL count when a map exists (no Max requests field). Optional API/CLI `--max` / `maxRequestsPerCrawl` overrides for smoke tests. No sitemap → uncapped until the queue drains.
+- **Request budget** = locale-filtered sitemap URL count when a map exists (no Max requests field), clamped to the per-site cap of **2,500 pages** (`MAX_PAGES_PER_SITE` in `src/crawl/crawl-limits.ts`). Optional API/CLI `--max` / `maxRequestsPerCrawl` overrides are clamped to the same cap. Known low-quality directories carry per-section page quotas (`src/crawl/section-quota.ts`, override with `SECTION_PAGE_QUOTA`).
 - **Locale filter on sitemap map** (crawl + report): **keep** `/us/…`; **drop** other region dirt (`/gb/`, `/uk/`, `/au/`, …) and non-English languages (`/fr/`, `/de/`, …); **strip** English language prefixes only (`/en/`, `/en-us/`, …) to the bare path
 - **Unusable pages are not stored** — Cloudflare/challenge interstitials, locale-excluded final URLs, and empty Readability extracts are **rejected** (counters + capped URL samples on the run / seed report). Corpus HTML/markdown is only saved for viable pages.
 - **Sign in** (nav) is only needed for live SignalR; crawls and reports work without it. Without a token the run page shows `Live updates off — no hub token` and skips the connection entirely — no console errors, no retries. Set `GEEK_USER_ACCESS_TOKEN` in `web/.env.local` to get live status without signing in. See [web/README.md](./web/README.md#live-status-signalr-is-optional)

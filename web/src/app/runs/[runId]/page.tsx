@@ -1,4 +1,5 @@
 import { RunLiveView } from "@/components/run-live-view";
+import { RunActions } from "@/components/run-actions";
 
 type Props = { params: Promise<{ runId: string }> };
 
@@ -12,6 +13,7 @@ export default async function RunDetailPage({ params }: Props) {
           Seed report + URL table from GeekAPI. Refresh the page to update.
         </p>
       </div>
+      <RunActions runId={runId} />
       <RunLiveView runId={runId} />
     </div>
   );

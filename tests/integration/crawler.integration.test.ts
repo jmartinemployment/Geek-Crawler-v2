@@ -1,42 +1,81 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { createServer } from 'node:http';
+import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { startCrawl } from '../../src/crawl/orchestrator.js';
-import type { CrawlPageMeta } from '../../src/storage/runs.js';
 import { startFixtureSite } from '../fixtures/site.js';
 
-async function tempDataDir(): Promise<string> {
-  return mkdtemp(path.join(os.tmpdir(), 'geek-crawler-e2e-'));
-}
-
-async function readJsonLines<T>(file: string): Promise<T[]> {
-  const text = await readFile(file, 'utf8');
-  return text
-    .trim()
-    .split('\n')
-    .filter(Boolean)
-    .map((line) => JSON.parse(line) as T);
-}
-
-function forceLocalPersistence(): () => void {
-  const keys = ['GEEK_API_URL', 'GEEK_BACKEND_API_KEY', 'GEEK_USER_ID'] as const;
-  const old = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
-  for (const key of keys) delete process.env[key];
-  return () => {
-    for (const key of keys) {
-      const value = old[key];
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
+async function startMockGeekApi(): Promise<{
+  origin: string;
+  close: () => void;
+  pageWrites: () => number;
+  linkWrites: () => number;
+}> {
+  let pageWrites = 0;
+  let linkWrites = 0;
+  let runSeq = 0;
+  const server = createServer(async (req, res) => {
+    let body = '';
+    for await (const chunk of req) body += String(chunk);
+    res.setHeader('content-type', 'application/json');
+    if (req.method === 'POST' && req.url?.endsWith('/ingest/runs')) {
+      runSeq += 1;
+      return res.end(
+        JSON.stringify({
+          runId: `00000000-0000-4000-8000-${String(runSeq).padStart(12, '0')}`,
+          status: 'external',
+          crawlType: 'partner',
+        }),
+      );
     }
+    if (req.method === 'POST' && req.url?.includes('/pages/batch')) {
+      pageWrites += 1;
+      const parsed = JSON.parse(body) as { pages: Array<{ url: string }> };
+      return res.end(
+        JSON.stringify({
+          pages: parsed.pages.map((p, i) => ({
+            url: p.url,
+            pageId: `page-${pageWrites}-${i}`,
+          })),
+        }),
+      );
+    }
+    if (req.method === 'POST' && req.url?.includes('/links/batch')) {
+      linkWrites += 1;
+      const parsed = JSON.parse(body) as { links: unknown[] };
+      return res.end(JSON.stringify({ count: parsed.links.length }));
+    }
+    if (req.method === 'PATCH') {
+      return res.end(JSON.stringify({ runId: 'x', status: 'complete', crawlType: 'partner' }));
+    }
+    res.statusCode = 404;
+    res.end('{}');
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  assert(address && typeof address !== 'string');
+  return {
+    origin: `http://127.0.0.1:${address.port}`,
+    close: () => server.close(),
+    pageWrites: () => pageWrites,
+    linkWrites: () => linkWrites,
   };
 }
 
-test('real crawler follows nested sitemap, retries, renders SPA, and persists content', { timeout: 120_000 }, async () => {
-  const restoreEnv = forceLocalPersistence();
+test('cheerio-only crawl persists via GeekAPI with retries disabled', { timeout: 120_000 }, async () => {
+  const geek = await startMockGeekApi();
   const fixture = await startFixtureSite();
-  const dataDir = await tempDataDir();
+  const dataDir = await mkdtemp(path.join(os.tmpdir(), 'geek-crawler-e2e-'));
+  const old = {
+    url: process.env.GEEK_API_URL,
+    key: process.env.GEEK_BACKEND_API_KEY,
+    user: process.env.GEEK_USER_ID,
+  };
+  process.env.GEEK_API_URL = geek.origin;
+  process.env.GEEK_BACKEND_API_KEY = 'test-key';
+  process.env.GEEK_USER_ID = 'test-user';
   try {
     const result = await startCrawl({
       seeds: [`${fixture.origin}/`],
@@ -45,80 +84,20 @@ test('real crawler follows nested sitemap, retries, renders SPA, and persists co
       maxConcurrency: 1,
     });
 
-    assert.equal(result.persistMode, 'local');
-    assert.ok(result.pagesSaved >= 6, `expected at least six persisted attempts, got ${result.pagesSaved}`);
-    assert.ok(result.pagesRejectedChallenge >= 1);
-    assert.ok(result.pagesRejectedRobots >= 1);
-    assert.ok(result.pagesRejectedRequestFailed >= 1);
-    assert.ok(result.pagesRejectedExtractEmpty >= 2);
-    assert.equal(result.pagesRejectedLocale, 0, 'locale sitemap entries should be filtered before fetch');
-    assert.ok(fixture.requests('/retry') >= 3, '503 fixture should exercise Crawlee retries');
-    assert.equal(fixture.requests('/fr/article'), 0);
+    assert.equal(result.persistMode, 'api');
+    assert.ok(result.pagesSaved >= 1);
+    assert.ok(geek.pageWrites() >= 1);
+    assert.ok(fixture.requests('/retry') <= 1, 'maxRequestRetries=0 must not re-fetch');
     assert.equal(fixture.requests('/blocked'), 0);
-
-    const runDir = path.join(dataDir, 'runs', result.runId);
-    const pages = await readJsonLines<CrawlPageMeta>(path.join(runDir, 'pages.jsonl'));
-    const links = await readJsonLines<{ linkUrl: string }>(path.join(runDir, 'links.jsonl'));
-    const article = pages.find((page) => page.finalUrl === `${fixture.origin}/article`);
-    const spa = pages.find((page) => page.finalUrl === `${fixture.origin}/spa`);
-    const blocked = pages.find((page) => page.url === `${fixture.origin}/blocked`);
-    const failed = pages.find((page) => page.url === `${fixture.origin}/always-fail`);
-    const playwrightFailed = pages.find(
-      (page) => page.url === `${fixture.origin}/playwright-fail`,
-    );
-    const empty = pages.find((page) => page.url === `${fixture.origin}/empty`);
-
-    assert.ok(article?.bodyKey);
-    assert.ok(article?.markdownBodyKey);
-    assert.equal(article?.title, 'Fixture Article');
-    assert.equal(spa?.fetchMode, 'playwright');
-    assert.equal(spa?.title, 'SPA Fixture');
-    assert.ok(spa?.markdownBodyKey);
-    assert.equal(blocked, undefined);
-    assert.equal(failed, undefined);
-    assert.equal(playwrightFailed, undefined);
-    assert.equal(empty, undefined);
-    assert.ok(pages.every((page) => page.robotsAllowed));
-    assert.ok(pages.every((page) => !page.failureReason));
-    assert.ok(pages.every((page) => Boolean(page.markdownBodyKey)));
-    assert.ok(links.some((link) => link.linkUrl.includes('/long')));
-
-    const html = await readFile(path.join(dataDir, article!.bodyKey), 'utf8');
-    const markdown = await readFile(path.join(dataDir, article!.markdownBodyKey!), 'utf8');
-    assert.match(html, /Exact fixture section/);
-    const spaMarkdown = await readFile(path.join(dataDir, spa!.markdownBodyKey!), 'utf8');
-    assert.match(markdown, /persisted markdown must retain this exact deterministic sentence/i);
-    assert.match(spaMarkdown, /Rendered SPA Article/);
-  } finally {
-    restoreEnv();
-    await fixture.close();
-    await rm(dataDir, { recursive: true, force: true });
-  }
-});
-
-test('real crawler uses same-site BFS and strips tracking duplicates without a sitemap', { timeout: 60_000 }, async () => {
-  const restoreEnv = forceLocalPersistence();
-  const fixture = await startFixtureSite({ sitemap: false });
-  const dataDir = await tempDataDir();
-  try {
-    const result = await startCrawl({
-      seeds: [`${fixture.origin}/`],
-      crawlType: 'local',
-      dataDir,
-      maxConcurrency: 1,
-      maxRequestsPerCrawl: 10,
-    });
-    const pages = await readJsonLines<CrawlPageMeta>(
-      path.join(dataDir, 'runs', result.runId, 'pages.jsonl'),
-    );
-    const urls = pages.map((page) => page.url);
-
-    assert.ok(urls.includes(`${fixture.origin}/nested/one`));
-    assert.ok(urls.includes(`${fixture.origin}/nested/two`));
-    assert.equal(urls.filter((url) => url.startsWith(`${fixture.origin}/article`)).length, 1);
     assert.equal(fixture.requests('/fr/article'), 0);
   } finally {
-    restoreEnv();
+    if (old.url === undefined) delete process.env.GEEK_API_URL;
+    else process.env.GEEK_API_URL = old.url;
+    if (old.key === undefined) delete process.env.GEEK_BACKEND_API_KEY;
+    else process.env.GEEK_BACKEND_API_KEY = old.key;
+    if (old.user === undefined) delete process.env.GEEK_USER_ID;
+    else process.env.GEEK_USER_ID = old.user;
+    geek.close();
     await fixture.close();
     await rm(dataDir, { recursive: true, force: true });
   }

@@ -1,25 +1,30 @@
-/** Server-only env for BFF routes. */
+/** Server-only env for BFF routes — required values, no silent host defaults. */
+
+function requireEnv(name: string): string {
+  const v = process.env[name]?.trim();
+  if (!v) {
+    throw new Error(`${name} is required`);
+  }
+  return v;
+}
+
 export function crawleeApiUrl(): string {
-  return (process.env.CRAWLEE_API_URL?.trim() || "http://127.0.0.1:8787").replace(
-    /\/$/,
-    "",
-  );
+  return requireEnv("CRAWLEE_API_URL").replace(/\/$/, "");
 }
 
 export function geekApiUrl(): string {
-  return (
+  const explicit =
     process.env.GEEK_API_URL?.trim() ||
-    process.env.NEXT_PUBLIC_GEEK_API_URL?.trim() ||
-    "https://api.geekatyourspot.com"
-  ).replace(/\/$/, "");
+    process.env.NEXT_PUBLIC_GEEK_API_URL?.trim();
+  if (!explicit) {
+    throw new Error("GEEK_API_URL or NEXT_PUBLIC_GEEK_API_URL is required");
+  }
+  return explicit.replace(/\/$/, "");
 }
 
 export function geekApiHeaders(): HeadersInit {
-  const key = process.env.GEEK_BACKEND_API_KEY?.trim();
-  const userId = process.env.GEEK_USER_ID?.trim();
-  if (!key || !userId) {
-    throw new Error("GEEK_BACKEND_API_KEY and GEEK_USER_ID required in web/.env.local");
-  }
+  const key = requireEnv("GEEK_BACKEND_API_KEY");
+  const userId = requireEnv("GEEK_USER_ID");
   return {
     Accept: "application/json",
     "X-API-Key": key,

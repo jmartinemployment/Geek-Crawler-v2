@@ -2,6 +2,7 @@ import { hostnameKey } from './links.js';
 import { localeNormalizeForMap } from './locale-path.js';
 import { BOT } from '../bot/identity.js';
 import { crawlDedupKey, type AliasTable } from './dedup.js';
+import type { SectionQuota } from './section-quota.js';
 
 const MAX_SITEMAPS = 40;
 const MAX_URLS = 50_000;
@@ -201,9 +202,38 @@ export async function loadSiteMapIndex(seeds: string[]): Promise<SiteMapIndex> {
 export type EnqueueDedupOpts = {
   /** Redirect alias table — compare on resolved dedup keys. */
   aliases?: AliasTable;
-  /** Mutated: enqueueAttempts / enqueueSuppressedLocal. */
-  counters?: { enqueueAttempts: number; enqueueSuppressedLocal: number };
+  /** Mutated: enqueueAttempts / enqueueSuppressedLocal / enqueueSuppressedSectionQuota. */
+  counters?: {
+    enqueueAttempts: number;
+    enqueueSuppressedLocal: number;
+    enqueueSuppressedSectionQuota: number;
+  };
+  /** Per-directory page caps; shared by both enqueue planes. */
+  quota?: SectionQuota;
 };
+
+/** Shallowest path first, then lexicographic — deterministic across runs. */
+export function sectionAdmissionOrder(urls: string[]): string[] {
+  const depth = (u: string): number => {
+    try {
+      return new URL(u).pathname.split('/').filter(Boolean).length;
+    } catch {
+      return Number.MAX_SAFE_INTEGER;
+    }
+  };
+  return [...urls].sort((a, b) => {
+    const d = depth(a) - depth(b);
+    return d !== 0 ? d : a.localeCompare(b);
+  });
+}
+
+function admitBySection(url: string, opts?: EnqueueDedupOpts): boolean {
+  if (!opts?.quota) return true;
+  if (opts.quota.admit(url)) return true;
+  if (opts.counters) opts.counters.enqueueSuppressedSectionQuota += 1;
+  return false;
+}
+
 
 function compareKey(url: string, aliases?: AliasTable): string {
   const k = crawlDedupKey(url) ?? url;
@@ -234,6 +264,7 @@ export function filterEnqueueUrls(
       continue;
     }
     if (map.hasMap && !map.urls.has(n)) continue;
+    if (!admitBySection(n, opts)) continue;
     seen.add(ck);
     out.push(n);
   }
@@ -262,13 +293,14 @@ export function initialCrawlUrls(
     out.push(n);
   }
   if (map.hasMap) {
-    for (const u of map.urls) {
+    for (const u of sectionAdmissionOrder([...map.urls])) {
       if (opts?.counters) opts.counters.enqueueAttempts += 1;
       const ck = compareKey(u, opts?.aliases);
       if (seen.has(ck)) {
         if (opts?.counters) opts.counters.enqueueSuppressedLocal += 1;
         continue;
       }
+      if (!admitBySection(u, opts)) continue;
       seen.add(ck);
       out.push(u);
       if (out.length >= MAX_URLS + seeds.length) break;

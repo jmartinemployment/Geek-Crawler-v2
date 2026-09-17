@@ -1,0 +1,30 @@
+---
+description: No Retries, No Fallbacks, No Crappy Code — one path, one attempt, one result
+alwaysApply: true
+---
+
+# No Retries. No Fallbacks. No Crappy Code.
+
+Sibling plan: `plans/fail-closed-geekapi-ingest.md`.
+
+## Law
+
+Every required operation has **one** selected implementation, **one** request attempt, **one** response schema, and **one** terminal result: success or failure.
+
+A failure **stops the affected run** and is never redirected, replayed, retried, substituted, locally persisted as authority, or converted into partial/degraded success.
+
+## Hard requirements
+
+- GeekAPI only for crawl authority (`GEEK_API_URL`, `GEEK_BACKEND_API_KEY`, `GEEK_USER_ID`).
+- CheerioCrawler only; `maxRequestRetries: 0`; no Playwright product path.
+- Readability only; no semantic-DOM extract alternate.
+- Robots fail-closed: cannot fetch/parse → do not crawl that origin.
+- One `pages/batch` / `links/batch` attempt; canonical JSON only; atomic links (no client chunking).
+- No resume of failed runs; start a new run.
+- No local mirror / failed stub as authority.
+- Serialize GeekAPI writes; first persistence failure is terminal.
+
+## Do not confuse
+
+Crawlee request-queue disk under `.crawlee/` is engine scratch, not crawl authority.
+React Suspense loading UI is not a data-path alternate.

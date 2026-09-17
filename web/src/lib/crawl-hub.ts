@@ -1,6 +1,6 @@
 /**
  * SignalR client for GeekAPI `/hubs/geek-crawler-realtime`.
- * Needs GEEK_USER_ACCESS_TOKEN via `/api/auth/hub-token`.
+ * Needs a session JWT from `/api/auth/hub-token` (OAuth sign-in).
  * No timer polling; live status uses GeekCrawlerEvent after JoinGeekCrawlerRun.
  */
 import {

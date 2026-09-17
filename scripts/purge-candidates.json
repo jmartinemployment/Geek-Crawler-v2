@@ -1,0 +1,170 @@
+{
+  "generatedAt": "2026-09-16T12:48:13.405Z",
+  "source": "live row counts via GeekAPI page-urls paging (not mongoPageCount, which is stale)",
+  "criteria": "status in (failed, external) and pages > 0 — unusable under fail-closed policy: failed runs are never resumed, orphaned external runs never completed and are not markdown-ready",
+  "totalRuns": 20,
+  "totalPages": 119849,
+  "estGb": 52.4,
+  "runs": [
+    {
+      "runId": "9c758cf7-7960-4c4c-b4e1-41dc2f6f0b36",
+      "seed": "https://www.pabbly.com",
+      "status": "failed",
+      "pages": 18568,
+      "avgKbPerPage": 767,
+      "estMb": 13908
+    },
+    {
+      "runId": "3427752f-5472-4c15-a8e5-bd49fd82d85a",
+      "seed": "https://clickup.com",
+      "status": "external",
+      "pages": 12327,
+      "avgKbPerPage": 1063,
+      "estMb": 12796
+    },
+    {
+      "runId": "b51485e9-fe52-4c6c-8eaf-5c69c8e764ed",
+      "seed": "https://www.leadsquared.com/us/",
+      "status": "external",
+      "pages": 31682,
+      "avgKbPerPage": 254,
+      "estMb": 7859
+    },
+    {
+      "runId": "14733251-58b1-46c7-a3df-40d38601c7c9",
+      "seed": "https://www.avalara.com/us/en/index.html",
+      "status": "failed",
+      "pages": 28250,
+      "avgKbPerPage": 247,
+      "estMb": 6814
+    },
+    {
+      "runId": "09f9f61a-c15d-4601-9f41-a9a3cd17ee8b",
+      "seed": "https://ramp.com",
+      "status": "failed",
+      "pages": 3344,
+      "avgKbPerPage": 1286,
+      "estMb": 4200
+    },
+    {
+      "runId": "bfa02724-e56e-4472-b6a9-510fbff4105b",
+      "seed": "https://www.notion.com",
+      "status": "failed",
+      "pages": 4247,
+      "avgKbPerPage": 684,
+      "estMb": 2837
+    },
+    {
+      "runId": "35f41ddc-ad2f-4397-b108-68b2a641c31e",
+      "seed": "https://www.xero.com/us/",
+      "status": "failed",
+      "pages": 5214,
+      "avgKbPerPage": 287,
+      "estMb": 1461
+    },
+    {
+      "runId": "61c45539-5574-47b9-8c30-907d120c8af7",
+      "seed": "https://botpenguin.com",
+      "status": "external",
+      "pages": 1170,
+      "avgKbPerPage": 583,
+      "estMb": 666
+    },
+    {
+      "runId": "79bea9a5-a2ba-4197-b39f-97838a0ad13f",
+      "seed": "https://speakai.co",
+      "status": "external",
+      "pages": 1033,
+      "avgKbPerPage": 643,
+      "estMb": 649
+    },
+    {
+      "runId": "2600254c-ec2c-40fb-9e08-6e611329bed6",
+      "seed": "https://customgpt.ai",
+      "status": "failed",
+      "pages": 1222,
+      "avgKbPerPage": 495,
+      "estMb": 591
+    },
+    {
+      "runId": "efdf53e4-3026-40ec-a821-0389e9f3c5f2",
+      "seed": "https://www.corpay.com",
+      "status": "failed",
+      "pages": 2210,
+      "avgKbPerPage": 270,
+      "estMb": 583
+    },
+    {
+      "runId": "ed17aa41-fbf8-4fdd-8ee1-2b236f5eaab0",
+      "seed": "https://synthflow.ai",
+      "status": "failed",
+      "pages": 1439,
+      "avgKbPerPage": 216,
+      "estMb": 304
+    },
+    {
+      "runId": "c0bd2dba-ac7d-4f0a-8cb3-cef4d47923f2",
+      "seed": "https://elevenlabs.io",
+      "status": "failed",
+      "pages": 369,
+      "avgKbPerPage": 816,
+      "estMb": 294
+    },
+    {
+      "runId": "1d3963ef-9fc5-453c-97be-8096ed141a74",
+      "seed": "https://www.chaserhq.com",
+      "status": "external",
+      "pages": 730,
+      "avgKbPerPage": 355,
+      "estMb": 253
+    },
+    {
+      "runId": "de16b3c2-67cb-41c9-8a56-e055b39ab1e2",
+      "seed": "https://tipalti.com",
+      "status": "failed",
+      "pages": 1301,
+      "avgKbPerPage": 182,
+      "estMb": 231
+    },
+    {
+      "runId": "7bba23c2-f405-4759-9f0c-89608e2aecde",
+      "seed": "https://publer.com",
+      "status": "failed",
+      "pages": 5410,
+      "avgKbPerPage": 36,
+      "estMb": 190
+    },
+    {
+      "runId": "cf46aaed-9ec7-401f-89ca-288c18ee67f6",
+      "seed": "https://contentstudio.io",
+      "status": "failed",
+      "pages": 155,
+      "avgKbPerPage": 164,
+      "estMb": 25
+    },
+    {
+      "runId": "00dbbc96-4e94-4dbb-8e06-c10f9310d323",
+      "seed": "https://publer.com",
+      "status": "external",
+      "pages": 127,
+      "avgKbPerPage": 142,
+      "estMb": 18
+    },
+    {
+      "runId": "b124ef74-6bbc-4038-ab10-d38e66d35c79",
+      "seed": "https://www.zoho.com",
+      "status": "external",
+      "pages": 943,
+      "avgKbPerPage": 4,
+      "estMb": 4
+    },
+    {
+      "runId": "0d0d347d-37cc-40f8-a973-9759eb08b2c8",
+      "seed": "https://adzooma.com",
+      "status": "failed",
+      "pages": 108,
+      "avgKbPerPage": 0,
+      "estMb": 0
+    }
+  ]
+}

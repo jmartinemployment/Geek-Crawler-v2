@@ -1,5 +1,6 @@
 import { crawleeApiUrl, geekApiHeaders, geekApiUrl } from "@/lib/server-env";
 import { countSitemapPages } from "@/lib/sitemap-count";
+import { expectedPageTotal } from "@/lib/crawl-limits";
 
 export type HostRow = {
   origin?: string;
@@ -351,7 +352,7 @@ export async function buildSeedReportForRun(
     const sm = sitemapBySeed.get(seedUrl);
     const sitemapUrlCount = sm?.sitemapUrlCount ?? 0;
     const sitemapPathCount = sm?.sitemapPathCount ?? 0;
-    const totalForPct = sitemapPathCount || sitemapUrlCount;
+    const totalForPct = expectedPageTotal(sitemapPathCount || sitemapUrlCount);
     const failureReason =
       host?.lastFailureReason ||
       errorSummary ||
