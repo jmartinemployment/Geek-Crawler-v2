@@ -1,62 +1,86 @@
 /**
  * Per-crawl-type scope policy.
  *
- * Until now crawl type was a pure label — nothing branched on it, so every crawl ran the same
- * budget and the same section quotas. That is wrong for the operator's own site, where the crawl
- * exists to build a heading hierarchy rather than to gather quotable prose.
+ * Each crawl type carries its own configuration. That is design intent, not an optimisation: the
+ * types answer different questions, so they cannot share a budget.
  *
- * Scope and retention are separate concerns. This file is scope only: how much to fetch and from
- * where. What is kept per page is decided downstream.
+ *   partner       evidence to cite — capabilities, pricing, integrations, limits, ICP.
+ *                 Mandatory on every create. The one type that genuinely needs depth.
+ *   competitors   the angle — gaps, positioning, honest comparison. A thin slice, never required.
+ *                 You want their services / about / pricing, not their blog archive.
+ *   local         geography — local SEO pages. Few by nature.
+ *   project-site  grounding — heading hierarchy, brand voice, placement, anti-duplication.
+ *                 The whole of your own site.
+ *
+ * Scope only. What is kept per page is a separate concern, decided downstream.
  */
 
 import { CrawlTypes, type CrawlType } from './types.js';
-import { MAX_PAGES_PER_SITE } from './crawl-limits.js';
-import { DEFAULT_SECTION_QUOTAS, resolveSectionQuotas } from './section-quota.js';
+import { MAX_PAGES_PER_SITE, clampToSiteCap } from './crawl-limits.js';
+import { resolveSectionQuotas } from './section-quota.js';
 
 export type CrawlProfile = {
   /** Page budget when the caller supplies none. Always clamped to MAX_PAGES_PER_SITE. */
   defaultMaxPages: number;
-  /** Maximum link depth from a seed. `null` means unlimited (the historical behaviour). */
+  /** Maximum link depth from a seed. `null` means unlimited. */
   maxDepth: number | null;
-  /**
-   * Section quotas to apply. `null` disables them entirely — every directory uncapped.
-   */
-  sectionQuotas: ReadonlyMap<string, number> | null;
+  /** Apply the section quota table. `false` leaves every directory uncapped. */
+  useSectionQuotas: boolean;
 };
 
 /**
- * The operator's own site.
- *
- * Section quotas are OFF. They exist to stop someone else's programmatic page farm eating the
- * budget; on your own site every directory is content you chose to publish. Leaving them on would
- * starve exactly the directories the grounding depends on — GccV2SiteHierarchyFromCrawl ranks
- * /tools second only to the homepage, and the anchors under those headings are where partner links
- * come from.
- *
- * Depth is capped because a site's heading structure lives near the surface; deep pagination adds
- * pages without adding hierarchy.
+ * Keyed by crawl type with no fallback branch, so adding a type is a compile error rather than a
+ * silent inheritance of someone else's configuration. The previous version collapsed partner,
+ * competitors and local into one THIRD_PARTY profile behind a ternary, which is how competitors
+ * ended up budgeted like a partner despite being a thin slice.
  */
-const PROJECT_SITE: CrawlProfile = {
-  defaultMaxPages: MAX_PAGES_PER_SITE,
-  maxDepth: 3,
-  sectionQuotas: null,
-};
+const PROFILES: Record<CrawlType, CrawlProfile> = {
+  // Evidence has to be thorough enough to cite. Quotas still apply — a partner's template farm is
+  // not evidence.
+  [CrawlTypes.Partner]: {
+    defaultMaxPages: MAX_PAGES_PER_SITE,
+    maxDepth: null,
+    useSectionQuotas: true,
+  },
 
-/** Third-party sites: quotas on, no depth limit, sitemap-bounded as before. */
-const THIRD_PARTY: CrawlProfile = {
-  defaultMaxPages: MAX_PAGES_PER_SITE,
-  maxDepth: null,
-  sectionQuotas: DEFAULT_SECTION_QUOTAS,
+  // PROPOSED, pending operator confirmation. A rival consultancy's positioning lives on a handful
+  // of pages — services, about, pricing. 2500 was the old number and it treated a thin slice like a
+  // partner corpus.
+  [CrawlTypes.Competitors]: {
+    defaultMaxPages: 150,
+    maxDepth: 2,
+    useSectionQuotas: true,
+  },
+
+  // PROPOSED, pending operator confirmation. Geographic pages are few by nature.
+  [CrawlTypes.Local]: {
+    defaultMaxPages: 100,
+    maxDepth: 2,
+    useSectionQuotas: true,
+  },
+
+  // Quotas OFF. They exist to stop a third party's page farm eating the budget; on your own site
+  // every directory is content you chose to publish, and quotas would starve the directories the
+  // heading hierarchy is built from. Depth is capped because structure lives near the surface.
+  [CrawlTypes.ProjectSite]: {
+    defaultMaxPages: MAX_PAGES_PER_SITE,
+    maxDepth: 3,
+    useSectionQuotas: false,
+  },
 };
 
 export function crawlProfileFor(crawlType: CrawlType): CrawlProfile {
-  return crawlType === CrawlTypes.ProjectSite ? PROJECT_SITE : THIRD_PARTY;
+  const profile = PROFILES[crawlType];
+  if (!profile) {
+    throw new Error(`No crawl profile for crawlType "${crawlType}" — add one before crawling.`);
+  }
+  return { ...profile, defaultMaxPages: clampToSiteCap(profile.defaultMaxPages) };
 }
 
 /**
- * Quota map for a crawl type, with SECTION_PAGE_QUOTA env overrides still applied for the types
- * that use quotas. Returns null when the profile disables them.
+ * Quota map for a crawl type, with SECTION_PAGE_QUOTA env overrides still applied. Returns null
+ * when the profile disables quotas.
  */
 export function sectionQuotasFor(crawlType: CrawlType): Map<string, number> | null {
-  return crawlProfileFor(crawlType).sectionQuotas === null ? null : resolveSectionQuotas();
+  return crawlProfileFor(crawlType).useSectionQuotas ? resolveSectionQuotas() : null;
 }
