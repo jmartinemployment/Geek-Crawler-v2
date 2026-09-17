@@ -203,6 +203,25 @@ function inlineText(node: DomNode): string {
   return out;
 }
 
+/**
+ * Every character in the subtree, block boundaries included. Used only for table
+ * cells: a cell is one unit of corpus, and `visit` does not descend into a row,
+ * so a `<td>` wrapping a `<p>` or an `<h3>` would otherwise contribute nothing
+ * at all. Measured on taxjar.com's comparison table, that lost four cells.
+ */
+function deepText(node: DomNode): string {
+  let out = '';
+  for (const child of node.children ?? []) {
+    if (child.type === 'text') {
+      out += child.data ?? '';
+      continue;
+    }
+    if (!isTagNode(child)) continue;
+    out += ' ' + deepText(child);
+  }
+  return out;
+}
+
 type WalkState = {
   blocks: Block[];
   /** Inline text seen in a generic container, awaiting a boundary. */
@@ -260,7 +279,7 @@ function emitRow(node: DomNode, state: WalkState): void {
     const name = child.name as string;
     if (name !== 'td' && name !== 'th') continue;
     if (name === 'th') header = true;
-    cells.push(collapse(inlineText(child)));
+    cells.push(collapse(deepText(child)));
   }
   if (cells.some((c) => c.length > 0)) state.blocks.push({ kind: 'row', header, cells });
 }

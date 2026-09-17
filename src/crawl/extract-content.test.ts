@@ -296,6 +296,29 @@ describe('semantic HTML output', () => {
     );
   });
 
+  it('keeps a table cell whose content is wrapped in a block element', () => {
+    // visit() does not descend into a row, so a cell built from <p>/<h3> -- the
+    // shape of taxjar.com's comparison table -- would contribute nothing.
+    const html =
+      '<html><body><main><table><tr>' +
+      '<th><h2>The difference is in the details</h2></th>' +
+      '<td><p>Meets requirements</p></td>' +
+      '<td><h3>Quality of support</h3></td>' +
+      '</tr></table></main></body></html>';
+
+    const out = extractCleanContent(html, 'https://fixture.test/');
+
+    assert.match(out.contentHtml ?? '', /Meets requirements/);
+    assert.match(out.contentHtml ?? '', /Quality of support/);
+    assert.match(out.contentHtml ?? '', /The difference is in the details/);
+    assert.equal(
+      ((out.contentHtml ?? '').match(/Meets requirements/g) ?? []).length,
+      1,
+      'taking the whole cell must not also emit its inner block',
+    );
+    assert.equal(out.blocks.filter((b) => b.kind === 'row').length, 1);
+  });
+
   it('escapes prose that would otherwise emit malformed HTML', () => {
     const html =
       '<html><body><main><p>Q&amp;A: are fees &lt; 1% of revenue?</p></main></body></html>';
