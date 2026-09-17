@@ -294,6 +294,14 @@ Consequences: `aria-hidden` elements are **not** stripped (without JS that ghost
 is the only place the headline text exists), and a detected SPA shell stays a
 rejected page rather than being promoted.
 
+A shell is also not a frontier. Its links are not enqueued, because following
+them spends the whole crawl budget on pages that will each be rejected in turn.
+And it is reported as `requires_javascript` under `excludedByPolicy` rather than
+as a failed extraction: needing a browser this crawler deliberately does not have
+is a fact about scope, not a fault. Only the `empty_or_spa_shell` signal maps
+there — `insufficient_text` and `body_too_small` are thin or truncated pages,
+which is a different fact and keeps `extract_empty`.
+
 ## Known consequence of the HTML output
 
 Inline links keep their label and lose their target: `[Buy Now & Save](/pricing)`
