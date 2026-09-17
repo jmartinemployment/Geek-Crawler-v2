@@ -122,8 +122,52 @@ extracted prose against the page's visible prose and reject outside a band;
 rejection is already first-class (`RejectReason`), so this needs a new reason,
 not a new mechanism.
 
-The band needs data, not a guess. Run the extractor across a sample of live pages
-from the seed list, look at the distribution, then choose.
+**Distribution, measured.** Two ratios, across 11 live pages on four sites
+(freshbooks, taxjar, n8n, geekatyourspot — home, pricing, feature and about
+pages, the shapes a partner crawl is made of):
+
+`capture` = prose kept / prose still in the DOM after pruning. Asks whether the
+block walk drops text that was there.
+
+| Page | capture |
+|---|---|
+| taxjar.com | 100% |
+| freshbooks.com | 101% |
+| geekatyourspot.com | 101% |
+
+Clean. The 1% over is a whitespace artifact of joining blocks, not extra
+content. This was 95% on taxjar until the table-cell fix.
+
+`share` = prose kept / prose a reader sees on the page (scripts and styles
+stripped from both sides — an earlier version of this measurement left inline
+JSON in the denominator and reported 1% for freshbooks, which was nonsense).
+
+| | share |
+|---|---|
+| min | 49% |
+| p25 | 50% |
+| p50 | 59% |
+| p75 | 71% |
+| max | 81% |
+
+**What this supports and what it does not.** Every page in the sample is a good
+extraction — capture confirms it — so the distribution establishes where *good*
+pages live, 49–81%, and says nothing about where bad ones start. It contains no
+negative examples.
+
+It is still decisive about the original failure: Readability returning 9% of
+freshbooks.com would have scored a share near 9%, forty points below the worst
+good page here. A **floor** around 25–30% would have caught it with wide margin.
+
+So the shape of the answer is a floor, not a band. No upper bound is needed —
+the 175% on geekatyourspot was Readability duplicating content, and a walk of the
+pruned DOM cannot exceed it.
+
+Not implemented. Calibrating a rejection threshold from eleven good pages and
+zero bad ones is the guess this section exists to prevent. What it needs is
+negative examples, and those come from 2d: the runs whose reject counters show
+they were already yielding nothing are exactly the sites that will score below
+the floor.
 
 ### 2c. Residual duplication — cause identified, was mis-diagnosed
 
