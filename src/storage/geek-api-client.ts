@@ -78,6 +78,8 @@ export type CrawlReport = {
   excludedByPolicy: {
     robotsDisallowed: number;
     localeExcluded: number;
+    /** Needs JavaScript to render. Out of scope for a static crawler, not broken. */
+    requiresJavascript: number;
   };
   failed: {
     /** Transport: DNS, reset, timeout, non-2xx. */

@@ -31,6 +31,28 @@ describe('crawl report mapping', () => {
     assert.equal(failed, 1);
   });
 
+  it('counts a JavaScript-only site as excluded by policy, not as a failure', () => {
+    const counters = emptyRejectCounters();
+    for (let i = 0; i < 25; i += 1) bumpRejectCounter(counters, 'requires_javascript');
+    bumpRejectCounter(counters, 'request_failed');
+
+    const excluded =
+      counters.pagesRejectedRobots +
+      counters.pagesRejectedLocale +
+      counters.pagesRejectedRequiresJavascript;
+    const failed =
+      counters.pagesRejectedRequestFailed +
+      counters.pagesRejectedChallenge +
+      counters.pagesRejectedExtractEmpty;
+
+    // Not having JavaScript is not a failure. This crawler runs none by design, so a page with
+    // nothing to say without it was never in scope — reporting 25 errors would say the crawl
+    // broke when it did exactly what it is built to do.
+    assert.equal(excluded, 25);
+    assert.equal(failed, 1);
+    assert.equal(counters.pagesRejectedExtractEmpty, 0, 'a shell is not an empty extraction');
+  });
+
   it('counts challenge pages apart from request failures', () => {
     const counters = emptyRejectCounters();
     for (let i = 0; i < 40; i += 1) bumpRejectCounter(counters, 'challenge_page');

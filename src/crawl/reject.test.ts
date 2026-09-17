@@ -87,6 +87,7 @@ describe('rejectStatsHostProgressEntry', () => {
     const entry = rejectStatsHostProgressEntry(
       {
         pagesRejectedLocale: 1,
+        pagesRejectedRequiresJavascript: 6,
         pagesRejectedChallenge: 2,
         pagesRejectedExtractEmpty: 3,
         pagesRejectedRobots: 4,

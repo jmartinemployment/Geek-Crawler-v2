@@ -7,6 +7,7 @@ import { shouldExcludeLocalePath } from './locale-path.js';
 
 export type RejectReason =
   | 'locale_excluded'
+  | 'requires_javascript'
   | 'challenge_page'
   | 'extract_empty'
   | 'robots_disallowed'
@@ -51,6 +52,12 @@ export function isExtractEmptyText(text: string | null | undefined): boolean {
 
 export type RejectCounters = {
   pagesRejectedLocale: number;
+  /**
+   * The page needs a browser to say anything. Not a failure: this crawler
+   * executes no JavaScript by design, so such a page is out of scope the same
+   * way a robots-disallowed URL is.
+   */
+  pagesRejectedRequiresJavascript: number;
   pagesRejectedChallenge: number;
   pagesRejectedExtractEmpty: number;
   pagesRejectedRobots: number;
@@ -60,6 +67,7 @@ export type RejectCounters = {
 export function emptyRejectCounters(): RejectCounters {
   return {
     pagesRejectedLocale: 0,
+    pagesRejectedRequiresJavascript: 0,
     pagesRejectedChallenge: 0,
     pagesRejectedExtractEmpty: 0,
     pagesRejectedRobots: 0,
@@ -71,6 +79,9 @@ export function bumpRejectCounter(counters: RejectCounters, reason: RejectReason
   switch (reason) {
     case 'locale_excluded':
       counters.pagesRejectedLocale += 1;
+      break;
+    case 'requires_javascript':
+      counters.pagesRejectedRequiresJavascript += 1;
       break;
     case 'challenge_page':
       counters.pagesRejectedChallenge += 1;
@@ -138,6 +149,7 @@ export class RejectSampleLog {
   snapshot(): Record<RejectReason, RejectSample[]> {
     return {
       locale_excluded: [...(this.samples.get('locale_excluded') ?? [])],
+      requires_javascript: [...(this.samples.get('requires_javascript') ?? [])],
       challenge_page: [...(this.samples.get('challenge_page') ?? [])],
       extract_empty: [...(this.samples.get('extract_empty') ?? [])],
       robots_disallowed: [...(this.samples.get('robots_disallowed') ?? [])],

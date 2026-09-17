@@ -165,9 +165,12 @@ export function createCrawlPersist(input: {
   /**
    * The completion report, from the counters this crawler already keeps.
    *
-   * robots and locale sit under excludedByPolicy rather than failures: the crawler was told not to
-   * take those pages and did not take them. A site whose robots.txt excludes 500 URLs is a crawl
-   * working correctly, and reporting 500 "errors" would bury the handful that actually failed.
+   * robots, locale and JavaScript-dependent pages sit under excludedByPolicy rather than failures:
+   * the crawler was told not to take those pages, or cannot by design, and did not take them. A site
+   * whose robots.txt excludes 500 URLs is a crawl working correctly, and reporting 500 "errors"
+   * would bury the handful that actually failed. Needing a browser is the same kind of fact: this
+   * crawler runs no JavaScript on purpose, so a page that has nothing to say without it was never
+   * in scope.
    */
   function crawlReport(): CrawlReport {
     return {
@@ -175,6 +178,7 @@ export function createCrawlPersist(input: {
       excludedByPolicy: {
         robotsDisallowed: rejectCounters.pagesRejectedRobots,
         localeExcluded: rejectCounters.pagesRejectedLocale,
+        requiresJavascript: rejectCounters.pagesRejectedRequiresJavascript,
       },
       failed: {
         requestFailed: rejectCounters.pagesRejectedRequestFailed,

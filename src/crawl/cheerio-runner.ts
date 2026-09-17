@@ -302,9 +302,21 @@ async function executeCheerioCrawl(
               persist.noteReject('challenge_page', finalUrl);
               return;
             }
-            persist.noteReject('extract_empty', finalUrl, viability.reason);
-            const links = extractHrefs($, finalUrl, scopeUrl);
-            await enqueueFiltered(enqueueLinks as never, sameOriginUrls(links), currentDepth);
+            // A page that carries no prose without JavaScript contributes
+            // nothing, its links included. There is no browser here, so every
+            // URL discovered on such a page would be fetched and rejected in
+            // turn -- the crawl would pay for the whole site and store none of
+            // it. The page is a dead end, not a frontier.
+            //
+            // The shell signal is reported as requires_javascript, not as a
+            // failed extraction: nothing here is broken. A static crawler
+            // meeting a JavaScript application is out of scope, the same as a
+            // robots-disallowed URL.
+            persist.noteReject(
+              viability.reason === 'empty_or_spa_shell' ? 'requires_javascript' : 'extract_empty',
+              finalUrl,
+              viability.reason,
+            );
             return;
           }
 
@@ -340,8 +352,7 @@ async function executeCheerioCrawl(
             text: clean.text,
           });
           if (extractReject === 'extract_empty') {
-            const links = extractHrefs($, finalUrl, scopeUrl);
-            await enqueueFiltered(enqueueLinks as never, sameOriginUrls(links), currentDepth);
+            // Same rule after extraction as before it: no prose, no frontier.
             persist.noteReject('extract_empty', finalUrl);
             return;
           }
