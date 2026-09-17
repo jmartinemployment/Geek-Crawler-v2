@@ -66,6 +66,30 @@ export function isGeekApiConfigured(): boolean {
   }
 }
 
+/**
+ * What a crawl did, as the crawler saw it.
+ *
+ * Excluded is not failed: a page skipped because robots.txt disallows it, or because it duplicates
+ * a page already held in the primary language, is policy working. Counting those as errors makes a
+ * healthy crawl look broken and buries the real failures under them.
+ */
+export type CrawlReport = {
+  linksStored: number;
+  excludedByPolicy: {
+    robotsDisallowed: number;
+    localeExcluded: number;
+  };
+  failed: {
+    /** Transport: DNS, reset, timeout, non-2xx. */
+    requestFailed: number;
+    /** Bot detection served an interstitial. Retrying cannot fix it — kept separate for that reason. */
+    challengePage: number;
+    /** Fetched, but extraction produced nothing usable. */
+    extractEmpty: number;
+  };
+  samples: Array<{ reason: string; url: string; detail?: string }>;
+};
+
 export class GeekApiClient {
   private readonly baseUrl: string;
   private readonly apiKey: string;
@@ -141,6 +165,15 @@ export class GeekApiClient {
       completedAtUtc?: string | null;
       markdownReadyAt?: string | null;
       clearMarkdownReadyAt?: boolean;
+      /**
+       * Completion report. Sent only on a terminal transition.
+       *
+       * This crawler is the only component that sees each fetch, so its classification of why a
+       * page did not become corpus is the authoritative one. It was written to local disk and never
+       * transmitted, leaving GeekAPI to re-derive a cruder count from whatever arrived in a batch —
+       * so "2,000 pages did not make it, why?" had no answer on the server at all.
+       */
+      report?: CrawlReport;
     },
   ): Promise<ApiRunSnapshot> {
     return this.request<ApiRunSnapshot>('PATCH', `/api/geek-crawler/ingest/runs/${runId}`, patch);

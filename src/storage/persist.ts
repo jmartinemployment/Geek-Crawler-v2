@@ -1,5 +1,5 @@
 import { createFilesystemRawBodyStore, type RawBodyStore } from './raw-body.js';
-import { createGeekApiClient, type GeekApiClient } from './geek-api-client.js';
+import { createGeekApiClient, type CrawlReport, type GeekApiClient } from './geek-api-client.js';
 import { PersistenceError, isPersistenceError } from './errors.js';
 import { createJsonRunStore, type CrawlLinkMeta, type RunStore } from './runs.js';
 import { computeSeedKey, normalizeSeeds, originOf } from './seed-key.js';
@@ -148,6 +148,33 @@ export function createCrawlPersist(input: {
     }
   }
 
+  /**
+   * The completion report, from the counters this crawler already keeps.
+   *
+   * robots and locale sit under excludedByPolicy rather than failures: the crawler was told not to
+   * take those pages and did not take them. A site whose robots.txt excludes 500 URLs is a crawl
+   * working correctly, and reporting 500 "errors" would bury the handful that actually failed.
+   */
+  function crawlReport(): CrawlReport {
+    return {
+      linksStored: linksSaved,
+      excludedByPolicy: {
+        robotsDisallowed: rejectCounters.pagesRejectedRobots,
+        localeExcluded: rejectCounters.pagesRejectedLocale,
+      },
+      failed: {
+        requestFailed: rejectCounters.pagesRejectedRequestFailed,
+        challengePage: rejectCounters.pagesRejectedChallenge,
+        extractEmpty: rejectCounters.pagesRejectedExtractEmpty,
+      },
+      // snapshot() is keyed by reason; flatten so each sample carries the reason it belongs to.
+      // A sample URL without its reason is not actionable.
+      samples: Object.entries(rejectSamples.snapshot()).flatMap(([reason, entries]) =>
+        entries.map((entry) => ({ reason, url: entry.url, detail: entry.detail })),
+      ),
+    };
+  }
+
   function hostProgressJson(): string {
     return JSON.stringify([
       rejectStatsHostProgressEntry(
@@ -205,6 +232,7 @@ export function createCrawlPersist(input: {
       await coordinator.run(() =>
         client.patchRun(runId, {
           status: 'complete',
+          report: crawlReport(),
           completedAtUtc,
           markdownReadyAt: markdownReady ? completedAtUtc : undefined,
           clearMarkdownReadyAt: !markdownReady,
@@ -221,6 +249,7 @@ export function createCrawlPersist(input: {
         await coordinator.run(() =>
           client.patchRun(runId, {
             status: 'cancelled',
+            report: crawlReport(),
             errorSummary: bounded,
             completedAtUtc,
             clearMarkdownReadyAt: true,
@@ -247,6 +276,7 @@ export function createCrawlPersist(input: {
         await coordinator.run(() =>
           client.patchRun(runId, {
             status: 'failed',
+            report: crawlReport(),
             errorSummary: bounded,
             completedAtUtc,
             hostProgressJson: hostProgressJson(),
