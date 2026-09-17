@@ -165,6 +165,13 @@ async function executeCheerioCrawl(
   };
 
   let depthSuppressed = 0;
+  /**
+   * Whether this run has already reported a body-rooted extract. Logged once per
+   * crawl, not once per page: a site that declares no `main` or `article`
+   * declares none on every page, and 2,500 identical warnings would bury the
+   * rest of the log.
+   */
+  let bodyRootReported = false;
 
   /**
    * `parentDepth` is the depth of the page whose links these are; seeds are depth 0. Enqueue is
@@ -345,6 +352,17 @@ async function executeCheerioCrawl(
           if (clean.truncated) {
             log.warning(
               `content truncated at cap [${new Date().toISOString()}]: ${finalUrl}`,
+            );
+          }
+          if (clean.contentRoot === 'body' && !bodyRootReported) {
+            bodyRootReported = true;
+            // Not an error: `body` is the last of the ordered content roots and a
+            // legitimate outcome. It does mean the site offers no semantic
+            // landmark to root the extract on, so whatever chrome the selector
+            // pass missed is inside the corpus for every page of it. Worth
+            // knowing while the crawl runs rather than inferring afterwards.
+            log.info(
+              `content root is body — site declares no main/article: ${finalUrl}`,
             );
           }
           const extractReject = classifyReject({
