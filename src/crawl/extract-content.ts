@@ -102,15 +102,22 @@ export type ContentRoot = 'main' | 'article' | 'role-main' | 'body';
  * One block of prose, typed. The chunker reads this rather than re-deriving
  * structure from punctuation or blank lines.
  */
+/**
+ * A link the corpus can cite. Carried as data as well as inline in `html`, so a
+ * consumer never has to parse markup to find out where a name points -- and so
+ * an embedding target can be plain prose while the citation survives beside it.
+ */
+export type Anchor = { label: string; href: string };
+
 export type Block =
-  | { kind: 'heading'; level: 1 | 2 | 3 | 4 | 5 | 6; text: string; html: string }
-  | { kind: 'paragraph'; text: string; html: string }
-  | { kind: 'listItem'; ordered: boolean; text: string; html: string }
-  | { kind: 'quote'; text: string; html: string }
-  | { kind: 'code'; text: string; html: string }
-  | { kind: 'row'; header: boolean; cells: string[]; cellsHtml: string[] }
-  | { kind: 'term'; text: string; html: string }
-  | { kind: 'definition'; text: string; html: string };
+  | { kind: 'heading'; level: 1 | 2 | 3 | 4 | 5 | 6; text: string; html: string; anchors: Anchor[] }
+  | { kind: 'paragraph'; text: string; html: string; anchors: Anchor[] }
+  | { kind: 'listItem'; ordered: boolean; text: string; html: string; anchors: Anchor[] }
+  | { kind: 'quote'; text: string; html: string; anchors: Anchor[] }
+  | { kind: 'code'; text: string; html: string; anchors: Anchor[] }
+  | { kind: 'row'; header: boolean; cells: string[]; cellsHtml: string[]; anchors: Anchor[] }
+  | { kind: 'term'; text: string; html: string; anchors: Anchor[] }
+  | { kind: 'definition'; text: string; html: string; anchors: Anchor[] };
 
 export type CleanContent = {
   title: string | null;
@@ -191,7 +198,7 @@ function collapse(value: string): string {
  * destination of each name *is* the content, and dropping the href leaves a
  * list of words that cite nothing.
  */
-type Inline = { text: string; html: string };
+type Inline = { text: string; html: string; anchors: Anchor[] };
 
 /** Absolute href, or null when the link is not one the corpus should keep. */
 function resolveHref(raw: string | undefined, pageUrl: string): string | null {
@@ -221,6 +228,7 @@ function attr(node: DomNode, name: string): string | undefined {
 function inlineParts(node: DomNode, pageUrl: string): Inline {
   let text = '';
   let html = '';
+  const anchors: Anchor[] = [];
   for (const child of node.children ?? []) {
     if (child.type === 'text') {
       const data = child.data ?? '';
@@ -233,14 +241,21 @@ function inlineParts(node: DomNode, pageUrl: string): Inline {
     if (BLOCK_TAGS.has(name) || STRUCTURE_TAGS.has(name)) continue;
     const inner = inlineParts(child, pageUrl);
     text += inner.text;
+    anchors.push(...inner.anchors);
     if (name === 'a') {
       const href = resolveHref(attr(child, 'href'), pageUrl);
-      html += href ? `<a href="${escapeHtml(href)}">${inner.html}</a>` : inner.html;
+      if (href) {
+        const label = collapse(inner.text);
+        if (label) anchors.push({ label, href });
+        html += `<a href="${escapeHtml(href)}">${inner.html}</a>`;
+      } else {
+        html += inner.html;
+      }
       continue;
     }
     html += inner.html;
   }
-  return { text, html };
+  return { text, html, anchors };
 }
 
 /**
@@ -252,6 +267,7 @@ function inlineParts(node: DomNode, pageUrl: string): Inline {
 function deepParts(node: DomNode, pageUrl: string): Inline {
   let text = '';
   let html = '';
+  const anchors: Anchor[] = [];
   for (const child of node.children ?? []) {
     if (child.type === 'text') {
       const data = child.data ?? '';
@@ -262,14 +278,21 @@ function deepParts(node: DomNode, pageUrl: string): Inline {
     if (!isTagNode(child)) continue;
     const inner = deepParts(child, pageUrl);
     text += ' ' + inner.text;
+    anchors.push(...inner.anchors);
     if ((child.name as string) === 'a') {
       const href = resolveHref(attr(child, 'href'), pageUrl);
-      html += ' ' + (href ? `<a href="${escapeHtml(href)}">${inner.html}</a>` : inner.html);
+      if (href) {
+        const label = collapse(inner.text);
+        if (label) anchors.push({ label, href });
+        html += ` <a href="${escapeHtml(href)}">${inner.html}</a>`;
+      } else {
+        html += ' ' + inner.html;
+      }
       continue;
     }
     html += ' ' + inner.html;
   }
-  return { text, html };
+  return { text, html, anchors };
 }
 
 type WalkState = {
@@ -280,6 +303,8 @@ type WalkState = {
   buffer: string;
   /** The same run with its anchors intact. */
   bufferHtml: string;
+  /** Anchors seen in that run, as data. */
+  bufferAnchors: Anchor[];
   /** Whether the nearest enclosing list is ordered. */
   ordered: boolean;
 };
@@ -287,9 +312,11 @@ type WalkState = {
 function flushBuffer(state: WalkState): void {
   const text = collapse(state.buffer);
   const html = collapse(state.bufferHtml);
+  const anchors = state.bufferAnchors;
   state.buffer = '';
   state.bufferHtml = '';
-  if (text) state.blocks.push({ kind: 'paragraph', text, html });
+  state.bufferAnchors = [];
+  if (text) state.blocks.push({ kind: 'paragraph', text, html, anchors });
 }
 
 function headingLevel(name: string): 1 | 2 | 3 | 4 | 5 | 6 {
@@ -302,13 +329,16 @@ function blockFor(name: string, inline: Inline, ordered: boolean): Block | null 
   const text = collapse(inline.text);
   if (!text) return null;
   const html = collapse(inline.html);
-  if (/^h[1-6]$/.test(name)) return { kind: 'heading', level: headingLevel(name), text, html };
-  if (name === 'li') return { kind: 'listItem', ordered, text, html };
-  if (name === 'blockquote') return { kind: 'quote', text, html };
-  if (name === 'pre') return { kind: 'code', text, html };
-  if (name === 'dt') return { kind: 'term', text, html };
-  if (name === 'dd') return { kind: 'definition', text, html };
-  return { kind: 'paragraph', text, html };
+  const anchors = inline.anchors;
+  if (/^h[1-6]$/.test(name)) {
+    return { kind: 'heading', level: headingLevel(name), text, html, anchors };
+  }
+  if (name === 'li') return { kind: 'listItem', ordered, text, html, anchors };
+  if (name === 'blockquote') return { kind: 'quote', text, html, anchors };
+  if (name === 'pre') return { kind: 'code', text, html, anchors };
+  if (name === 'dt') return { kind: 'term', text, html, anchors };
+  if (name === 'dd') return { kind: 'definition', text, html, anchors };
+  return { kind: 'paragraph', text, html, anchors };
 }
 
 /**
@@ -332,6 +362,7 @@ function walkNestedBlocks(node: DomNode, state: WalkState): void {
 function emitRow(node: DomNode, state: WalkState): void {
   const cells: string[] = [];
   const cellsHtml: string[] = [];
+  const rowAnchors: Anchor[] = [];
   let header = false;
   for (const child of node.children ?? []) {
     if (!isTagNode(child)) continue;
@@ -341,9 +372,10 @@ function emitRow(node: DomNode, state: WalkState): void {
     const parts = deepParts(child, state.pageUrl);
     cells.push(collapse(parts.text));
     cellsHtml.push(collapse(parts.html));
+    rowAnchors.push(...parts.anchors);
   }
   if (cells.some((c) => c.length > 0)) {
-    state.blocks.push({ kind: 'row', header, cells, cellsHtml });
+    state.blocks.push({ kind: 'row', header, cells, cellsHtml, anchors: rowAnchors });
   }
 }
 
@@ -404,9 +436,14 @@ function walkChildren(node: DomNode, state: WalkState): void {
       const inner = inlineParts(child, state.pageUrl);
       const href = resolveHref(attr(child, 'href'), state.pageUrl);
       state.buffer += inner.text;
-      state.bufferHtml += href
-        ? `<a href="${escapeHtml(href)}">${inner.html}</a>`
-        : inner.html;
+      state.bufferAnchors.push(...inner.anchors);
+      if (href) {
+        const label = collapse(inner.text);
+        if (label) state.bufferAnchors.push({ label, href });
+        state.bufferHtml += `<a href="${escapeHtml(href)}">${inner.html}</a>`;
+      } else {
+        state.bufferHtml += inner.html;
+      }
       // A card link wraps its whole card: `<a><h3>..</h3><p>..</p></a>`.
       // inlineParts stopped at those block boundaries, so without this the
       // card's heading and body would be lost entirely.
@@ -526,7 +563,9 @@ function truncateBlockText(block: Block, budget: number): Block | null {
   // Cut to plain prose: slicing markup could sever an anchor mid-tag, and the
   // fragment has to stay parseable above every other consideration.
   const text = block.text.slice(0, room);
-  return { ...block, text, html: escapeHtml(text) } as Block;
+  // Anchors are dropped with the markup: one whose label was cut would cite a
+  // phrase the fragment no longer contains.
+  return { ...block, text, html: escapeHtml(text), anchors: [] } as Block;
 }
 
 /** Plain text of a block, for the length and fidelity checks. */
@@ -609,6 +648,7 @@ export function extractCleanContent(html: string, pageUrl: string): CleanContent
       blocks: [],
       buffer: '',
       bufferHtml: '',
+      bufferAnchors: [],
       ordered: false,
     };
     walkChildren(rootNode, state);

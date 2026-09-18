@@ -427,6 +427,50 @@ describe('semantic HTML output', () => {
     );
   });
 
+  it('carries anchors as data on the block, not only inside the markup', () => {
+    // A consumer building an embedding target needs plain prose and the citation
+    // separately; neither should require parsing the fragment to recover.
+    const html =
+      '<html><body><main><p>Top tools: ' +
+      '<a href="/tools/accounting/melio">Melio</a> and ' +
+      '<a href="/tools/accounting/dext">Dext</a>.</p></main></body></html>';
+
+    const out = extractCleanContent(html, 'https://geekatyourspot.com/');
+    const block = out.blocks[0];
+
+    assert.equal(block?.kind, 'paragraph');
+    assert.deepEqual(block?.anchors, [
+      { label: 'Melio', href: 'https://geekatyourspot.com/tools/accounting/melio' },
+      { label: 'Dext', href: 'https://geekatyourspot.com/tools/accounting/dext' },
+    ]);
+    assert.equal(block?.text, 'Top tools: Melio and Dext.');
+  });
+
+  it('records no anchor for a link the corpus cannot follow', () => {
+    const out = extractCleanContent(
+      '<html><body><main><p>See <a href="#faq">the FAQ</a> below.</p></main></body></html>',
+      'https://geekatyourspot.com/',
+    );
+
+    assert.deepEqual(out.blocks[0]?.anchors, []);
+    assert.equal(out.blocks[0]?.text, 'See the FAQ below.');
+  });
+
+  it('collects anchors from a table row across its cells', () => {
+    const html =
+      '<html><body><main><table><tr>' +
+      '<td><a href="/tools/accounting/bill">BILL</a></td>' +
+      '<td><a href="/tools/accounting/ramp">Ramp</a></td>' +
+      '</tr></table></main></body></html>';
+
+    const out = extractCleanContent(html, 'https://geekatyourspot.com/');
+
+    assert.deepEqual(
+      out.blocks[0]?.anchors.map((a) => a.label),
+      ['BILL', 'Ramp'],
+    );
+  });
+
   it('truncates an oversized single block instead of returning nothing', () => {
     const html = `<html><body><article>${'word '.repeat(200_000)}</article></body></html>`;
 
