@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { access, mkdtemp, rm } from 'node:fs/promises';
+import { access, mkdtemp, readdir, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -122,6 +122,22 @@ test(
         await exists(path.join(dataDir, '.crawlee', RUN_ID)),
         false,
         'the request queue must be gone',
+      );
+
+      // The extract cache is the exception, and deliberately so. Every run fails
+      // while GeekAPI rejects contentHtml, so a cache inside run scratch would be
+      // destroyed on precisely the crawls worth inspecting. It has to outlive the
+      // purge for offline chunking to have a corpus at all.
+      const cacheDir = path.join(dataDir, 'extract-cache', RUN_ID);
+      assert.equal(await exists(cacheDir), true, 'the extract cache must survive the purge');
+      const cached = (await readdir(cacheDir)).sort();
+      assert.ok(
+        cached.some((f) => f.endsWith('.blocks.json')),
+        'the typed blocks survive',
+      );
+      assert.ok(
+        cached.some((f) => f.endsWith('.content.html')),
+        'the clean fragment survives',
       );
     } finally {
       if (old.url === undefined) delete process.env.GEEK_API_URL;
