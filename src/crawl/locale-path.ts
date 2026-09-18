@@ -51,8 +51,39 @@ function firstPathSegment(pathname: string): string | undefined {
   return pathname.split('/').filter(Boolean)[0];
 }
 
-function primaryLang(seg: string): string {
-  return seg.toLowerCase().split('-')[0] ?? '';
+export type LocaleSegment = {
+  /** Primary language subtag, lowercased. */
+  language: string;
+  /** Region subtag when the segment carries one, lowercased. */
+  region: string | undefined;
+};
+
+/**
+ * Parse a path segment as a BCP-47-shaped locale tag: `en`, `en-gb`, `gb`.
+ *
+ * One parse, so the rules below can be stated in terms of language and region
+ * rather than string prefixes. The earlier code compared whole segments against
+ * the region sets and took `split('-')[0]` for the language, which meant a
+ * compound tag was only ever judged by its language half: `en-gb` read as
+ * "English, therefore keep" and 264 GB-market pages entered a US crawl.
+ *
+ * A bare segment is ambiguous by nature — `ca` is both Catalan and Canada — so
+ * this records what it saw and leaves the decision to the caller's set.
+ * Returns null for anything that is not plausibly a tag, which is most of them.
+ */
+export function parseLocaleSegment(seg: string): LocaleSegment | null {
+  const match = /^([a-z]{2,3})(?:-([a-z]{2}|\d{3}))?$/i.exec(seg.trim());
+  if (!match) return null;
+  return { language: match[1]!.toLowerCase(), region: match[2]?.toLowerCase() };
+}
+
+/**
+ * The market a tag addresses. The region half wins when present: `en-gb` is
+ * English, but it serves the GB market, and market is what a US crawl budgets
+ * for. A bare tag is its own market candidate.
+ */
+function marketOf(tag: LocaleSegment): string {
+  return tag.region ?? tag.language;
 }
 
 function stripLeadingSegment(url: string, shouldStrip: (seg: string) => boolean): string {
@@ -71,6 +102,16 @@ function stripLeadingSegment(url: string, shouldStrip: (seg: string) => boolean)
   }
 }
 
+/** The leading locale tag of a URL path, or null when it carries none. */
+function leadingTag(url: string): LocaleSegment | null {
+  try {
+    const seg = firstPathSegment(new URL(url).pathname);
+    return seg ? parseLocaleSegment(seg) : null;
+  } catch {
+    return null;
+  }
+}
+
 /** True when first segment is an allowed `/us/` market prefix. */
 export function isUsRegionPath(url: string): boolean {
   try {
@@ -81,33 +122,22 @@ export function isUsRegionPath(url: string): boolean {
   }
 }
 
-/** True when first segment is a non-US market/region prefix to drop. */
+/** True when first segment addresses a market other than the kept one. */
 export function isDroppedRegionPath(url: string): boolean {
-  try {
-    const seg = firstPathSegment(new URL(url).pathname);
-    if (!seg) return false;
-    const lower = seg.toLowerCase();
-    if (KEEP_REGION.has(lower)) return false;
-    return DROP_REGION.has(lower);
-  } catch {
-    return false;
-  }
+  const tag = leadingTag(url);
+  if (!tag) return false;
+  const market = marketOf(tag);
+  if (KEEP_REGION.has(market)) return false;
+  return DROP_REGION.has(market);
 }
 
 /** True when URL path starts with a non-English locale prefix (not `/us/`). */
 export function isNonEnglishLocalePath(url: string): boolean {
-  try {
-    const { pathname } = new URL(url);
-    const seg = firstPathSegment(pathname);
-    if (!seg) return false;
-    const lower = seg.toLowerCase();
-    if (KEEP_REGION.has(lower)) return false;
-    const primary = primaryLang(seg);
-    if (primary === 'en') return false;
-    return NON_ENGLISH_LOCALE.has(primary);
-  } catch {
-    return false;
-  }
+  const tag = leadingTag(url);
+  if (!tag) return false;
+  if (KEEP_REGION.has(marketOf(tag))) return false;
+  if (tag.language === 'en') return false;
+  return NON_ENGLISH_LOCALE.has(tag.language);
 }
 
 /** Drop from map / BFS: foreign regions or non-English languages. */
@@ -121,7 +151,14 @@ export function shouldExcludeLocalePath(url: string): boolean {
  */
 export function stripEnglishLocalePrefix(url: string): string {
   if (isUsRegionPath(url)) return url;
-  return stripLeadingSegment(url, (seg) => primaryLang(seg) === 'en');
+  return stripLeadingSegment(url, (seg) => {
+    const tag = parseLocaleSegment(seg);
+    if (!tag || tag.language !== 'en') return false;
+    // Strip English only when it does not address a dropped market. /en-us/x
+    // and /x are the same page; /en-gb/x is not, and collapsing it here would
+    // let a GB page occupy the US path in map membership.
+    return !DROP_REGION.has(marketOf(tag));
+  });
 }
 
 /**
