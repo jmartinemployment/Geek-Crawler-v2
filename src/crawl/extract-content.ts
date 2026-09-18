@@ -14,12 +14,13 @@
  * footer, aside and the landmark roles are removed by selector, the content root
  * is simply the semantic one, and the same three pages measure 101-103%.
  *
- * The output is clean semantic HTML, not Markdown. Markdown marks a block only
- * by a blank line, so block boundaries survive as a whitespace convention that
- * every consumer has to re-infer, and nesting is flattened outright. Emitting
- * `<p>`, `<h2>`, `<li>` keeps the boundary in the data, where the chunker can
- * split on it instead of guessing. Nothing here converts to Markdown, and no
- * Markdown converter is involved: the DOM is walked once and re-emitted.
+ * The output is clean semantic HTML plus typed blocks. A plaintext convention
+ * that marks a block only by a blank line leaves the boundary as whitespace for
+ * every consumer to re-infer, and flattens nesting outright. Emitting `<p>`,
+ * `<h2>`, `<li>` keeps the boundary in the data, where the chunker splits on it
+ * instead of guessing, and heading depth comes from the tag rather than being
+ * counted. No conversion step runs here at all: the DOM is walked once and
+ * re-emitted.
  */
 
 import { load, type CheerioAPI } from 'cheerio';

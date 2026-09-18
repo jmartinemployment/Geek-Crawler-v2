@@ -289,8 +289,9 @@ its `fetchMode` union, and `src/bot/identity.ts` no longer refers to a Phase 1
 browser.
 
 `.cursor/rules/no-retries-no-fallbacks.mdc:19` was already right and needs no
-change. One fixture sentence in `tests/fixtures/site.ts` still says "markdown";
-cosmetic.
+change. The fixture sentence in `tests/fixtures/site.ts` that still named the old
+format was corrected on 2026-09-18; it now describes `contentHtml`, which is what
+the crawler actually persists.
 
 ## Renderer: CheerioCrawler, settled
 

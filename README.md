@@ -21,7 +21,7 @@ Geek-Crawler v2 builds clean, citation-ready research corpora from partner and c
 
 ### Technology
 
-Node.js, TypeScript, Crawlee, Cheerio, Next.js, React, OAuth 2.0 PKCE, and Microsoft SignalR. No headless browser and no Markdown converter in the crawl path.
+Node.js, TypeScript, Crawlee, Cheerio, Next.js, React, OAuth 2.0 PKCE, and Microsoft SignalR. No headless browser and no text-format conversion step in the crawl path — the corpus body is clean semantic HTML plus typed blocks.
 
 ## Place in the Geek content platform
 
@@ -132,22 +132,35 @@ non-empty `blocks` array or the batch is rejected `400`.
 
 > Until `GeekBackend@5561209` those two fields were discarded on arrival, because
 > `IngestPageItem` never declared them and ASP.NET ignores unknown JSON
-> properties. Acceptance required `Html` **or** `Markdown`, so a page whose
-> extraction produced nothing still validated and persisted. That is how 5,274
-> pages were stored and later deleted by the Library for having no body.
+> properties. Acceptance required raw `Html` **or** a legacy body field, so a page
+> whose extraction produced nothing still validated and persisted.
+>
+> That is how 5,274 pages came to hold no corpus body — and they were then
+> **deleted outright, not by any sync or cleanup job**: the Library classified
+> every one of them unusable for lacking that legacy field and removed them from
+> Mongo together with their Qdrant points. Indexing has been read-only over the
+> corpus ever since (`indexer._skip_unusable`) — it counts what it cannot use and
+> never mutates it. The crawler owns the reject taxonomy; a consumer
+> re-adjudicating that decision is what cost the corpus.
 
 After all page batches flush, successful API-backed crawls send the run-level
 `ContentReadyAt` marker, and resumes clear it until the crawl completes again.
 
 `GeekBackend@5561209` added `ContentReadyAt` / `ClearContentReadyAt` to the run
-patch, stored beside `MarkdownReadyAt` in the same pg-text timestamp shape.
+patch as a pg-text timestamp. The legacy readiness field it once sat beside was
+removed in `GeekBackend@26f2b47`, along with the legacy page body field and its
+backfill timestamp.
 
-> **The RAG scheduler does not select on it yet.** It still filters on
-> `MarkdownReadyAt` being non-null, and is separately `enabled: false` — so
-> scheduled indexing remains inert until
-> `Geek-Crawler-Rag/plans/retire-markdown-from-rag.md` §4 lands. Manual
-> triggering is the only path today, and the Library still deletes pages that
-> carry no Markdown.
+> **The Library selects on `ContentReadyAt`** as of
+> `Geek-Crawler-Rag@78c143b`, over the covering index
+> `ix_crawl_runs_content_ready`. It no longer deletes pages it cannot read —
+> a page with no extracted content is counted and left alone.
+>
+> Indexing is triggered by `POST /v1/index`; the scheduled path is deprecated
+> and `INDEX_SCHEDULER_ENABLED` stays `false`. One item is still open:
+> the Mongo key casing for `ContentReadyAt` is inferred from GeekAPI's BSON
+> class map rather than observed, and
+> `Geek-Crawler-Rag/scripts/verify_ingest_fields.py` on the VPS settles it.
 
 Without those env vars, nothing leaves the machine, but note what local mode
 actually keeps: run stubs and counters under `DATA_DIR/runs/`, the Crawlee

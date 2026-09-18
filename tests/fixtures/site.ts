@@ -2,7 +2,7 @@ import { createServer, type Server } from 'node:http';
 
 const articleText =
   'Deterministic crawler fixtures make integration tests repeatable without public network access. ' +
-  'This article contains enough meaningful prose for Readability, markdown conversion, title extraction, ' +
+  'This article contains enough meaningful prose for Readability, structured block extraction, title extraction, ' +
   'excerpt generation, link persistence, and viability checks to exercise the production crawl pipeline.';
 
 function page(title: string, body: string, extraHead = ''): string {
@@ -109,7 +109,7 @@ export async function startFixtureSite(options?: {
         page(
           'Fixture Article',
           `<p>${articleText}</p><h2>Exact fixture section</h2>
-           <p>The persisted markdown must retain this exact deterministic sentence.</p>
+           <p>The persisted contentHtml must retain this exact deterministic sentence.</p>
            <a href="/long">Read the long article</a>`,
         ),
       );
