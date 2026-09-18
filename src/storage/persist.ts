@@ -1,6 +1,7 @@
 import { rm } from 'node:fs/promises';
 import path from 'node:path';
 import { createFilesystemRawBodyStore, type RawBodyStore } from './raw-body.js';
+import { createExtractCache } from './extract-cache.js';
 import {
   createGeekApiClient,
   type Block,
@@ -143,6 +144,7 @@ export function createCrawlPersist(input: {
   const mode = 'api' as const;
 
   const rawBodyStore = createFilesystemRawBodyStore(input.dataDir);
+  const extractCache = createExtractCache(input.dataDir);
   const localMeta = createJsonRunStore(input.dataDir);
   const seedKey = computeSeedKey(seeds);
   const coordinator = createPersistCoordinator();
@@ -499,6 +501,22 @@ export function createCrawlPersist(input: {
       }
 
       const origin = originOf(finalUrl);
+
+      // Cached before the network push, not after. GeekAPI rejects contentHtml
+      // until its schema is updated, so caching on success would cache nothing
+      // on precisely the runs worth inspecting. A cache write never decides
+      // whether the page persists: a failure here is logged and stepped over.
+      if (extractCache.enabled) {
+        try {
+          await extractCache.put(runId, finalUrl, page.contentHtml ?? null, page.blocks ?? []);
+        } catch (error) {
+          log.warning(
+            `extract cache write skipped ${finalUrl}: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }
+      }
 
       let pageId: string;
       try {
