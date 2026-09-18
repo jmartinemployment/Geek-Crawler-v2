@@ -452,8 +452,10 @@ describe('semantic HTML output', () => {
       'https://geekatyourspot.com/',
     );
 
-    assert.deepEqual(out.blocks[0]?.anchors, []);
-    assert.equal(out.blocks[0]?.text, 'See the FAQ below.');
+    const block = out.blocks[0];
+    assert.equal(block?.kind, 'paragraph');
+    assert.deepEqual(block?.anchors, []);
+    assert.equal(block?.kind === 'paragraph' ? block.text : null, 'See the FAQ below.');
   });
 
   it('collects anchors from a table row across its cells', () => {
