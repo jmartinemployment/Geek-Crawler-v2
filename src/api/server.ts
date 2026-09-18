@@ -6,6 +6,7 @@ import { CRAWL_TYPE_VALUES } from '../crawl/types.js';
 import { createGeekApiClient, requireGeekApiEnv } from '../storage/geek-api-client.js';
 import { requestCancel } from '../crawl/cancel-registry.js';
 import { createJsonRunStore } from '../storage/runs.js';
+import { computeSeedKey, normalizeSeeds } from '../storage/seed-key.js';
 import { listFailures, readFailure } from '../storage/failure-archive.js';
 
 type Json = Record<string, unknown>;
@@ -45,6 +46,14 @@ export function createCrawlApiServer(options?: { dataDir?: string; port?: number
   const port = options?.port ?? Number(process.env.PORT ?? 8787);
   const meta = createJsonRunStore(dataDir);
   const inFlight = new Map<string, Promise<unknown>>();
+  /**
+   * seedKey -> runId holding it. GeekAPI keys a run by its seed
+   * (`GeekCrawlerSeedNormalizer.ComputeSeedKey`, mirrored in seed-key.ts), and
+   * registering a second run for a key silently drops the first: the older run
+   * starts taking 404 on pages/batch mid-crawl and fails closed. Refusing the
+   * submission is the only point at which that is still preventable.
+   */
+  const inFlightSeedKeys = new Map<string, string>();
 
   const server = createServer(async (req, res) => {
     try {
@@ -91,41 +100,71 @@ export function createCrawlApiServer(options?: { dataDir?: string; port?: number
           : undefined;
         const wait = body.wait === true || body.wait === '1';
 
+        const seedKey = computeSeedKey(normalizeSeeds(seeds));
+        const holder = inFlightSeedKeys.get(seedKey);
+        if (holder) {
+          return send(res, 409, {
+            error:
+              'A crawl of this seed is already running — a second run would supersede it on GeekAPI and destroy the first',
+            code: 'SEED_IN_FLIGHT',
+            runId: holder,
+          });
+        }
+        // Claimed before the first await, so two simultaneous submissions of one
+        // seed cannot both pass the check above.
+        inFlightSeedKeys.set(seedKey, 'pending');
+
         if (wait) {
-          const result = await startCrawl({
+          try {
+            const result = await startCrawl({
+              seeds,
+              crawlType,
+              dataDir,
+              maxRequestsPerCrawl,
+              maxConcurrency,
+            });
+            return send(res, 200, {
+              ok: true,
+              runId: result.runId,
+              pagesSaved: result.pagesSaved,
+              linksSaved: result.linksSaved,
+              pagesRejectedLocale: result.pagesRejectedLocale,
+              pagesRejectedChallenge: result.pagesRejectedChallenge,
+              pagesRejectedExtractEmpty: result.pagesRejectedExtractEmpty,
+              dataDir: result.dataDir,
+              persistMode: result.persistMode,
+            });
+          } finally {
+            // The wait path owns the claim for exactly as long as it blocks.
+            inFlightSeedKeys.delete(seedKey);
+          }
+        }
+
+        let prepared: Awaited<ReturnType<typeof prepareCrawl>>;
+        try {
+          prepared = await prepareCrawl({
             seeds,
             crawlType,
             dataDir,
             maxRequestsPerCrawl,
             maxConcurrency,
           });
-          return send(res, 200, {
-            ok: true,
-            runId: result.runId,
-            pagesSaved: result.pagesSaved,
-            linksSaved: result.linksSaved,
-            pagesRejectedLocale: result.pagesRejectedLocale,
-            pagesRejectedChallenge: result.pagesRejectedChallenge,
-            pagesRejectedExtractEmpty: result.pagesRejectedExtractEmpty,
-            dataDir: result.dataDir,
-            persistMode: result.persistMode,
-          });
+        } catch (err) {
+          // Nothing was started, so the seed must not stay claimed.
+          inFlightSeedKeys.delete(seedKey);
+          throw err;
         }
-
-        const prepared = await prepareCrawl({
-          seeds,
-          crawlType,
-          dataDir,
-          maxRequestsPerCrawl,
-          maxConcurrency,
-        });
+        inFlightSeedKeys.set(seedKey, prepared.runId);
 
         const work = prepared.run().catch((err) => {
           console.error(`Crawl ${prepared.runId} failed:`, err);
           return err;
         });
         inFlight.set(prepared.runId, work);
-        void work.finally(() => inFlight.delete(prepared.runId));
+        void work.finally(() => {
+          inFlight.delete(prepared.runId);
+          inFlightSeedKeys.delete(seedKey);
+        });
 
         return send(res, 202, {
           ok: true,
