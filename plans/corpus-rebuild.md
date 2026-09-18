@@ -231,7 +231,9 @@ no crawl persists.
 > were silently discarded by model binding. 5,274 pages were stored, reported
 > as saved, then deleted by the Library as `no_markdown`. The safety property
 > assumed here is the reason nobody looked. See
-> `plans/retire-markdown-from-rag.md`.
+> `plans/retire-markdown-from-rag.md`. **Resolved in `GeekBackend@5561209`**,
+> which carries the fields through all four hops and makes the external ingest
+> route fail closed when a page arrives without extracted content.
 
 | Here | Was |
 |---|---|

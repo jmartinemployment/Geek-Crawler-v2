@@ -125,23 +125,29 @@ Crawlee (localhost)
 Each successful page save sends the raw **HTML**, the clean **contentHtml**, the
 typed **blocks**, **title** and optional excerpt.
 
-> **GeekAPI does not accept `contentHtml` or `blocks` (verified 2026-09-18).**
-> `IngestPageItem` in `GeekCrawlerIngestController.cs:860` declares only
-> `Origin, Url, FinalUrl, StatusCode, RobotsAllowed, Html, FailureReason, Title,
-> Markdown, Excerpt`. ASP.NET ignores unknown JSON properties, so the extracted
-> content is discarded on arrival and only `Html` is stored. Acceptance requires
-> `Html` **or** `Markdown`, so the page still validates — the write succeeds
-> while its content is thrown away. See `plans/retire-markdown-from-rag.md`.
+GeekAPI carries both to Mongo as of `GeekBackend@5561209`: `contentHtml` as text
+and `blocks` as a **native BSON array**. Ingest also fails closed on this route —
+a robots-allowed page with no failure reason must carry `contentHtml` and a
+non-empty `blocks` array or the batch is rejected `400`.
+
+> Until `GeekBackend@5561209` those two fields were discarded on arrival, because
+> `IngestPageItem` never declared them and ASP.NET ignores unknown JSON
+> properties. Acceptance required `Html` **or** `Markdown`, so a page whose
+> extraction produced nothing still validated and persisted. That is how 5,274
+> pages were stored and later deleted by the Library for having no body.
 
 After all page batches flush, successful API-backed crawls send the run-level
 `ContentReadyAt` marker, and resumes clear it until the crawl completes again.
 
-> **This marker does not reach storage (verified 2026-09-18).**
-> `IngestPatchRunRequest` declares `MarkdownReadyAt` / `ClearMarkdownReadyAt`
-> and no `ContentReadyAt`, so the field is dropped and `MarkdownReadyAt` stays
-> null on every run. The RAG scheduler selects on `MarkdownReadyAt` being
-> non-null, so it has never selected any run — and it is separately
-> `enabled: false`.
+`GeekBackend@5561209` added `ContentReadyAt` / `ClearContentReadyAt` to the run
+patch, stored beside `MarkdownReadyAt` in the same pg-text timestamp shape.
+
+> **The RAG scheduler does not select on it yet.** It still filters on
+> `MarkdownReadyAt` being non-null, and is separately `enabled: false` — so
+> scheduled indexing remains inert until
+> `Geek-Crawler-Rag/plans/retire-markdown-from-rag.md` §4 lands. Manual
+> triggering is the only path today, and the Library still deletes pages that
+> carry no Markdown.
 
 Without those env vars, nothing leaves the machine, but note what local mode
 actually keeps: run stubs and counters under `DATA_DIR/runs/`, the Crawlee
