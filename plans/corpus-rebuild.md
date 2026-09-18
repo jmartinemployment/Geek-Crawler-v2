@@ -224,6 +224,15 @@ The payload is no longer Markdown, so the field names no longer say Markdown.
 Until GeekAPI matches, ingest fails closed — no fallback, by design, which means
 no crawl persists.
 
+> **Correction, 2026-09-18: this prediction did not hold.** GeekAPI never took
+> the rename, and ingest failed *open* rather than closed. Acceptance requires
+> `Html` **or** `Markdown` and the crawler still sends `html`, so pages
+> validated and persisted while `contentHtml`, `blocks` and `contentReadyAt`
+> were silently discarded by model binding. 5,274 pages were stored, reported
+> as saved, then deleted by the Library as `no_markdown`. The safety property
+> assumed here is the reason nobody looked. See
+> `plans/retire-markdown-from-rag.md`.
+
 | Here | Was |
 |---|---|
 | `contentHtml` | `markdown` (page body) |
