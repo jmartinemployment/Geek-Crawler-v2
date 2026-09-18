@@ -1,7 +1,7 @@
 # Corpus rebuild: replace the extractor, delete the corpus, re-crawl
 
 **Status: extractor replaced and verified in the working tree, uncommitted.
-Output is clean semantic HTML — Markdown and Turndown are gone. Nothing deleted
+Output is clean semantic HTML — the text-format converter and Turndown are gone. Nothing deleted
 yet.**
 
 ## Why
@@ -58,9 +58,9 @@ Cheerio only.
 - **Content root** — `main` → `article` → `[role="main"]` → `body`. Ordered
   preference of a **single** element, no scoring, no candidate rejection.
 
-**Output.** Not Markdown. Markdown marks a block only by a blank line, so every
-boundary survives as a whitespace convention each consumer must re-infer, and
-nesting is flattened outright. The extractor walks the pruned DOM once and
+**Output.** Not a plaintext convention. A format that marks a block only by a
+blank line leaves every boundary as whitespace each consumer must re-infer, and
+flattens nesting outright. The extractor walks the pruned DOM once and
 returns three views of the same content:
 
 - `contentHtml` — clean semantic fragment: `<p>`, `<h1>`–`<h6>`, `<ul>`/`<ol>`,
@@ -103,7 +103,7 @@ cheerio, crawlee and dotenv only.
 
 `contentRoot` reports which root supplied the content, so a `body`-rooted
 extract — taxjar.com is one — is auditable rather than silent. `blocks` is the
-typed structure that is the whole reason to emit HTML rather than Markdown.
+typed structure that is the whole reason to emit HTML rather than flattened text.
 Neither reaches storage: `cheerio-runner.ts` passes `contentHtml` and `text`
 only. Plumb them to the page record and the crawl report, or drop them. A signal
 nobody stores is not a signal — and a chunker that cannot read `blocks` gains
@@ -220,27 +220,27 @@ and that is worth knowing before spending the crawl.
 
 ### 2e. GeekAPI must accept the renamed fields
 
-The payload is no longer Markdown, so the field names no longer say Markdown.
+The payload is no longer a flattened text body, so the field names no longer say so.
 Until GeekAPI matches, ingest fails closed — no fallback, by design, which means
 no crawl persists.
 
 > **Correction, 2026-09-18: this prediction did not hold.** GeekAPI never took
 > the rename, and ingest failed *open* rather than closed. Acceptance requires
-> `Html` **or** `Markdown` and the crawler still sends `html`, so pages
+> `Html` **or** the legacy text body, and the crawler still sends `html`, so pages
 > validated and persisted while `contentHtml`, `blocks` and `contentReadyAt`
 > were silently discarded by model binding. 5,274 pages were stored, reported
-> as saved, then deleted by the Library as `no_markdown`. The safety property
-> assumed here is the reason nobody looked. See
-> `plans/retire-markdown-from-rag.md`. **Resolved in `GeekBackend@5561209`**,
+> as saved, then deleted by the Library for carrying no body it could read. The
+> safety property assumed here is the reason nobody looked. See
+> `Geek-Crawler-Rag/plans/retire-legacy-corpus-format.md`. **Resolved in `GeekBackend@5561209`**,
 > which carries the fields through all four hops and makes the external ingest
 > route fail closed when a page arrives without extracted content.
 
 | Here | Was |
 |---|---|
-| `contentHtml` | `markdown` (page body) |
-| `contentReadyAt` / `clearContentReadyAt` | `markdownReadyAt` / `clearMarkdownReadyAt` |
-| `EXTRACT_MIN_TEXT_CHARS` | `EXTRACT_MIN_MARKDOWN_CHARS` (env) |
-| `contentLength` | `markdownLength` (dedup ledger, on disk) |
+| `contentHtml` | the legacy text body field |
+| `contentReadyAt` / `clearContentReadyAt` | the legacy readiness pair |
+| `EXTRACT_MIN_TEXT_CHARS` | the legacy minimum-length env var |
+| `contentLength` | the legacy length field (dedup ledger, on disk) |
 | `bodies/<hash>.content.html` | `bodies/<hash>.md` (local) |
 
 The ledger rename means an existing dedup ledger will not rehydrate its lengths.
@@ -279,7 +279,7 @@ the rest of the list runs.
 `README.md` is corrected: CheerioCrawler only, no Playwright backup path, no
 Readability or Turndown credit, `contentHtml` and `ContentReadyAt` in the persist
 path, `.content.html` local bodies, and the dead
-`plans/rag-markdown-backfill.md` link removed. `npx playwright install chromium`
+dead backfill-plan link removed. `npx playwright install chromium`
 moved into the `web/` step, where the only Playwright left in the tree lives.
 
 Also corrected in code: `src/crawl/viability.ts` no longer claims it promotes
