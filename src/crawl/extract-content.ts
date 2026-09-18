@@ -96,6 +96,65 @@ function isDesktopOnly(className: string | undefined): boolean {
   return tokens.includes('d-none') && tokens.some((t) => BOOTSTRAP_DESKTOP_DISPLAY_TOKEN.test(t));
 }
 
+/** Words worth comparing: case-folded, punctuation-stripped, trivia dropped. */
+function wordCounts(text: string): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const raw of text.toLowerCase().split(/[^a-z0-9]+/)) {
+    if (raw.length <= 2) continue;
+    counts.set(raw, (counts.get(raw) ?? 0) + 1);
+  }
+  return counts;
+}
+
+/** A block whose words all appear elsewhere says nothing the document lacks. */
+const DUPLICATE_WORD_SHARE = 0.9;
+
+/**
+ * Prune the desktop half of a responsive pair -- but only when it really is a
+ * pair.
+ *
+ * Removing every desktop-only element unconditionally was wrong, and measurably
+ * so. Across four sites, the desktop halves on geekatyourspot.com all had a
+ * mobile counterpart, while five blocks on freshbooks.com and five on n8n.io had
+ * none at all: a product feature block, a customer story, testimonials. Deleting
+ * those prevented no duplication and cost 1,802 and 575 characters of prose --
+ * on freshbooks roughly a fifth of the page.
+ *
+ * The inverse rule fails too: keeping both halves doubles geekatyourspot.com
+ * from 11,729 to 23,556 characters, and block-level dedup afterwards recovers
+ * only 6,950 of that because the rest sits in blocks too short to match on.
+ *
+ * So the test is novelty, not convention. A desktop-only element goes when the
+ * words it carries are already present elsewhere in the document; it stays when
+ * it is the only place they appear. Candidates are considered one at a time
+ * against the live document, so when two blocks duplicate each other the first
+ * is removed and the second -- now the only copy -- is kept.
+ */
+function pruneDuplicateTwins($: CheerioAPI): void {
+  const candidates = $('[class]')
+    .filter((_, el) => isDesktopOnly($(el).attr('class')))
+    .toArray()
+    .filter((el, _i, all) => !$(el).parents().toArray().some((p) => all.includes(p)));
+
+  for (const el of candidates) {
+    const node = $(el);
+    // A candidate already removed with an ancestor has no root to walk to.
+    if (node.closest('body').length === 0 && node.parents().length === 0) continue;
+
+    const own = wordCounts(node.text() ?? '');
+    if (own.size === 0) {
+      node.remove();
+      continue;
+    }
+    const document = wordCounts($('body').text() ?? '');
+    let elsewhere = 0;
+    for (const [word, count] of own) {
+      if ((document.get(word) ?? 0) > count) elsewhere += 1;
+    }
+    if (elsewhere / own.size >= DUPLICATE_WORD_SHARE) node.remove();
+  }
+}
+
 /**
  * Framework-specific link-gallery containers that dwarf a page's real prose
  * (e.g. n8n's /integrations/* directory pages). Verified per-site, not a
@@ -592,6 +651,43 @@ function truncateBlockText(block: Block, budget: number): Block | null {
   return { ...block, text, html: escapeHtml(text), anchors: [] } as Block;
 }
 
+/**
+ * A block short enough that repeating it is ordinary. "Yes" in twenty table
+ * cells, a reused label, a two-word CTA -- collapsing those would corrupt a
+ * table, not clean a page. Measured duplication on the four sampled sites sits
+ * far above this, so the floor costs nothing real.
+ */
+const DEDUP_MIN_BLOCK_CHARS = 25;
+
+/**
+ * Drop a block whose text has already appeared, keeping the first occurrence.
+ *
+ * The twin rule works on the DOM and only sees pairs it can identify by class.
+ * This works on the blocks and sees duplication by any means -- taxjar.com's
+ * bespoke `.hide`, a media query we cannot read, an overlapping pair the novelty
+ * test let through. Measured: 1,334 chars on geekatyourspot.com, 294 on
+ * freshbooks.com, 87 on taxjar.com, 2,721 on dext.com, all of it exact repeats.
+ *
+ * Keyed on kind as well as text, so a heading is never silenced by a paragraph
+ * that happens to read the same.
+ */
+function dropDuplicateBlocks(blocks: Block[]): Block[] {
+  const seen = new Set<string>();
+  const kept: Block[] = [];
+  for (const block of blocks) {
+    const text = blockText(block);
+    if (text.length < DEDUP_MIN_BLOCK_CHARS) {
+      kept.push(block);
+      continue;
+    }
+    const key = `${block.kind}\u0000${text}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    kept.push(block);
+  }
+  return kept;
+}
+
 /** Plain text of a block, for the length and fidelity checks. */
 function blockText(block: Block): string {
   return block.kind === 'row' ? block.cells.join(' ') : block.text;
@@ -655,7 +751,7 @@ export function extractCleanContent(html: string, pageUrl: string): CleanContent
 
     $(BOILERPLATE_SELECTORS).remove();
 
-    $('[class]').filter((_, el) => isDesktopOnly($(el).attr('class'))).remove();
+    pruneDuplicateTwins($);
 
     for (const selector of GALLERY_CONTAINER_SELECTORS) $(selector).remove();
 
@@ -683,6 +779,8 @@ export function extractCleanContent(html: string, pageUrl: string): CleanContent
     };
     walkChildren(rootNode, state);
     flushBuffer(state);
+    if (state.blocks.length === 0) return emptyContent();
+    state.blocks = dropDuplicateBlocks(state.blocks);
     if (state.blocks.length === 0) return emptyContent();
 
     // Truncation drops whole blocks. Slicing a string of HTML at a byte count

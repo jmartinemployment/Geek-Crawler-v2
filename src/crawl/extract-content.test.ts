@@ -146,6 +146,62 @@ describe('mobile-only extraction', () => {
     );
   });
 
+  it('keeps a desktop-only block that has no mobile counterpart', () => {
+    // Measured on freshbooks.com and n8n.io: five such blocks each, carrying a
+    // product feature block, a customer story and testimonials. Removing them
+    // prevented no duplication and cost 1,802 and 575 chars of prose.
+    const html =
+      '<html><body><main>' +
+      '<section class="lg:hidden"><p>Send invoices in seconds from any device.</p></section>' +
+      '<section class="hidden lg:block"><p>Jazmyn is a solopreneur catering weddings ' +
+      'and events, and she runs the whole operation herself.</p></section>' +
+      '</main></body></html>';
+
+    const md = extractCleanContent(html, 'https://fixture.test/').contentHtml ?? '';
+
+    assert.match(md, /Send invoices in seconds/);
+    assert.match(md, /Jazmyn is a solopreneur/, 'unique desktop prose must survive');
+  });
+
+  it('drops a desktop half whose wording differs but whose words are all present', () => {
+    // The overlap bucket: same content, not a byte-identical string. Exact
+    // matching misses these, which is why the test is on words.
+    const html =
+      '<html><body><main>' +
+      '<section class="lg:hidden"><h2>Clone Yourself</h2>' +
+      '<p>A counterpart that works nonstop for you every single day.</p></section>' +
+      '<section class="hidden lg:block"><h2>Clone Yourself</h2>' +
+      '<p>A counterpart that works nonstop for you.</p></section>' +
+      '</main></body></html>';
+
+    const md = extractCleanContent(html, 'https://fixture.test/').contentHtml ?? '';
+
+    assert.equal(
+      (md.match(/A counterpart that works nonstop/g) ?? []).length,
+      1,
+      'an overlapping pair must contribute its content once',
+    );
+  });
+
+  it('keeps one copy when two desktop-only blocks duplicate each other', () => {
+    // Candidates are judged against the live document, so the first goes and the
+    // second -- by then the only copy -- stays. Judging them all up front would
+    // delete both and lose the content entirely.
+    const html =
+      '<html><body><main>' +
+      '<section class="hidden lg:block"><p>Automate your sales tax compliance today.</p></section>' +
+      '<section class="hidden xl:flex"><p>Automate your sales tax compliance today.</p></section>' +
+      '</main></body></html>';
+
+    const md = extractCleanContent(html, 'https://fixture.test/').contentHtml ?? '';
+
+    assert.equal(
+      (md.match(/Automate your sales tax compliance/g) ?? []).length,
+      1,
+      'exactly one copy must survive',
+    );
+  });
+
   it('keeps a bare hidden or d-none element that has no breakpoint override', () => {
     // Hidden at every width. Without JS that is also what a collapsed accordion
     // panel looks like, and its answer text is corpus worth having.
@@ -159,6 +215,52 @@ describe('mobile-only extraction', () => {
 
     assert.match(md, /cancel your plan at any time/);
     assert.match(md, /Refunds are issued within ten business days/);
+  });
+});
+
+describe('duplicate block removal', () => {
+  it('drops a repeat the class rules cannot see', () => {
+    // taxjar.com's shape: the hidden twin carries a bespoke `.hide`, which is
+    // neither a Tailwind nor a Bootstrap convention, so no selector catches it.
+    const html =
+      '<html><body><main>' +
+      '<div class="button-group ctas_a"><p>Free 30-day trial, no credit card required.</p></div>' +
+      '<div class="button-group ctas_b hide"><p>Free 30-day trial, no credit card required.</p></div>' +
+      '</main></body></html>';
+
+    const out = extractCleanContent(html, 'https://fixture.test/');
+
+    assert.equal(
+      ((out.contentHtml ?? '').match(/Free 30-day trial/g) ?? []).length,
+      1,
+      'a repeat must survive once regardless of how it was hidden',
+    );
+  });
+
+  it('keeps short repeats, which are ordinary', () => {
+    // Collapsing these would corrupt a table rather than clean a page.
+    const html =
+      '<html><body><main><table>' +
+      '<tr><td>Invoicing</td><td>Yes</td></tr>' +
+      '<tr><td>Payments</td><td>Yes</td></tr>' +
+      '</table></main></body></html>';
+
+    const out = extractCleanContent(html, 'https://fixture.test/');
+
+    assert.equal(out.blocks.filter((b) => b.kind === 'row').length, 2);
+    assert.equal(((out.contentHtml ?? '').match(/<td>Yes<\/td>/g) ?? []).length, 2);
+  });
+
+  it('does not let a paragraph silence an identical heading', () => {
+    const html =
+      '<html><body><main>' +
+      '<h2>Automated tax compliance for growing teams</h2>' +
+      '<p>Automated tax compliance for growing teams</p>' +
+      '</main></body></html>';
+
+    const out = extractCleanContent(html, 'https://fixture.test/');
+
+    assert.deepEqual(out.blocks.map((b) => b.kind), ['heading', 'paragraph']);
   });
 });
 
