@@ -103,14 +103,14 @@ export type ContentRoot = 'main' | 'article' | 'role-main' | 'body';
  * structure from punctuation or blank lines.
  */
 export type Block =
-  | { kind: 'heading'; level: 1 | 2 | 3 | 4 | 5 | 6; text: string }
-  | { kind: 'paragraph'; text: string }
-  | { kind: 'listItem'; ordered: boolean; text: string }
-  | { kind: 'quote'; text: string }
-  | { kind: 'code'; text: string }
-  | { kind: 'row'; header: boolean; cells: string[] }
-  | { kind: 'term'; text: string }
-  | { kind: 'definition'; text: string };
+  | { kind: 'heading'; level: 1 | 2 | 3 | 4 | 5 | 6; text: string; html: string }
+  | { kind: 'paragraph'; text: string; html: string }
+  | { kind: 'listItem'; ordered: boolean; text: string; html: string }
+  | { kind: 'quote'; text: string; html: string }
+  | { kind: 'code'; text: string; html: string }
+  | { kind: 'row'; header: boolean; cells: string[]; cellsHtml: string[] }
+  | { kind: 'term'; text: string; html: string }
+  | { kind: 'definition'; text: string; html: string };
 
 export type CleanContent = {
   title: string | null;
@@ -184,23 +184,63 @@ function collapse(value: string): string {
 }
 
 /**
+ * A run of prose in two forms: the plain text, and the same text with anchors
+ * preserved. The corpus needs both. Verification and the length floor measure
+ * prose, so they must not see markup; the body has to keep the links, because
+ * on a page whose substance is "Top 5 tools: Melio, Dext, Lightyear" the
+ * destination of each name *is* the content, and dropping the href leaves a
+ * list of words that cite nothing.
+ */
+type Inline = { text: string; html: string };
+
+/** Absolute href, or null when the link is not one the corpus should keep. */
+function resolveHref(raw: string | undefined, pageUrl: string): string | null {
+  const href = raw?.trim();
+  if (!href || href.startsWith('#')) return null;
+  if (/^(javascript|mailto|tel|data):/i.test(href)) return null;
+  try {
+    const url = new URL(href, pageUrl);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
+    url.hash = '';
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
+function attr(node: DomNode, name: string): string | undefined {
+  const attribs = (node as { attribs?: Record<string, string> }).attribs;
+  return attribs?.[name];
+}
+
+/**
  * Text belonging to this element and not to a block-level descendant. Stops at
  * every block and structural boundary, so each character is attributed to
  * exactly one block.
  */
-function inlineText(node: DomNode): string {
-  let out = '';
+function inlineParts(node: DomNode, pageUrl: string): Inline {
+  let text = '';
+  let html = '';
   for (const child of node.children ?? []) {
     if (child.type === 'text') {
-      out += child.data ?? '';
+      const data = child.data ?? '';
+      text += data;
+      html += escapeHtml(data);
       continue;
     }
     if (!isTagNode(child)) continue;
     const name = child.name as string;
     if (BLOCK_TAGS.has(name) || STRUCTURE_TAGS.has(name)) continue;
-    out += inlineText(child);
+    const inner = inlineParts(child, pageUrl);
+    text += inner.text;
+    if (name === 'a') {
+      const href = resolveHref(attr(child, 'href'), pageUrl);
+      html += href ? `<a href="${escapeHtml(href)}">${inner.html}</a>` : inner.html;
+      continue;
+    }
+    html += inner.html;
   }
-  return out;
+  return { text, html };
 }
 
 /**
@@ -209,31 +249,47 @@ function inlineText(node: DomNode): string {
  * so a `<td>` wrapping a `<p>` or an `<h3>` would otherwise contribute nothing
  * at all. Measured on taxjar.com's comparison table, that lost four cells.
  */
-function deepText(node: DomNode): string {
-  let out = '';
+function deepParts(node: DomNode, pageUrl: string): Inline {
+  let text = '';
+  let html = '';
   for (const child of node.children ?? []) {
     if (child.type === 'text') {
-      out += child.data ?? '';
+      const data = child.data ?? '';
+      text += data;
+      html += escapeHtml(data);
       continue;
     }
     if (!isTagNode(child)) continue;
-    out += ' ' + deepText(child);
+    const inner = deepParts(child, pageUrl);
+    text += ' ' + inner.text;
+    if ((child.name as string) === 'a') {
+      const href = resolveHref(attr(child, 'href'), pageUrl);
+      html += ' ' + (href ? `<a href="${escapeHtml(href)}">${inner.html}</a>` : inner.html);
+      continue;
+    }
+    html += ' ' + inner.html;
   }
-  return out;
+  return { text, html };
 }
 
 type WalkState = {
+  /** Base for resolving relative hrefs; a corpus link has to be followable. */
+  pageUrl: string;
   blocks: Block[];
   /** Inline text seen in a generic container, awaiting a boundary. */
   buffer: string;
+  /** The same run with its anchors intact. */
+  bufferHtml: string;
   /** Whether the nearest enclosing list is ordered. */
   ordered: boolean;
 };
 
 function flushBuffer(state: WalkState): void {
   const text = collapse(state.buffer);
+  const html = collapse(state.bufferHtml);
   state.buffer = '';
-  if (text) state.blocks.push({ kind: 'paragraph', text });
+  state.bufferHtml = '';
+  if (text) state.blocks.push({ kind: 'paragraph', text, html });
 }
 
 function headingLevel(name: string): 1 | 2 | 3 | 4 | 5 | 6 {
@@ -241,21 +297,23 @@ function headingLevel(name: string): 1 | 2 | 3 | 4 | 5 | 6 {
   return (level >= 1 && level <= 6 ? level : 6) as 1 | 2 | 3 | 4 | 5 | 6;
 }
 
-/** The block a given tag contributes, given its own inline text. */
-function blockFor(name: string, text: string, ordered: boolean): Block | null {
+/** The block a given tag contributes, given its own inline run. */
+function blockFor(name: string, inline: Inline, ordered: boolean): Block | null {
+  const text = collapse(inline.text);
   if (!text) return null;
-  if (/^h[1-6]$/.test(name)) return { kind: 'heading', level: headingLevel(name), text };
-  if (name === 'li') return { kind: 'listItem', ordered, text };
-  if (name === 'blockquote') return { kind: 'quote', text };
-  if (name === 'pre') return { kind: 'code', text };
-  if (name === 'dt') return { kind: 'term', text };
-  if (name === 'dd') return { kind: 'definition', text };
-  return { kind: 'paragraph', text };
+  const html = collapse(inline.html);
+  if (/^h[1-6]$/.test(name)) return { kind: 'heading', level: headingLevel(name), text, html };
+  if (name === 'li') return { kind: 'listItem', ordered, text, html };
+  if (name === 'blockquote') return { kind: 'quote', text, html };
+  if (name === 'pre') return { kind: 'code', text, html };
+  if (name === 'dt') return { kind: 'term', text, html };
+  if (name === 'dd') return { kind: 'definition', text, html };
+  return { kind: 'paragraph', text, html };
 }
 
 /**
  * Descend through a block element looking only for nested *blocks*. Its own
- * inline text has already been taken by `inlineText`, so text nodes are skipped
+ * inline text has already been taken by `inlineParts`, so text nodes are skipped
  * here; visiting them again is what duplicates a paragraph.
  */
 function walkNestedBlocks(node: DomNode, state: WalkState): void {
@@ -273,15 +331,20 @@ function walkNestedBlocks(node: DomNode, state: WalkState): void {
 /** One table row becomes one block, so a row is never split across chunks. */
 function emitRow(node: DomNode, state: WalkState): void {
   const cells: string[] = [];
+  const cellsHtml: string[] = [];
   let header = false;
   for (const child of node.children ?? []) {
     if (!isTagNode(child)) continue;
     const name = child.name as string;
     if (name !== 'td' && name !== 'th') continue;
     if (name === 'th') header = true;
-    cells.push(collapse(deepText(child)));
+    const parts = deepParts(child, state.pageUrl);
+    cells.push(collapse(parts.text));
+    cellsHtml.push(collapse(parts.html));
   }
-  if (cells.some((c) => c.length > 0)) state.blocks.push({ kind: 'row', header, cells });
+  if (cells.some((c) => c.length > 0)) {
+    state.blocks.push({ kind: 'row', header, cells, cellsHtml });
+  }
 }
 
 function visit(node: DomNode, state: WalkState): void {
@@ -310,7 +373,7 @@ function visit(node: DomNode, state: WalkState): void {
 
   if (BLOCK_TAGS.has(name)) {
     flushBuffer(state);
-    const block = blockFor(name, collapse(inlineText(node)), state.ordered);
+    const block = blockFor(name, inlineParts(node, state.pageUrl), state.ordered);
     if (block) state.blocks.push(block);
     walkNestedBlocks(node, state);
     return;
@@ -327,12 +390,27 @@ function walkChildren(node: DomNode, state: WalkState): void {
   for (const child of node.children ?? []) {
     if (child.type === 'text') {
       state.buffer += child.data ?? '';
+      state.bufferHtml += escapeHtml(child.data ?? '');
       continue;
     }
     if (!isTagNode(child)) continue;
     const name = child.name as string;
     if (BLOCK_TAGS.has(name) || STRUCTURE_TAGS.has(name)) {
       visit(child, state);
+      continue;
+    }
+    if (name === 'a') {
+      // An anchor sitting loose in a container is still a link worth keeping.
+      const inner = inlineParts(child, state.pageUrl);
+      const href = resolveHref(attr(child, 'href'), state.pageUrl);
+      state.buffer += inner.text;
+      state.bufferHtml += href
+        ? `<a href="${escapeHtml(href)}">${inner.html}</a>`
+        : inner.html;
+      // A card link wraps its whole card: `<a><h3>..</h3><p>..</p></a>`.
+      // inlineParts stopped at those block boundaries, so without this the
+      // card's heading and body would be lost entirely.
+      walkNestedBlocks(child, state);
       continue;
     }
     walkChildren(child, state);
@@ -376,7 +454,7 @@ function serialiseBlocks(blocks: Block[]): Group[] {
       while (i < blocks.length) {
         const next = blocks[i] as Block;
         if (next.kind !== 'listItem' || next.ordered !== ordered) break;
-        items.push(`<li>${escapeHtml(next.text)}</li>`);
+        items.push(`<li>${next.html}</li>`);
         consumed.push(next);
         i += 1;
       }
@@ -393,7 +471,7 @@ function serialiseBlocks(blocks: Block[]): Group[] {
         if (next.kind !== 'row') break;
         const cell = next.header ? 'th' : 'td';
         rows.push(
-          `<tr>${next.cells.map((c) => `<${cell}>${escapeHtml(c)}</${cell}>`).join('')}</tr>`,
+          `<tr>${next.cellsHtml.map((c) => `<${cell}>${c}</${cell}>`).join('')}</tr>`,
         );
         consumed.push(next);
         i += 1;
@@ -409,9 +487,7 @@ function serialiseBlocks(blocks: Block[]): Group[] {
         const next = blocks[i] as Block;
         if (next.kind !== 'term' && next.kind !== 'definition') break;
         items.push(
-          next.kind === 'term'
-            ? `<dt>${escapeHtml(next.text)}</dt>`
-            : `<dd>${escapeHtml(next.text)}</dd>`,
+          next.kind === 'term' ? `<dt>${next.html}</dt>` : `<dd>${next.html}</dd>`,
         );
         consumed.push(next);
         i += 1;
@@ -422,13 +498,13 @@ function serialiseBlocks(blocks: Block[]): Group[] {
 
     let html: string;
     if (block.kind === 'heading') {
-      html = `<h${block.level}>${escapeHtml(block.text)}</h${block.level}>`;
+      html = `<h${block.level}>${block.html}</h${block.level}>`;
     } else if (block.kind === 'quote') {
-      html = `<blockquote><p>${escapeHtml(block.text)}</p></blockquote>`;
+      html = `<blockquote><p>${block.html}</p></blockquote>`;
     } else if (block.kind === 'code') {
-      html = `<pre><code>${escapeHtml(block.text)}</code></pre>`;
+      html = `<pre><code>${block.html}</code></pre>`;
     } else {
-      html = `<p>${escapeHtml(block.text)}</p>`;
+      html = `<p>${block.html}</p>`;
     }
     out.push({ html, blocks: [block] });
     i += 1;
@@ -443,11 +519,14 @@ function serialiseBlocks(blocks: Block[]): Group[] {
  */
 function truncateBlockText(block: Block, budget: number): Block | null {
   if (block.kind === 'row') return null;
-  const empty = serialiseBlocks([{ ...block, text: '' } as Block])[0];
+  const empty = serialiseBlocks([{ ...block, text: '', html: '' } as Block])[0];
   const room = budget - (empty?.html.length ?? 0);
   if (room <= 0) return null;
   if (block.text.length <= room) return block;
-  return { ...block, text: block.text.slice(0, room) } as Block;
+  // Cut to plain prose: slicing markup could sever an anchor mid-tag, and the
+  // fragment has to stay parseable above every other consideration.
+  const text = block.text.slice(0, room);
+  return { ...block, text, html: escapeHtml(text) } as Block;
 }
 
 /** Plain text of a block, for the length and fidelity checks. */
@@ -525,7 +604,13 @@ export function extractCleanContent(html: string, pageUrl: string): CleanContent
     const rootNode = root.get(0) as unknown as DomNode | undefined;
     if (!rootNode) return emptyContent();
 
-    const state: WalkState = { blocks: [], buffer: '', ordered: false };
+    const state: WalkState = {
+      pageUrl,
+      blocks: [],
+      buffer: '',
+      bufferHtml: '',
+      ordered: false,
+    };
     walkChildren(rootNode, state);
     flushBuffer(state);
     if (state.blocks.length === 0) return emptyContent();

@@ -353,6 +353,80 @@ describe('semantic HTML output', () => {
     assert.equal(out.text, 'Plans\nPick a plan.\nLite\nPlus');
   });
 
+  it('keeps anchors, resolved against the page URL', () => {
+    // The shape that matters on geekatyourspot.com: a tool list where the
+    // destination of each name is the content, not decoration.
+    const html =
+      '<html><body><main><p>Top 5 AP tools: ' +
+      '<a href="/tools/melio">Melio</a>, ' +
+      '<a href="https://dext.com/">Dext</a>, ' +
+      '<a href="../lightyear">Lightyear</a>.</p></main></body></html>';
+
+    const out = extractCleanContent(html, 'https://geekatyourspot.com/use-cases/ap/');
+
+    assert.match(out.contentHtml ?? '', /<a href="https:\/\/geekatyourspot\.com\/tools\/melio">Melio<\/a>/);
+    assert.match(out.contentHtml ?? '', /<a href="https:\/\/dext\.com\/">Dext<\/a>/);
+    assert.match(
+      out.contentHtml ?? '',
+      /<a href="https:\/\/geekatyourspot\.com\/use-cases\/lightyear">Lightyear<\/a>/,
+    );
+  });
+
+  it('keeps prose plain so the floor and the hashes never measure markup', () => {
+    const out = extractCleanContent(
+      '<html><body><main><p>Use <a href="/x">Melio</a> for payments.</p></main></body></html>',
+      'https://geekatyourspot.com/',
+    );
+
+    assert.equal(out.text, 'Use Melio for payments.');
+    assert.equal((out.text ?? '').includes('<'), false, 'prose must carry no markup');
+    assert.match(out.contentHtml ?? '', /<a href="https:\/\/geekatyourspot\.com\/x">Melio<\/a>/);
+  });
+
+  it('drops a link the corpus cannot follow but keeps its words', () => {
+    const out = extractCleanContent(
+      '<html><body><main><p>' +
+      '<a href="javascript:void(0)">Open menu</a> and ' +
+      '<a href="#section">Jump</a> and ' +
+      '<a href="mailto:jeff@example.com">Email us</a> today.' +
+      '</p></main></body></html>',
+      'https://geekatyourspot.com/',
+    );
+
+    assert.equal(out.contentHtml, '<p>Open menu and Jump and Email us today.</p>');
+    assert.equal(out.text, 'Open menu and Jump and Email us today.');
+  });
+
+  it('keeps anchors inside list items and table cells', () => {
+    const html =
+      '<html><body><main>' +
+      '<ul><li><a href="/a">Avalara</a> handles nexus</li></ul>' +
+      '<table><tr><td><p><a href="/t">TaxJar</a></p></td></tr></table>' +
+      '</main></body></html>';
+
+    const out = extractCleanContent(html, 'https://geekatyourspot.com/');
+
+    assert.match(out.contentHtml ?? '', /<li><a href="https:\/\/geekatyourspot\.com\/a">Avalara<\/a> handles nexus<\/li>/);
+    assert.match(out.contentHtml ?? '', /<td><a href="https:\/\/geekatyourspot\.com\/t">TaxJar<\/a><\/td>/);
+  });
+
+  it('keeps the contents of a card link that wraps block elements', () => {
+    // `<a>` around a whole card is ordinary markup. inlineParts stops at block
+    // boundaries, so without walking into it the card's heading and body vanish.
+    const html =
+      '<html><body><main><a href="/tools/accounting/melio">' +
+      '<h3>Melio</h3><p>Pay vendors from one place.</p></a></main></body></html>';
+
+    const out = extractCleanContent(html, 'https://geekatyourspot.com/');
+
+    assert.match(out.contentHtml ?? '', /<h3>Melio<\/h3>/);
+    assert.match(out.contentHtml ?? '', /<p>Pay vendors from one place\.<\/p>/);
+    assert.deepEqual(
+      out.blocks.map((b) => b.kind),
+      ['heading', 'paragraph'],
+    );
+  });
+
   it('truncates an oversized single block instead of returning nothing', () => {
     const html = `<html><body><article>${'word '.repeat(200_000)}</article></body></html>`;
 
