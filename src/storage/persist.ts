@@ -1,7 +1,12 @@
 import { rm } from 'node:fs/promises';
 import path from 'node:path';
 import { createFilesystemRawBodyStore, type RawBodyStore } from './raw-body.js';
-import { createGeekApiClient, type CrawlReport, type GeekApiClient } from './geek-api-client.js';
+import {
+  createGeekApiClient,
+  type Block,
+  type CrawlReport,
+  type GeekApiClient,
+} from './geek-api-client.js';
 import { PersistenceError, isPersistenceError } from './errors.js';
 import { archiveRun, type PurgeOutcome } from './failure-archive.js';
 import { createJsonRunStore, type CrawlLinkMeta, type RunStore } from './runs.js';
@@ -31,6 +36,8 @@ export type PersistPageInput = {
   html?: string;
   /** Clean semantic HTML fragment: the corpus body. */
   contentHtml?: string | null;
+  /** The same content as typed blocks, for a consumer that should not parse markup. */
+  blocks?: Block[];
   /** Prose only. Drives the reject floor, the content hash and the simhash. */
   text?: string | null;
   title?: string | null;
@@ -505,6 +512,7 @@ export function createCrawlPersist(input: {
               robotsAllowed: page.robotsAllowed,
               html: page.html ?? null,
               contentHtml: page.contentHtml ?? null,
+              blocks: page.blocks,
               title: page.title ?? null,
               excerpt: page.excerpt ?? null,
               failureReason: page.failureReason ?? null,

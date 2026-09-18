@@ -473,6 +473,53 @@ describe('semantic HTML output', () => {
     );
   });
 
+  it('treats a line break as whitespace so two lines do not fuse', () => {
+    // Real shape from geekatyourspot.com: the headline is split by <br>, which
+    // has no text of its own. Without a separator it read BusinessEfficiency,
+    // and that string became the root of every heading path on the site.
+    const html =
+      '<html><body><main>' +
+      '<h1>Redefine Your Business<br><span>Efficiency</span></h1>' +
+      '<h2>Clone Yourself<br><span>Work 24/7</span></h2>' +
+      '</main></body></html>';
+
+    const out = extractCleanContent(html, 'https://geekatyourspot.com/');
+
+    assert.equal(out.title, 'Redefine Your Business Efficiency');
+    assert.match(out.contentHtml ?? '', /<h2>Clone Yourself Work 24\/7<\/h2>/);
+  });
+
+  it('keeps a mid-word inline element unspaced', () => {
+    // The separator is <br>, not "every inline boundary" -- so a word split
+    // across elements stays one word.
+    const out = extractCleanContent(
+      '<html><body><main><p>The super<strong>script</strong> notation.</p></main></body></html>',
+      'https://fixture.test/',
+    );
+
+    assert.equal(out.text, 'The superscript notation.');
+  });
+
+  it('strips screen-reader-only text but keeps an aria-hidden ghost', () => {
+    // sr-only duplicates visible prose. aria-hidden is sometimes the only copy
+    // of an animated headline, so it stays -- that is why they differ.
+    const html =
+      '<html><body><main>' +
+      '<p><span class="sr-only">opens in a new window</span>Download the guide.</p>' +
+      '<p><span class="visually-hidden">Current page</span>Pricing that scales.</p>' +
+      '<h2><span aria-hidden="true">Efficiency</span></h2>' +
+      '</main></body></html>';
+
+    const out = extractCleanContent(html, 'https://fixture.test/');
+    const text = out.text ?? '';
+
+    assert.equal(text.includes('opens in a new window'), false);
+    assert.equal(text.includes('Current page'), false);
+    assert.match(text, /Download the guide\./);
+    assert.match(text, /Pricing that scales\./);
+    assert.match(out.contentHtml ?? '', /<h2>Efficiency<\/h2>/);
+  });
+
   it('truncates an oversized single block instead of returning nothing', () => {
     const html = `<html><body><article>${'word '.repeat(200_000)}</article></body></html>`;
 

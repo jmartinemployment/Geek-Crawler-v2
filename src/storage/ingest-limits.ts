@@ -18,6 +18,12 @@ export type PageSizeFields = {
   finalUrl?: string | null;
   html?: string | null;
   contentHtml?: string | null;
+  /**
+   * The typed blocks. Counted because they restate the fragment's prose and
+   * roughly double the document's content bytes -- a page that fits with
+   * contentHtml alone can breach the cap once blocks travel with it.
+   */
+  blocks?: unknown;
   title?: string | null;
   excerpt?: string | null;
   failureReason?: string | null;
@@ -33,6 +39,13 @@ function stringContribution(value: string | null | undefined): number {
   return PER_STRING_FIELD_OVERHEAD_BYTES + utf8ByteCount(value);
 }
 
+/** Serialised size of the typed blocks, or 0 when none travel. */
+function blocksContribution(blocks: unknown): number {
+  if (blocks == null) return 0;
+  if (Array.isArray(blocks) && blocks.length === 0) return 0;
+  return PER_STRING_FIELD_OVERHEAD_BYTES + utf8ByteCount(JSON.stringify(blocks));
+}
+
 export function estimatePageDocumentBytes(fields: PageSizeFields): number {
   return (
     FIXED_DOCUMENT_OVERHEAD_BYTES +
@@ -41,6 +54,7 @@ export function estimatePageDocumentBytes(fields: PageSizeFields): number {
     stringContribution(fields.finalUrl) +
     stringContribution(fields.html) +
     stringContribution(fields.contentHtml) +
+    blocksContribution(fields.blocks) +
     stringContribution(fields.title) +
     stringContribution(fields.excerpt) +
     stringContribution(fields.failureReason)

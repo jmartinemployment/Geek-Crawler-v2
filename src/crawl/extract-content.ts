@@ -36,7 +36,13 @@ const MAX_CONTENT_CHARS = 500_000;
  * below; one that does not is left alone.
  */
 const BOILERPLATE_SELECTORS =
-  'nav, footer, aside, [role="navigation"], [role="banner"], [role="contentinfo"]';
+  'nav, footer, aside, [role="navigation"], [role="banner"], [role="contentinfo"], ' +
+  // Screen-reader-only text: invisible at every width, and almost always a
+  // duplicate of adjacent visible prose or an icon label ("opens in a new
+  // window"). `.sr-only` is Bootstrap 4, `.visually-hidden` is Bootstrap 5 and
+  // Tailwind. Distinct from `aria-hidden`, which is kept -- that ghost is
+  // sometimes the only copy of a headline when the visible one is animated.
+  '.sr-only, .visually-hidden';
 
 /**
  * A breakpoint class that turns an element back on above mobile width. Paired
@@ -76,8 +82,12 @@ const BOOTSTRAP_DESKTOP_DISPLAY_TOKEN =
  * prose a script would have revealed. Removing the pair is duplicate control;
  * removing the rest would be content loss.
  *
- * This is what makes the crawl mobile-only in fact rather than only in its
- * User-Agent, which changes what the server sends and nothing else.
+ * This approximates a mobile layout; it does not guarantee one. Only these two
+ * class conventions are legible without a CSS engine. A stylesheet that hides a
+ * block at `max-width` is invisible to us -- freshbooks.com alone carries 269
+ * inline `@media min-width` rules -- as is a bespoke class like taxjar.com's
+ * `.hide`. The User-Agent asks for mobile; this prunes what the markup admits
+ * to. Anything expressed only in CSS survives.
  */
 function isDesktopOnly(className: string | undefined): boolean {
   if (!className) return false;
@@ -238,6 +248,15 @@ function inlineParts(node: DomNode, pageUrl: string): Inline {
     }
     if (!isTagNode(child)) continue;
     const name = child.name as string;
+    if (name === 'br') {
+      // A line break is whitespace. It has no text of its own, so without this
+      // the two lines it separates fuse into one word: geekatyourspot.com's
+      // `Redefine Your Business<br>…Efficiency` became `BusinessEfficiency`,
+      // and that string was the root of every heading path on the site.
+      text += ' ';
+      html += ' ';
+      continue;
+    }
     if (BLOCK_TAGS.has(name) || STRUCTURE_TAGS.has(name)) continue;
     const inner = inlineParts(child, pageUrl);
     text += inner.text;
@@ -276,6 +295,11 @@ function deepParts(node: DomNode, pageUrl: string): Inline {
       continue;
     }
     if (!isTagNode(child)) continue;
+    if ((child.name as string) === 'br') {
+      text += ' ';
+      html += ' ';
+      continue;
+    }
     const inner = deepParts(child, pageUrl);
     text += ' ' + inner.text;
     anchors.push(...inner.anchors);
@@ -577,19 +601,25 @@ function blockText(block: Block): string {
  * Title, in descending order of how deliberately the site chose it: the heading
  * on the page, then the social title, then the document title.
  */
-function readTitle($: CheerioAPI, root: ReturnType<CheerioAPI>): string | null {
+function readTitle($: CheerioAPI, blocks: Block[]): string | null {
+  // From the blocks, not from the DOM: cheerio's `.text()` would bypass the
+  // walk, and then the title disagrees with the prose the corpus actually holds
+  // -- a `<br>` in the headline gave `BusinessEfficiency` here while the
+  // fragment correctly said `Business Efficiency`.
+  const h1 = blocks.find((b) => b.kind === 'heading' && b.level === 1);
   return firstNonEmpty(
-    root.find('h1').first().text(),
+    h1 && h1.kind === 'heading' ? h1.text : undefined,
     $('meta[property="og:title"]').attr('content'),
     $('title').first().text(),
   );
 }
 
-function readExcerpt($: CheerioAPI, root: ReturnType<CheerioAPI>): string | null {
+function readExcerpt($: CheerioAPI, blocks: Block[]): string | null {
+  const firstParagraph = blocks.find((b) => b.kind === 'paragraph');
   return firstNonEmpty(
     $('meta[name="description"]').attr('content'),
     $('meta[property="og:description"]').attr('content'),
-    root.find('p').first().text(),
+    firstParagraph && firstParagraph.kind === 'paragraph' ? firstParagraph.text : undefined,
   );
 }
 
@@ -696,11 +726,11 @@ export function extractCleanContent(html: string, pageUrl: string): CleanContent
     const text = blocks.map(blockText).filter(Boolean).join('\n');
 
     return {
-      title: readTitle($, root),
+      title: readTitle($, blocks),
       contentHtml,
       blocks,
       text: text || null,
-      excerpt: readExcerpt($, root),
+      excerpt: readExcerpt($, blocks),
       truncated,
       contentRoot,
     };

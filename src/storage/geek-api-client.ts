@@ -3,6 +3,7 @@
  * Auth: X-API-Key (GEEK_BACKEND_API_KEY) + X-Geek-User-Id (GEEK_USER_ID).
  */
 
+import type { Block } from '../crawl/extract-content.js';
 import { ConfigError, PersistenceError } from './errors.js';
 import {
   MAX_BATCH_BODY_BYTES,
@@ -22,6 +23,8 @@ export type ApiRunSnapshot = {
 
 export type CreatedPage = { url: string; pageId: string };
 
+export type { Block } from '../crawl/extract-content.js';
+
 export type IngestPageInput = {
   origin: string;
   url: string;
@@ -30,6 +33,13 @@ export type IngestPageInput = {
   robotsAllowed: boolean;
   html?: string | null;
   contentHtml?: string | null;
+  /**
+   * The same content as typed blocks, in document order. Optional on purpose: a
+   * request_failed or robots-rejected page has no body at all, and requiring
+   * this would turn every failure row into a validation error and take the
+   * post-mortem with it.
+   */
+  blocks?: Block[];
   title?: string | null;
   excerpt?: string | null;
   failureReason?: string | null;

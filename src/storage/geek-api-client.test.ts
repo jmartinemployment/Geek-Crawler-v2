@@ -321,3 +321,41 @@ test('limits constants align with plan', () => {
   assert.equal(MAX_BATCH_BODY_BYTES, 28 * 1024 * 1024);
   assert.ok(MAX_PAGE_DOCUMENT_BYTES < MONGO_BSON_MAX_DOCUMENT_BYTES);
 });
+
+test('typed blocks count toward the page document estimate', () => {
+  // Blocks restate the fragment's prose, so a page that fits with contentHtml
+  // alone can breach the cap once they travel with it. An estimator blind to
+  // them would wave through a document Mongo then rejects.
+  const base = {
+    origin: 'https://geekatyourspot.com',
+    url: 'https://geekatyourspot.com/',
+    contentHtml: '<p>Pay vendors from one place.</p>',
+  };
+  const withoutBlocks = estimatePageDocumentBytes(base);
+  const withBlocks = estimatePageDocumentBytes({
+    ...base,
+    blocks: [
+      {
+        kind: 'paragraph' as const,
+        text: 'Pay vendors from one place.',
+        html: 'Pay vendors from one place.',
+        anchors: [{ label: 'Melio', href: 'https://geekatyourspot.com/tools/accounting/melio' }],
+      },
+    ],
+  });
+
+  assert.ok(withBlocks > withoutBlocks, 'blocks must add to the estimate');
+  assert.equal(estimatePageDocumentBytes({ ...base, blocks: [] }), withoutBlocks);
+});
+
+test('a failure row carries no blocks and is still accepted', () => {
+  // request_failed pages have no body by design. Requiring blocks would turn
+  // every failure into a validation error and take the post-mortem with it.
+  const bytes = estimatePageDocumentBytes({
+    origin: 'https://example.com',
+    url: 'https://example.com/down',
+    failureReason: '503 from origin',
+  });
+
+  assert.ok(bytes > 0 && bytes < MAX_PAGE_DOCUMENT_BYTES);
+});

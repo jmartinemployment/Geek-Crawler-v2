@@ -401,6 +401,7 @@ async function executeCheerioCrawl(
               statusCode,
               html: rawHtml,
               contentHtml: clean.contentHtml,
+              blocks: clean.blocks,
               text: clean.text,
               title: clean.title,
               excerpt: clean.excerpt,
