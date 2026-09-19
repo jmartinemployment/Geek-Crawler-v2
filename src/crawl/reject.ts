@@ -146,15 +146,19 @@ export class RejectSampleLog {
     return sample;
   }
 
-  snapshot(): Record<RejectReason, RejectSample[]> {
-    return {
-      locale_excluded: [...(this.samples.get('locale_excluded') ?? [])],
-      requires_javascript: [...(this.samples.get('requires_javascript') ?? [])],
-      challenge_page: [...(this.samples.get('challenge_page') ?? [])],
-      extract_empty: [...(this.samples.get('extract_empty') ?? [])],
-      robots_disallowed: [...(this.samples.get('robots_disallowed') ?? [])],
-      request_failed: [...(this.samples.get('request_failed') ?? [])],
-    };
+  /**
+   * Only reasons that actually fired. Emitting every key with an empty array
+   * made a report claim five reject categories for a site that hit none of
+   * them — a reader listing the keys cannot tell "no pages hit this" from
+   * "pages hit this", and the empty ones are indistinguishable from real
+   * findings.
+   */
+  snapshot(): Partial<Record<RejectReason, RejectSample[]>> {
+    const out: Partial<Record<RejectReason, RejectSample[]>> = {};
+    for (const [reason, list] of this.samples) {
+      if (list.length > 0) out[reason] = [...list];
+    }
+    return out;
   }
 }
 
@@ -164,13 +168,14 @@ export const REJECT_STATS_ORIGIN = '__crawlee_reject_stats__';
 export function rejectStatsHostProgressEntry(
   counters: RejectCounters,
   pagesSaved: number,
-  rejectSamples?: Record<RejectReason, RejectSample[]>,
+  rejectSamples?: Partial<Record<RejectReason, RejectSample[]>>,
   dedup?: Record<string, number | boolean>,
 ): Record<string, unknown> {
   return {
     origin: REJECT_STATS_ORIGIN,
     pagesSaved,
     pagesRejectedLocale: counters.pagesRejectedLocale,
+    pagesRejectedRequiresJavascript: counters.pagesRejectedRequiresJavascript,
     pagesRejectedChallenge: counters.pagesRejectedChallenge,
     pagesRejectedExtractEmpty: counters.pagesRejectedExtractEmpty,
     pagesRejectedRobots: counters.pagesRejectedRobots,

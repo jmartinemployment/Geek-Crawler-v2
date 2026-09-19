@@ -18,6 +18,7 @@ export type CrawlRunMeta = {
   pagesWithoutContent?: number;
   linksSaved: number;
   pagesRejectedLocale?: number;
+  pagesRejectedRequiresJavascript?: number;
   pagesRejectedChallenge?: number;
   pagesRejectedExtractEmpty?: number;
   pagesRejectedRobots?: number;
@@ -42,6 +43,7 @@ export type CrawlRunMeta = {
   aliasesLearned?: number;
   rejectSamples?: {
     locale_excluded?: RejectSample[];
+    requires_javascript?: RejectSample[];
     challenge_page?: RejectSample[];
     extract_empty?: RejectSample[];
     robots_disallowed?: RejectSample[];
@@ -86,6 +88,7 @@ export type RunStore = {
     runId: string,
     stats: {
       pagesRejectedLocale?: number;
+      pagesRejectedRequiresJavascript?: number;
       pagesRejectedChallenge?: number;
       pagesRejectedExtractEmpty?: number;
       pagesRejectedRobots?: number;
