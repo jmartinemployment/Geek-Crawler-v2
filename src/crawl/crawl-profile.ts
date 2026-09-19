@@ -61,10 +61,21 @@ const PROFILES: Record<CrawlType, CrawlProfile> = {
 
   // Quotas OFF. They exist to stop a third party's page farm eating the budget; on your own site
   // every directory is content you chose to publish, and quotas would starve the directories the
-  // heading hierarchy is built from. Depth is capped because structure lives near the surface.
+  // heading hierarchy is built from.
+  //
+  // Depth unlimited. It was capped at 3 on the theory that "structure lives near the surface",
+  // which contradicted this type's own purpose — the whole of your own site — and truncated it:
+  // a real site crawled 24% of its pages, because maxDepth counts link hops from the seed, not
+  // path segments. A page at /services/x reachable only after three intermediate clicks is depth
+  // 4 and was never enqueued, and a sitemap does not rescue it — the sitemap sizes the request
+  // budget (cheerio-runner.ts), while BFS still assigns depth from the seed.
+  //
+  // MAX_PAGES_PER_SITE is the guardrail that belongs here. Your own site is bounded by
+  // definition, so a page budget bounds the crawl; a depth cap silently drops whichever pages
+  // happen to sit furthest from the front door, which is not a property anyone chose.
   [CrawlTypes.ProjectSite]: {
     defaultMaxPages: MAX_PAGES_PER_SITE,
-    maxDepth: 3,
+    maxDepth: null,
     useSectionQuotas: false,
   },
 };

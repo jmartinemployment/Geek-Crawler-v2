@@ -45,9 +45,18 @@ describe('crawlProfileFor', () => {
     }
   });
 
-  it('caps depth for project-site and leaves partner unlimited', () => {
-    assert.equal(crawlProfileFor(CrawlTypes.ProjectSite).maxDepth, 3);
+  it('leaves depth unlimited where the whole site is the point', () => {
+    // project-site means the whole of your own site. A depth cap truncated it to 24% on a real
+    // site, because depth is link hops from the seed rather than path segments.
+    assert.equal(crawlProfileFor(CrawlTypes.ProjectSite).maxDepth, null);
     assert.equal(crawlProfileFor(CrawlTypes.Partner).maxDepth, null);
+  });
+
+  it('keeps a depth cap on the thin third-party slices', () => {
+    // These are deliberately shallow: a rival's positioning is a handful of pages, and geography
+    // pages are few by nature. Depth is the scope policy for them, not a truncation.
+    assert.equal(crawlProfileFor(CrawlTypes.Competitors).maxDepth, 2);
+    assert.equal(crawlProfileFor(CrawlTypes.Local).maxDepth, 2);
   });
 
   it('never proposes a budget above the per-site cap', () => {
