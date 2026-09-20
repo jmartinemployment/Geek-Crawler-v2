@@ -2,7 +2,7 @@
 
 Standalone **Crawlee** crawler: **CheerioCrawler only**, static HTML, no browser and no JavaScript execution. Does not modify Geek-Crawler v1.
 
-**Normal use is local:** crawl egress comes from your machine (politer than cloud IPs). The operator UI and `serve` API both run on localhost.
+**Normal use is local:** crawl egress comes from your machine (politer than cloud IPs). The operator UI and `serve` API both run on localhost — see **[API surface](#api-surface)** for which endpoints are public and which are not.
 
 ## Product overview
 
@@ -33,6 +33,35 @@ Geek-Crawler-v2
 ```
 
 This repository owns external website discovery, fetching, extraction, and crawl reporting. **Geek-Crawler-Rag** owns indexing, retrieval, and citation verification. **Content Creator v2** owns the editorial and publishing experience.
+
+## API surface
+
+**Public methods live in GeekAPI.** Anything another product or a browser must reach is
+`{GEEK_API_URL}/api/geek-crawler/*`, authenticated, owner-scoped. There is no second address for
+crawl data. Per `.cursor/rules/no-retries-no-fallbacks.mdc`: *GeekAPI only for crawl authority. No
+local mirror / failed stub as authority.*
+
+| Public — GeekAPI `api/geek-crawler/…` | |
+|---|---|
+| `GET crawls` · `GET crawls/latest` · `GET crawls/{runId}` | Run list and snapshot |
+| `GET crawls/{runId}/pages` | Pages with `contentHtml` and typed `blocks`, paged, `limit` 1–500 |
+| `GET crawls/{runId}/page-urls` | Lightweight URL list for reports — no bodies |
+| `GET crawls/{runId}/links` · `GET crawls/{runId}/rag-index` | Links; Geek-Crawler-Rag index status |
+| `POST crawls` · `POST crawls/{runId}/cancel` · `POST crawls/{runId}/rebuild-links` | Start, cancel, rebuild |
+| `POST seeds/check` · `GET/POST/PATCH/DELETE schedules…` | Seed admission; schedules |
+
+**This repo's `serve` API is private.** `127.0.0.1:8787` is the crawl box's internal control
+surface: start, cancel, delete, sweep, health. It is not a product surface, it is not versioned for
+consumers, and no other repository may hold its URL. Only the co-located operator UI calls it.
+
+Two things are true today and should not be mistaken for the intended design:
+
+- `GET /crawls`, `GET /crawls/{runId}` and `GET /crawls/{runId}/pages` still answer on the private
+  API, and `GET /failures` is the only home for post-mortems. Those reads belong in GeekAPI.
+- `server.listen(port, …)` (`src/api/server.ts:354`) binds **every interface** while logging
+  `127.0.0.1`, and the file has no authentication. Treat the port as exposed until that is fixed.
+
+Both are tracked in [`plans/move-crawl-reads-to-geekapi.md`](./plans/move-crawl-reads-to-geekapi.md).
 
 ## How to run locally
 
@@ -104,7 +133,8 @@ npm run web:dev -- -- -p 3001
 npm run crawl -- --seed https://example.com --type partner
 npm run crawl -- --seed https://example.com --type partner --max 10
 
-# or POST to serve (omit maxRequestsPerCrawl to use sitemap size)
+# or POST to the private serve API — operator-only, loopback, never a consumer endpoint
+# (the public equivalent is POST {GEEK_API_URL}/api/geek-crawler/crawls)
 curl -sS -X POST http://127.0.0.1:8787/crawls \
   -H 'content-type: application/json' \
   -d '{"seed":"https://www.example.com","crawlType":"partner","maxConcurrency":1}'
@@ -259,8 +289,9 @@ Localhost Next.js app. Does **not** replace Geek-Crawler v1. Start commands: see
 
 ### Phase 2 (current)
 
-- `POST /crawls` returns `runId` immediately (HTTP 202); crawl continues in background
-- `GET /crawls` lists local run stubs
+- `POST /crawls` (private API) returns `runId` immediately (HTTP 202); crawl continues in background
+- `GET /crawls` (private API) lists local run stubs — a duplicate of GeekAPI's public run list, and
+  scheduled for removal
 - Seed report (URL-first on `/runs`) with sitemap totals; sitemap is the map when present
 - Locale filter on sitemap map + report counts (keep `/us/`; drop other regions + non-English; strip `en` / `en-*`)
 - GeekAPI `page-urls` + optional SignalR after Sign in
@@ -274,19 +305,18 @@ Localhost Next.js app. Does **not** replace Geek-Crawler v1. Start commands: see
 
 An optional UI deploy may exist, but **do not run crawls from Vercel** — shared cloud IPs are easy for bot managers to flag. Keep `npm run serve` on your machine; point the local UI at `CRAWLEE_API_URL=http://127.0.0.1:8787`.
 
-### Resume
+### Resume is forbidden
 
-One seed URL = one `runId` going forward. After the report, resume by URL:
+One seed URL = one `runId`. A run that failed is not resumed — start a new one.
 
-```bash
-curl -sS -X POST http://127.0.0.1:8787/crawls/resume-by-url \
-  -H 'content-type: application/json' \
-  -d '{"url":"https://www.anomalo.com"}'
-```
+All three resume routes on the private API answer **409 `RESUME_FORBIDDEN`**
+(`src/api/server.ts:187`): `POST /crawls/resume-by-url`, `POST /crawls/resume-running`, and
+`POST /crawls/{runId}/resume`. This is policy, not a defect —
+`.cursor/rules/no-retries-no-fallbacks.mdc`: *No resume of failed runs; start a new run.* There is
+no public equivalent in GeekAPI and none is wanted.
 
-Or use **Resume by URL** / **Resume all running** on the home page. Requires `DATA_DIR/.crawlee/<runId>` on disk. **Resume all running** re-attaches stubs left in `status=running` after a `serve` restart.
-
-Legacy multi-seed runs can still be matched by any of their seeds; resume continues the shared queue.
+The **Resume by URL** and **Resume all running** controls still render on the home page and their
+BFF routes still forward. They cannot succeed; they are dead surface awaiting removal.
 
 ## Failed and cancelled runs are destroyed
 

@@ -2,6 +2,12 @@
 
 Localhost Next.js App Router UI. See root [README.md](../README.md).
 
+Two upstreams, and they are not interchangeable. **Reads are GeekAPI's** — runs, pages, page URLs,
+links, index status — reached through the `app/api/crawls/*` route handlers, which exist only to
+keep `GEEK_API_URL` and the access token out of the browser. **Control is the crawler's private
+`serve` API** on `127.0.0.1:8787`, called over loopback because this UI is co-located with the crawl
+box. No other product may call that API. See **API surface** in the root README.
+
 ```bash
 cp .env.example .env.local   # GEEK_* + NEXT_PUBLIC_APP_URL / AUTH_URL / OAUTH_CLIENT_ID
 npm run dev                  # http://localhost:3000
