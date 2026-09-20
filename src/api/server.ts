@@ -351,7 +351,10 @@ export function createCrawlApiServer(options?: { dataDir?: string; port?: number
   return {
     listen() {
       return new Promise<void>((resolve) => {
-        server.listen(port, () => {
+        // Loopback only. This surface has no authentication, so a non-loopback bind puts
+        // POST /crawls and DELETE /crawls/:runId on the network. It is scheduled for deletion
+        // outright — plans/move-crawl-reads-to-geekapi.md.
+        server.listen(port, '127.0.0.1', () => {
           console.log(`geek-crawler-v2 API on http://127.0.0.1:${port}`);
           console.log(`  GET  /health`);
           console.log(`  GET  /crawls`);

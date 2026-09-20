@@ -61,10 +61,13 @@ design:
 
 - `GET /crawls`, `GET /crawls/{runId}` and `GET /crawls/{runId}/pages` answer only here, and
   `GET /failures` is the only home for post-mortems. Those reads belong in GeekAPI.
-- `server.listen(port, …)` (`src/api/server.ts:354`) binds **every interface** while logging
-  `127.0.0.1`, and the file has no authentication of any kind. Treat the port as exposed.
-- `deploy/Dockerfile` has `ENTRYPOINT` → `serve` and `EXPOSE 8787`, so deploying this image
-  publishes that unauthenticated surface. No crawler service is deployed today.
+- It has no authentication of any kind, so it is **bound to `127.0.0.1`** — the crawler API
+  (`src/api/server.ts:357`) and the operator UI (`next dev` / `next start`, `-H 127.0.0.1`) both
+  refuse anything off-box. Nothing here is reachable from the network, including your own LAN.
+- `deploy/Dockerfile` still has `ENTRYPOINT` → `serve` and `EXPOSE 8787`. With the loopback bind a
+  deployed container publishes nothing and its `/health` check cannot pass, so the deploy fails
+  closed rather than exposing the API. No crawler service is deployed. The image's crawler
+  entrypoint is removed with the surface itself.
 
 Both are tracked in [`plans/move-crawl-reads-to-geekapi.md`](./plans/move-crawl-reads-to-geekapi.md).
 

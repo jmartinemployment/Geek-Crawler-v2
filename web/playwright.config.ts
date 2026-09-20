@@ -31,7 +31,7 @@ export default defineConfig({
       timeout: 30_000,
     },
     {
-      command: `CRAWLEE_API_URL=http://127.0.0.1:${servicePort} GEEK_API_URL=http://127.0.0.1:${servicePort} NEXT_PUBLIC_GEEK_API_URL=http://127.0.0.1:${servicePort} NEXT_PUBLIC_GEEK_CRAWLER_HUB_URL=http://127.0.0.1:${servicePort}/hubs/geek-crawler-realtime GEEK_BACKEND_API_KEY=e2e-key GEEK_USER_ID=e2e-user npx next dev --turbopack -p ${appPort}`,
+      command: `CRAWLEE_API_URL=http://127.0.0.1:${servicePort} GEEK_API_URL=http://127.0.0.1:${servicePort} NEXT_PUBLIC_GEEK_API_URL=http://127.0.0.1:${servicePort} NEXT_PUBLIC_GEEK_CRAWLER_HUB_URL=http://127.0.0.1:${servicePort}/hubs/geek-crawler-realtime GEEK_BACKEND_API_KEY=e2e-key GEEK_USER_ID=e2e-user npx next dev --turbopack -p ${appPort} -H 127.0.0.1`,
       url: `http://localhost:${appPort}`,
       reuseExistingServer: !process.env.CI,
       timeout: 120_000,
