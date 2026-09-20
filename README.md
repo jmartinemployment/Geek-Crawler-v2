@@ -50,16 +50,21 @@ local mirror / failed stub as authority.*
 | `POST crawls` · `POST crawls/{runId}/cancel` · `POST crawls/{runId}/rebuild-links` | Start, cancel, rebuild |
 | `POST seeds/check` · `GET/POST/PATCH/DELETE schedules…` | Seed admission; schedules |
 
-**This repo's `serve` API is private.** `127.0.0.1:8787` is the crawl box's internal control
-surface: start, cancel, delete, sweep, health. It is not a product surface, it is not versioned for
-consumers, and no other repository may hold its URL. Only the co-located operator UI calls it.
+**The crawler service belongs on GeekAPI too.** That is how every other app on the platform does
+it — `GccV2ProjectSiteCrawlService` holds a crawl's run lifecycle and crawls in process, with no
+external crawler to call. This repo is the egress half: it fetches from the operator's own network,
+extracts, ingests, and should expose nothing.
 
-Two things are true today and should not be mistaken for the intended design:
+**It does not match that today.** `npm run serve` listens on `:8787` and answers start, cancel,
+resume, delete, sweep, health and four reads. Three facts about it, none of them the intended
+design:
 
-- `GET /crawls`, `GET /crawls/{runId}` and `GET /crawls/{runId}/pages` still answer on the private
-  API, and `GET /failures` is the only home for post-mortems. Those reads belong in GeekAPI.
+- `GET /crawls`, `GET /crawls/{runId}` and `GET /crawls/{runId}/pages` answer only here, and
+  `GET /failures` is the only home for post-mortems. Those reads belong in GeekAPI.
 - `server.listen(port, …)` (`src/api/server.ts:354`) binds **every interface** while logging
-  `127.0.0.1`, and the file has no authentication. Treat the port as exposed until that is fixed.
+  `127.0.0.1`, and the file has no authentication of any kind. Treat the port as exposed.
+- `deploy/Dockerfile` has `ENTRYPOINT` → `serve` and `EXPOSE 8787`, so deploying this image
+  publishes that unauthenticated surface. No crawler service is deployed today.
 
 Both are tracked in [`plans/move-crawl-reads-to-geekapi.md`](./plans/move-crawl-reads-to-geekapi.md).
 
