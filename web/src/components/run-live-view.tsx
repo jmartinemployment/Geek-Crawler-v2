@@ -8,7 +8,7 @@ import {
   joinCrawlRun,
   onCrawlEvent,
   type GeekCrawlerEvent,
-} from "@/lib/crawl-hub";
+} from "@/services/crawl-hub";
 
 type UrlRow = { origin?: string; url?: string; hasHtml?: boolean };
 

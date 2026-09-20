@@ -6,7 +6,7 @@ import {
   REFRESH_COOKIE,
   cookieOpts,
 } from "@/lib/auth/cookies";
-import { exchangeAuthorizationCode } from "@/lib/auth/tokens";
+import { exchangeAuthorizationCode } from "@/services/auth/tokens";
 
 export async function POST(request: Request) {
   const { code } = (await request.json()) as { code?: string };

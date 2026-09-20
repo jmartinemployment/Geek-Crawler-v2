@@ -4,7 +4,7 @@
  * Locale rules: keep in sync with src/crawl/locale-path.ts
  */
 
-import { localeNormalizeForMap } from "./locale-path";
+import { localeNormalizeForMap } from "@/lib/locale-path";
 
 const MAX_SITEMAPS = 40;
 const MAX_URLS = 50_000;

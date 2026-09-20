@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { geekApiHeaders, geekApiUrl } from "@/lib/server-env";
-import { mapPool } from "@/lib/seed-report";
+import { mapPool } from "@/services/seed-report";
 
 type CrawlSnapshot = {
   runId?: string;

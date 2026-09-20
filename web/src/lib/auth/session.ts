@@ -2,7 +2,7 @@ import { cache } from "react";
 import { cookies } from "next/headers";
 import { ACCESS_COOKIE, REFRESH_COOKIE, cookieOpts } from "@/lib/auth/cookies";
 import { isAccessTokenUsable } from "@/lib/auth/jwt-expiry";
-import { isSessionDeadError, refreshAccessToken } from "@/lib/auth/tokens";
+import { isSessionDeadError, refreshAccessToken } from "@/services/auth/tokens";
 
 export const getAccessToken = cache(async (): Promise<string | null> => {
   const jar = await cookies();

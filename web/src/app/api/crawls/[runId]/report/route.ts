@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { buildSeedReportForRun } from "@/lib/seed-report";
+import { buildSeedReportForRun } from "@/services/seed-report";
 
 type Ctx = { params: Promise<{ runId: string }> };
 

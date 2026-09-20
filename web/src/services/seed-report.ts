@@ -1,5 +1,5 @@
 import { crawleeApiUrl, geekApiHeaders, geekApiUrl } from "@/lib/server-env";
-import { countSitemapPages } from "@/lib/sitemap-count";
+import { countSitemapPages } from "@/services/sitemap-count";
 import { expectedPageTotal } from "@/lib/crawl-limits";
 
 export type HostRow = {
