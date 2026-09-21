@@ -71,6 +71,28 @@ design:
 
 Both are tracked in [`plans/move-crawl-reads-to-geekapi.md`](./plans/move-crawl-reads-to-geekapi.md).
 
+
+### Downstream contract — what consumers may and may not do with this output
+
+The corpus body is `contentHtml` plus typed `blocks`. **Seven kinds** — `heading(level)` ·
+`paragraph` · `listItem(ordered)` · `quote` · `code` · `term` · `definition` — each carrying `text`,
+`html` and `anchors`. Heading depth is on the tag and the anchor list is on the block, so structure
+is *in the data*, not re-inferred downstream.
+
+**No consumer may convert this to Markdown, and none may ask a model to produce it.** Markdown has
+no paragraph token — a paragraph is a blank line — so a Markdown hop turns an explicit boundary into
+whitespace and flattens nesting outright. That is not theoretical: `GccV2WriteService`
+(GeekBackend) round-trips its document through Markdown and recovers exactly **one** of the seven
+kinds, dropping headings with a `StartsWith('#')` filter and trimming list markers into prose.
+
+**Nor may a consumer ask a model for HTML.** Markup is produced in exactly one place downstream —
+GeekAPI's `SectionHtmlRenderer`, which builds a DOM node-by-node from a `ContentDocument`. Asking a
+model for `<h2>` is the same defect as asking it for `##`.
+
+**Readability is not coming back.** It is an article extractor and most of what this crawler fetches
+is not an article — measured, 9% of freshbooks.com, 44% of taxjar.com and 175% of
+geekatyourspot.com. Selector-based boilerplate removal measures 101-103% on the same three, and the
+reasoning is in `src/crawl/extract-content.ts`'s header.
 ## How to run locally
 
 ### One-time setup
