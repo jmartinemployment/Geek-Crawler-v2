@@ -48,7 +48,7 @@ export function AuthCallbackClient() {
 
   if (error) {
     return (
-      <div className="stack" style={{ textAlign: "center", marginTop: "3rem" }}>
+      <div className="stack narrow" style={{ textAlign: "center", marginTop: "3rem" }}>
         <h1>Sign-in failed</h1>
         <p className="muted">{error}</p>
         <a href="/api/auth/start">Try again</a>

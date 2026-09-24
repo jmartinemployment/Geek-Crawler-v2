@@ -4,7 +4,7 @@ import { ResumeAllRunningButton } from "@/components/resume-all-running-button";
 
 export default function HomePage() {
   return (
-    <div className="stack">
+    <div className="stack narrow">
       <div>
         <h1>New crawl</h1>
         <p className="lede">
