@@ -217,10 +217,21 @@ backfill timestamp.
 > a page with no extracted content is counted and left alone.
 >
 > Indexing is triggered by `POST /v1/index`; the scheduled path is deprecated
-> and `INDEX_SCHEDULER_ENABLED` stays `false`. One item is still open:
-> the Mongo key casing for `ContentReadyAt` is inferred from GeekAPI's BSON
-> class map rather than observed, and
-> `Geek-Crawler-Rag/scripts/verify_ingest_fields.py` on the VPS settles it.
+> and `INDEX_SCHEDULER_ENABLED` stays `false`.
+>
+> **Casing settled by observation, 2026-09-24** (it was previously inferred from
+> GeekAPI's BSON class map): on the VPS, `ContentReadyAt` matches **10** of 10
+> `crawl_runs` and `contentReadyAt` matches **0** — PascalCase, stored as a
+> pg-text string (`"2026-09-24 12:32:44.213000+00"`). The run doc's other RAG
+> fields are `RagState`, `RagIndexedAtUtc`, `RagChunksUpserted`,
+> `RagPagesEnglish`, mirrored back by the index-status webhook.
+>
+> **A triggered index is not a guaranteed one.** GeekAPI's enqueue fails closed
+> and returns null, so if RAG is unreachable when a crawl finishes, the run ends
+> `complete` and content-ready with no index job at all — eight runs sat that way
+> on 2026-09-24. Nothing re-drives them: the queue is in-process and recovery is
+> a deliberate operator re-post. See
+> [`Geek-Crawler-Rag/docs/index-job-recovery-after-restart.md`](../Geek-Crawler-Rag/docs/index-job-recovery-after-restart.md).
 
 Without those env vars, nothing leaves the machine, but note what local mode
 actually keeps: run stubs and counters under `DATA_DIR/runs/`, the Crawlee
