@@ -263,7 +263,7 @@ export function RunLiveView({ runId }: { runId: string }) {
                   <td>{row.pagesRejectedExtractEmpty ?? 0}</td>
                   <td>{row.pagesRejectedRobots ?? 0}</td>
                   <td>{row.pagesRejectedRequestFailed ?? 0}</td>
-                  <td>
+                  <td className="cell-blob">
                     {row.rejectSamples
                       ? JSON.stringify(row.rejectSamples)
                       : "—"}

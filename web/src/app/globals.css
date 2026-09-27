@@ -159,21 +159,32 @@ table {
   border-radius: 6px;
 }
 
-/* anywhere, not break-word: only anywhere shrinks the column's min-content
-   size, which is what lets a long URL or JSON blob wrap instead of forcing
-   the whole table past the viewport edge. */
 th,
 td {
   text-align: left;
   padding: 0.55rem 0.75rem;
   border-bottom: 1px solid var(--line);
   font-size: 0.9rem;
-  overflow-wrap: anywhere;
 }
 
+/* Headers are short labels. Without this they letter-break into vertical
+   stacks whenever a sibling column claims most of the width. */
 th {
   background: #ebe7df;
   font-weight: 600;
+  white-space: nowrap;
+}
+
+/* For the one cell that carries an unbreakable blob. anywhere, not
+   break-word: only anywhere shrinks the cell's min-content size, which is
+   what lets it wrap instead of forcing the table past the viewport edge.
+   Scoped to this class - applied to every cell it starves the short columns
+   down to one character wide. No min-width needed: auto table layout hands
+   this column the remaining space anyway, because its max-content demand
+   dwarfs every sibling. A floor here would only force horizontal scroll on a
+   narrower window. */
+.cell-blob {
+  overflow-wrap: anywhere;
 }
 
 .muted {
