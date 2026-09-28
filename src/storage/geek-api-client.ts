@@ -303,13 +303,26 @@ export class GeekApiClient {
     if (links.length === 0) return 0;
     if (links.length > MAX_LINKS_PER_BATCH) {
       throw new PersistenceError(
-        `links/batch size ${links.length} exceeds atomic max ${MAX_LINKS_PER_BATCH}`,
+        `links/batch size ${links.length} exceeds max ${MAX_LINKS_PER_BATCH}`,
+      );
+    }
+    const body = { links };
+    // The count cap is calibrated against this ceiling, not instead of it. Raising the
+    // count without checking bytes only moves the failure: 10,000 links of ordinary
+    // length is ~1.8 MiB, but 10,000 carrying long query strings can pass the count
+    // check and still exceed what the server will accept, which surfaces as an opaque
+    // transport error rather than a stated limit.
+    const bodyBytes = Buffer.byteLength(JSON.stringify(body), 'utf8');
+    if (bodyBytes > MAX_BATCH_BODY_BYTES) {
+      throw new PersistenceError(
+        `links/batch body ${bodyBytes} exceeds max ${MAX_BATCH_BODY_BYTES} ` +
+          `(${links.length} links)`,
       );
     }
     const result = await this.request<{ count?: number }>(
       'POST',
       `/api/geek-crawler/ingest/runs/${runId}/links/batch`,
-      { links },
+      body,
     );
     if (!result || typeof result.count !== 'number' || !Number.isFinite(result.count)) {
       throw new PersistenceError('links/batch acknowledgment missing numeric count');

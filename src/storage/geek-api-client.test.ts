@@ -11,11 +11,15 @@ import {
 } from './geek-api-client.js';
 import { PersistenceError } from './errors.js';
 import {
+  MAX_PAGES_PER_BATCH,
   MONGO_BSON_MAX_DOCUMENT_BYTES,
-  partitionLinkBatches,
 } from './ingest-limits.js';
 
-test('link ingest is a single atomic batch within the max', async () => {
+// Not "atomic": the server inserts links one document at a time with InsertOneAsync and
+// skips duplicate keys individually, so a batch has never been a single transaction. The
+// word was removed from the refusal message for the same reason -- a claim nothing enforces
+// is read as one that something does.
+test('link ingest is one batch per call, up to the max', async () => {
   const batchSizes: number[] = [];
   const server = createServer(async (req, res) => {
     let body = '';
@@ -57,7 +61,7 @@ test('link ingest is a single atomic batch within the max', async () => {
             isSameOrigin: true,
           })),
         ),
-      /exceeds atomic max/,
+      /exceeds max/,
     );
   } finally {
     server.close();
@@ -319,41 +323,10 @@ test('links/batch requires count === submitted length', async () => {
   }
 });
 
-test('a page with more links than the cap partitions without loss', () => {
+test('the 5,779-link page now fits one batch and lands whole', async () => {
   // The shape that failed: one netsuite.com portal index carrying 5,779 links
-  // against a cap of 2,000. The client refused the batch before sending and
-  // the whole crawl was purged.
-  const rows = Array.from({ length: 5779 }, (_, index) => ({
-    pageId: 'page-1',
-    fromUrl: 'https://www.netsuite.com/portal/home.shtml',
-    linkUrl: `https://www.netsuite.com/portal/${index}`,
-    isSameOrigin: true,
-  }));
-
-  const batches = partitionLinkBatches(rows);
-
-  assert.deepEqual(
-    batches.map((batch) => batch.length),
-    [2000, 2000, 1779],
-  );
-  for (const batch of batches) {
-    assert.ok(batch.length > 0 && batch.length <= MAX_LINKS_PER_BATCH);
-  }
-  // Splitting, not sampling: same rows, same order, none missing.
-  assert.deepEqual(batches.flat(), rows);
-});
-
-test('partitionLinkBatches at the cap boundaries', () => {
-  const rowsOf = (n: number) => Array.from({ length: n }, (_, index) => index);
-  const sizes = (n: number) => partitionLinkBatches(rowsOf(n)).map((batch) => batch.length);
-
-  assert.deepEqual(partitionLinkBatches(rowsOf(0)), []);
-  assert.deepEqual(sizes(1), [1]);
-  assert.deepEqual(sizes(MAX_LINKS_PER_BATCH), [MAX_LINKS_PER_BATCH]);
-  assert.deepEqual(sizes(MAX_LINKS_PER_BATCH + 1), [MAX_LINKS_PER_BATCH, 1]);
-});
-
-test('the 5,779-link page lands as sequential batches with every row sent', async () => {
+  // against a cap of 2,000, refused before sending, whole crawl purged. The cap
+  // is 10,000 now, so this is a single batch and nothing is sliced.
   const batchSizes: number[] = [];
   const received: string[] = [];
   const server = createServer(async (req, res) => {
@@ -382,21 +355,63 @@ test('the 5,779-link page lands as sequential batches with every row sent', asyn
       isSameOrigin: true,
     }));
 
-    // The same loop saveLinks runs: one slice at a time, counts summed.
-    let persisted = 0;
-    for (const slice of partitionLinkBatches(rows)) {
-      persisted += await client.createLinksBatch('run-1', slice);
-    }
+    const persisted = await client.createLinksBatch('run-1', rows);
 
     assert.equal(persisted, rows.length);
-    assert.deepEqual(batchSizes, [2000, 2000, 1779]);
-    // Every distinct link reached the server exactly once: no truncation, no
-    // slice sent twice.
+    // One request, not three. That is the whole point of raising the cap.
+    assert.deepEqual(batchSizes, [5779]);
     assert.equal(received.length, rows.length);
     assert.equal(new Set(received).size, rows.length);
   } finally {
     server.close();
   }
+});
+
+test('a page above the raised cap is still refused whole, never trimmed', () => {
+  // Raising the cap moves the boundary; it does not remove it. Above it the batch
+  // is rejected entire -- truncation is prohibited, so dropping links to fit is
+  // not an available answer.
+  const rows = Array.from({ length: MAX_LINKS_PER_BATCH + 1 }, (_, index) => ({
+    pageId: 'page-1',
+    fromUrl: 'https://example.com',
+    linkUrl: `https://example.com/${index}`,
+    isSameOrigin: true,
+  }));
+  const client = new GeekApiClient('http://127.0.0.1:1', 'test-key', 'test-user');
+
+  assert.rejects(
+    () => client.createLinksBatch('run-1', rows),
+    new RegExp(`links/batch size ${MAX_LINKS_PER_BATCH + 1} exceeds max ${MAX_LINKS_PER_BATCH}`),
+  );
+});
+
+test('the raised cap is calibrated against the body ceiling, and that is enforced', async () => {
+  // A count cap alone would just move the failure: links carrying long query
+  // strings can pass the count check and still blow the body ceiling, which
+  // would surface as an opaque transport error instead of a stated limit.
+  const padding = 'q'.repeat(4096);
+  const rows = Array.from({ length: MAX_LINKS_PER_BATCH }, (_, index) => ({
+    pageId: 'page-1',
+    fromUrl: 'https://example.com',
+    linkUrl: `https://example.com/${index}?p=${padding}`,
+    isSameOrigin: true,
+  }));
+  const client = new GeekApiClient('http://127.0.0.1:1', 'test-key', 'test-user');
+
+  await assert.rejects(
+    () => client.createLinksBatch('run-1', rows),
+    /links\/batch body \d+ exceeds max 29360128/,
+  );
+});
+
+test('the cap matches the number the server enforces', () => {
+  // GeekCrawlerIngestLimits.MaxLinksPerBatch in
+  // GeekBackend/GeekAPI/Services/GeekCrawler/GeekCrawlerIngestLimits.cs. Nothing
+  // keeps them in step automatically, so this pins the crawler's half: if the two
+  // drift, every large batch is rejected at the boundary with a 400 the crawler
+  // treats as fatal.
+  assert.equal(MAX_LINKS_PER_BATCH, 10_000);
+  assert.equal(MAX_PAGES_PER_BATCH, 100);
 });
 
 test('limits constants align with plan', () => {

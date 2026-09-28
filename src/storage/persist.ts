@@ -8,7 +8,6 @@ import {
   type CrawlReport,
   type GeekApiClient,
 } from './geek-api-client.js';
-import { partitionLinkBatches } from './ingest-limits.js';
 import { PersistenceError, isPersistenceError } from './errors.js';
 import { archiveRun, type PurgeOutcome } from './failure-archive.js';
 import { createJsonRunStore, type CrawlLinkMeta, type RunStore } from './runs.js';
@@ -593,21 +592,17 @@ export function createCrawlPersist(input: {
         isSameOrigin: l.isSameOrigin,
       }));
 
-      // One page can carry more links than a single batch may hold, so the
-      // rows are submitted in cap-sized slices rather than handed over whole.
-      // Each slice goes through the coordinator on its own, which serializes
-      // them and latches the first failure: a slice that fails stops every
-      // later slice from being sent at all. That is the fail-closed behaviour
-      // this replaces the refusal with - the run still dies on a real error,
-      // it just no longer dies because one page was popular.
-      let persisted = 0;
-      for (const slice of partitionLinkBatches(rows)) {
-        persisted += await coordinator.run(() => client.createLinksBatch(runId, slice));
-      }
+      // One batch per page. The cap is high enough to hold the pages that exist
+      // rather than the pages that are convenient - the netsuite.com portal page
+      // that provoked this carried 5,779 - and a page above it is refused whole
+      // rather than sliced, so what the server acknowledged is what the page had.
+      const persisted = await coordinator.run(() => client.createLinksBatch(runId, rows));
 
-      // Each call already asserts the server acknowledged exactly what it was
-      // handed. This is that same assertion for the page as a whole, so the
-      // counters below can only advance once every row landed.
+      // createLinksBatch already asserts the server acknowledged exactly what it
+      // was handed. This repeats it here so the counters below cannot advance on
+      // a partial write, and it is not redundant: the server inserts links one
+      // document at a time and skips duplicates individually, so a short count is
+      // a real outcome rather than an impossible one.
       if (persisted !== rows.length) {
         throw new PersistenceError(
           `links/batch persisted ${persisted} !== submitted ${rows.length} pageId=${pageId}`,
