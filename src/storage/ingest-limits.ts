@@ -1,6 +1,22 @@
 /**
- * Authoritative ingest size limits — mirror of GeekAPI GeekCrawlerIngestLimits.
- * Stay 2 MiB under Mongo's 16 MiB BSON cap. Truncation is prohibited.
+ * Authoritative ingest size limits.
+ *
+ * The page limits derive from storage: pages become Mongo documents, so they
+ * stay 2 MiB under Mongo's 16 MiB BSON cap. Truncation is prohibited - a page
+ * that cannot fit is rejected whole, never trimmed.
+ *
+ * MAX_LINKS_PER_BATCH is not a Mongo limit. Links go to Postgres through
+ * GeekRepository, and 2,000 is the request-size ceiling GeekAPI enforces
+ * inline in GeekCrawlerIngestController, rejecting anything larger with "at
+ * most 2000 links per batch". There is no GeekCrawlerIngestLimits class on the
+ * server; an earlier version of this header claimed to mirror one, and there
+ * was nothing on the other side. Nothing keeps the two numbers in step
+ * automatically, so raising this constant alone does not raise the server's
+ * ceiling - the inline check has to move with it.
+ *
+ * A page carrying more links than the cap is split by partitionLinkBatches and
+ * submitted as several batches. Splitting is not truncating: every row is
+ * still sent.
  */
 
 export const MONGO_BSON_MAX_DOCUMENT_BYTES = 16 * 1024 * 1024; // 16_777_216
@@ -8,6 +24,23 @@ export const MAX_PAGE_DOCUMENT_BYTES = 14 * 1024 * 1024; // 14_680_064
 export const MAX_BATCH_BODY_BYTES = 28 * 1024 * 1024; // 29_360_128
 export const MAX_PAGES_PER_BATCH = 100;
 export const MAX_LINKS_PER_BATCH = 2_000;
+
+/**
+ * Partition rows into batches no larger than MAX_LINKS_PER_BATCH.
+ *
+ * Every row appears exactly once, in its original order. This exists because
+ * one page can carry more links than a single batch may hold: a portal index
+ * on netsuite.com produced 5,779 against a cap of 2,000, and the whole crawl
+ * failed rather than the batch being split. Splitting is the permitted answer;
+ * dropping rows to fit is not.
+ */
+export function partitionLinkBatches<T>(rows: readonly T[]): T[][] {
+  const batches: T[][] = [];
+  for (let start = 0; start < rows.length; start += MAX_LINKS_PER_BATCH) {
+    batches.push(rows.slice(start, start + MAX_LINKS_PER_BATCH));
+  }
+  return batches;
+}
 
 const FIXED_DOCUMENT_OVERHEAD_BYTES = 512;
 const PER_STRING_FIELD_OVERHEAD_BYTES = 24;

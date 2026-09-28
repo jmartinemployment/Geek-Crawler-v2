@@ -10,7 +10,10 @@ import {
   estimatePageDocumentBytes,
 } from './geek-api-client.js';
 import { PersistenceError } from './errors.js';
-import { MONGO_BSON_MAX_DOCUMENT_BYTES } from './ingest-limits.js';
+import {
+  MONGO_BSON_MAX_DOCUMENT_BYTES,
+  partitionLinkBatches,
+} from './ingest-limits.js';
 
 test('link ingest is a single atomic batch within the max', async () => {
   const batchSizes: number[] = [];
@@ -311,6 +314,86 @@ test('links/batch requires count === submitted length', async () => {
         ]),
       /count 0 !== submitted 1/,
     );
+  } finally {
+    server.close();
+  }
+});
+
+test('a page with more links than the cap partitions without loss', () => {
+  // The shape that failed: one netsuite.com portal index carrying 5,779 links
+  // against a cap of 2,000. The client refused the batch before sending and
+  // the whole crawl was purged.
+  const rows = Array.from({ length: 5779 }, (_, index) => ({
+    pageId: 'page-1',
+    fromUrl: 'https://www.netsuite.com/portal/home.shtml',
+    linkUrl: `https://www.netsuite.com/portal/${index}`,
+    isSameOrigin: true,
+  }));
+
+  const batches = partitionLinkBatches(rows);
+
+  assert.deepEqual(
+    batches.map((batch) => batch.length),
+    [2000, 2000, 1779],
+  );
+  for (const batch of batches) {
+    assert.ok(batch.length > 0 && batch.length <= MAX_LINKS_PER_BATCH);
+  }
+  // Splitting, not sampling: same rows, same order, none missing.
+  assert.deepEqual(batches.flat(), rows);
+});
+
+test('partitionLinkBatches at the cap boundaries', () => {
+  const rowsOf = (n: number) => Array.from({ length: n }, (_, index) => index);
+  const sizes = (n: number) => partitionLinkBatches(rowsOf(n)).map((batch) => batch.length);
+
+  assert.deepEqual(partitionLinkBatches(rowsOf(0)), []);
+  assert.deepEqual(sizes(1), [1]);
+  assert.deepEqual(sizes(MAX_LINKS_PER_BATCH), [MAX_LINKS_PER_BATCH]);
+  assert.deepEqual(sizes(MAX_LINKS_PER_BATCH + 1), [MAX_LINKS_PER_BATCH, 1]);
+});
+
+test('the 5,779-link page lands as sequential batches with every row sent', async () => {
+  const batchSizes: number[] = [];
+  const received: string[] = [];
+  const server = createServer(async (req, res) => {
+    let body = '';
+    for await (const chunk of req) body += String(chunk);
+    const parsed = JSON.parse(body) as { links: Array<{ linkUrl: string }> };
+    batchSizes.push(parsed.links.length);
+    for (const link of parsed.links) received.push(link.linkUrl);
+    res.setHeader('content-type', 'application/json');
+    res.end(JSON.stringify({ count: parsed.links.length }));
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  assert(address && typeof address !== 'string');
+  const client = new GeekApiClient(
+    `http://127.0.0.1:${address.port}`,
+    'test-key',
+    'test-user',
+  );
+
+  try {
+    const rows = Array.from({ length: 5779 }, (_, index) => ({
+      pageId: 'page-1',
+      fromUrl: 'https://www.netsuite.com/portal/home.shtml',
+      linkUrl: `https://www.netsuite.com/portal/${index}`,
+      isSameOrigin: true,
+    }));
+
+    // The same loop saveLinks runs: one slice at a time, counts summed.
+    let persisted = 0;
+    for (const slice of partitionLinkBatches(rows)) {
+      persisted += await client.createLinksBatch('run-1', slice);
+    }
+
+    assert.equal(persisted, rows.length);
+    assert.deepEqual(batchSizes, [2000, 2000, 1779]);
+    // Every distinct link reached the server exactly once: no truncation, no
+    // slice sent twice.
+    assert.equal(received.length, rows.length);
+    assert.equal(new Set(received).size, rows.length);
   } finally {
     server.close();
   }

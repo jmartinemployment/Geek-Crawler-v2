@@ -8,6 +8,7 @@ import {
   type CrawlReport,
   type GeekApiClient,
 } from './geek-api-client.js';
+import { partitionLinkBatches } from './ingest-limits.js';
 import { PersistenceError, isPersistenceError } from './errors.js';
 import { archiveRun, type PurgeOutcome } from './failure-archive.js';
 import { createJsonRunStore, type CrawlLinkMeta, type RunStore } from './runs.js';
@@ -585,19 +586,36 @@ export function createCrawlPersist(input: {
 
     async saveLinks(pageId, links) {
       if (links.length === 0) return;
-      await coordinator.run(() =>
-        client.createLinksBatch(
-          runId,
-          links.map((l) => ({
-            pageId,
-            fromUrl: l.fromUrl,
-            linkUrl: l.linkUrl,
-            isSameOrigin: l.isSameOrigin,
-          })),
-        ),
-      );
-      await localMeta.recordAcceptedLinks(runId, links.length);
-      linksSaved += links.length;
+      const rows = links.map((l) => ({
+        pageId,
+        fromUrl: l.fromUrl,
+        linkUrl: l.linkUrl,
+        isSameOrigin: l.isSameOrigin,
+      }));
+
+      // One page can carry more links than a single batch may hold, so the
+      // rows are submitted in cap-sized slices rather than handed over whole.
+      // Each slice goes through the coordinator on its own, which serializes
+      // them and latches the first failure: a slice that fails stops every
+      // later slice from being sent at all. That is the fail-closed behaviour
+      // this replaces the refusal with - the run still dies on a real error,
+      // it just no longer dies because one page was popular.
+      let persisted = 0;
+      for (const slice of partitionLinkBatches(rows)) {
+        persisted += await coordinator.run(() => client.createLinksBatch(runId, slice));
+      }
+
+      // Each call already asserts the server acknowledged exactly what it was
+      // handed. This is that same assertion for the page as a whole, so the
+      // counters below can only advance once every row landed.
+      if (persisted !== rows.length) {
+        throw new PersistenceError(
+          `links/batch persisted ${persisted} !== submitted ${rows.length} pageId=${pageId}`,
+        );
+      }
+
+      await localMeta.recordAcceptedLinks(runId, rows.length);
+      linksSaved += rows.length;
     },
 
     async stats() {
