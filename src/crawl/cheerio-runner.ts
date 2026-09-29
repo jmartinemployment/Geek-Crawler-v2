@@ -18,7 +18,7 @@ import {
 import { createRobotsGate } from './robots.js';
 import { concurrencyOptions, httpAgent, httpsAgent } from './throttle.js';
 import type { CrawlType } from './types.js';
-import { isViableHtml } from './viability.js';
+import { isViableHtml, jsOnlyAbortAfter, shouldAbortJsOnly } from './viability.js';
 import { classifyReject } from './reject.js';
 import { normalizeSeeds } from '../storage/seed-key.js';
 import { htmlHash } from './dedup.js';
@@ -108,6 +108,20 @@ async function executeCheerioCrawl(
   const scopeUrl = seeds[0]!;
   const dedup = persist.dedup;
   let cancelled = false;
+
+  // A JavaScript-only site is out of scope, and finding that out page by page
+  // costs the whole request budget: every URL fetched, every one a shell, every
+  // one rejected, and the run only reports "no usable pages" once the sitemap is
+  // exhausted -- up to MAX_PAGES_PER_SITE fetches to learn what the first
+  // twenty-five already said.
+  //
+  // savedAny is the discriminator rather than a ratio. One page carrying prose
+  // means the site is not JavaScript-only, so a real site with a handful of SPA
+  // routes keeps crawling; only a site that has produced nothing is abandoned.
+  const abortAfter = jsOnlyAbortAfter();
+  let shellRejects = 0;
+  let savedAny = false;
+  let abortReason: string | null = null;
   // Scope policy is per crawl type. project-site disables section quotas: they exist to stop a
   // third party's page farm eating the budget, and on the operator's own site they would starve
   // the very directories the heading hierarchy is built from.
@@ -319,11 +333,24 @@ async function executeCheerioCrawl(
             // failed extraction: nothing here is broken. A static crawler
             // meeting a JavaScript application is out of scope, the same as a
             // robots-disallowed URL.
+            const isShell = viability.reason === 'empty_or_spa_shell';
             persist.noteReject(
-              viability.reason === 'empty_or_spa_shell' ? 'requires_javascript' : 'extract_empty',
+              isShell ? 'requires_javascript' : 'extract_empty',
               finalUrl,
               viability.reason,
             );
+            if (isShell) {
+              shellRejects += 1;
+              if (shouldAbortJsOnly({ savedAny, shellRejects, abortAfter })) {
+                abortReason =
+                  `JavaScript-only site: ${shellRejects} pages returned a shell and none ` +
+                  `carried prose. This crawler runs no JavaScript by design, so every ` +
+                  `remaining URL would be fetched and rejected in turn. Stopped early.`;
+                log.warning(abortReason);
+                request.noRetry = true;
+                await crawler.stop();
+              }
+            }
             return;
           }
 
@@ -395,6 +422,9 @@ async function executeCheerioCrawl(
           }
 
           try {
+            // Proof the site yields prose without JavaScript, which is what the
+            // early abort above tests for.
+            savedAny = true;
             const savedPage = await persist.savePage({
               url: request.url,
               finalUrl,
@@ -464,7 +494,13 @@ async function executeCheerioCrawl(
     await crawler.run(startUrls.map((url) => applyUniqueKey({ url })));
 
     persist.throwIfPersistenceFailed();
-    if (cancelled || isCancelRequested(persist.runId)) {
+    if (abortReason) {
+      // Failed rather than complete: nothing was published, and the reason names
+      // the cause. Left to finish, GeekAPI answers "no usable pages" - the same
+      // sentence it returns for an all-robots-blocked or an all-403 site.
+      await persist.markFailed(abortReason);
+      await persist.archiveAndPurge('failed', abortReason);
+    } else if (cancelled || isCancelRequested(persist.runId)) {
       // Cancel is destructive: the partial corpus is discarded along with the run. What survives is
       // the post-mortem, which archiveAndPurge writes before anything is destroyed.
       log.info(`Run ${persist.runId} cancelled — discarding the run, keeping its report`);
