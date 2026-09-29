@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { readdir, readFile, rm, stat } from 'node:fs/promises';
+import { readdir, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { prepareCrawl, startCrawl } from '../crawl/orchestrator.js';
 import { CRAWL_TYPE_VALUES } from '../crawl/types.js';
@@ -281,18 +281,19 @@ export function createCrawlApiServer(options?: { dataDir?: string; port?: number
       const pagesMatch = pathname.match(/^\/crawls\/([^/]+)\/pages$/);
       if (req.method === 'GET' && pagesMatch) {
         const runId = decodeURIComponent(pagesMatch[1]!);
-        const file = path.join(dataDir, 'runs', runId, 'pages.jsonl');
-        try {
-          const text = await readFile(file, 'utf8');
-          const pages = text
-            .trim()
-            .split('\n')
-            .filter(Boolean)
-            .map((line) => JSON.parse(line));
-          return send(res, 200, { runId, pages });
-        } catch {
-          return send(res, 404, { error: 'pages not found' });
-        }
+        // Page rows are not kept on this machine. They go to GeekAPI, which is
+        // the store, and the local pages.jsonl this used to read was written by
+        // nothing: insertPage had no caller in any mode, so createRun made the
+        // file empty and it stayed empty for the life of the run.
+        //
+        // Reading it returned 200 with an empty array, which reads exactly like
+        // a run that crawled nothing. Saying so outright is the difference
+        // between an answer and a silence that looks like one.
+        return send(res, 410, {
+          error: 'Page rows are not stored locally — read them from GeekAPI',
+          code: 'PAGES_NOT_LOCAL',
+          runId,
+        });
       }
 
       // Post-mortems for purged runs. The runs themselves are gone; this is what is left of them,
@@ -396,7 +397,7 @@ export function createCrawlApiServer(options?: { dataDir?: string; port?: number
             `        crawlType: ${CRAWL_TYPE_VALUES.join(' | ')}`);
           console.log(`  POST /crawls/resume-*  → 409 RESUME_FORBIDDEN (start a new run)`);
           console.log(`  GET  /crawls/:runId`);
-          console.log(`  GET  /crawls/:runId/pages`);
+          console.log(`  GET  /crawls/:runId/pages  → 410 PAGES_NOT_LOCAL (read from GeekAPI)`);
           console.log(`  POST /crawls/:runId/cancel`);
           resolve();
         });

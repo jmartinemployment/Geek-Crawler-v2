@@ -61,23 +61,6 @@ export type CrawlRunMeta = {
   };
 };
 
-export type CrawlPageMeta = {
-  url: string;
-  finalUrl?: string;
-  statusCode?: number;
-  bodyKey: string;
-  /** Relative key for the clean semantic HTML body when local|both. */
-  contentBodyKey?: string;
-  title?: string;
-  /** Same-site canonical URL key when declared. */
-  canonicalUrl?: string;
-  /** cheerio is the only fetch mode: static HTML, one renderer, one path. */
-  fetchMode: 'cheerio';
-  robotsAllowed: boolean;
-  crawledAtUtc: string;
-  failureReason?: string;
-};
-
 export type CrawlLinkMeta = {
   fromUrl: string;
   linkUrl: string;
@@ -125,8 +108,6 @@ export type RunStore = {
   ): Promise<void>;
   recordAcceptedPage(runId: string, hasContent: boolean): Promise<void>;
   recordAcceptedLinks(runId: string, count: number): Promise<void>;
-  insertPage(runId: string, page: CrawlPageMeta): Promise<void>;
-  insertLinks(runId: string, links: CrawlLinkMeta[]): Promise<void>;
   getRun(runId: string): Promise<CrawlRunMeta | null>;
   listRuns(): Promise<CrawlRunMeta[]>;
   /**
@@ -164,8 +145,6 @@ export function createJsonRunStore(dataDir: string): RunStore {
   const locks = new Map<string, Promise<void>>();
 
   const runPath = (runId: string) => path.join(root, 'runs', runId, 'run.json');
-  const pagesPath = (runId: string) => path.join(root, 'runs', runId, 'pages.jsonl');
-  const linksPath = (runId: string) => path.join(root, 'runs', runId, 'links.jsonl');
 
   async function withRunLock<T>(runId: string, fn: () => Promise<T>): Promise<T> {
     const prev = locks.get(runId) ?? Promise.resolve();
@@ -215,8 +194,6 @@ export function createJsonRunStore(dataDir: string): RunStore {
           linksSaved: 0,
         };
         await saveRun(run);
-        await writeFile(pagesPath(runId), '', 'utf8');
-        await writeFile(linksPath(runId), '', 'utf8');
         return run;
       });
     },
@@ -325,28 +302,6 @@ export function createJsonRunStore(dataDir: string): RunStore {
       });
     },
 
-    async insertPage(runId, page) {
-      await withRunLock(runId, async () => {
-        const run = await loadRun(runId);
-        await mkdir(path.dirname(pagesPath(runId)), { recursive: true });
-        await writeFile(pagesPath(runId), `${JSON.stringify(page)}\n`, { flag: 'a' });
-        run.pagesSaved += 1;
-        run.pagesWithoutContent =
-          (run.pagesWithoutContent ?? 0) + (page.contentBodyKey ? 0 : 1);
-        await saveRun(run);
-      });
-    },
-
-    async insertLinks(runId, links) {
-      if (links.length === 0) return;
-      await withRunLock(runId, async () => {
-        const run = await loadRun(runId);
-        const lines = links.map((l) => JSON.stringify(l)).join('\n') + '\n';
-        await writeFile(linksPath(runId), lines, { flag: 'a' });
-        run.linksSaved += links.length;
-        await saveRun(run);
-      });
-    },
 
     async getRun(runId) {
       // Multiple store instances are expected (API status reads vs. crawl/resume

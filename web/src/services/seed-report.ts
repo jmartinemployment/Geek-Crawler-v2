@@ -289,30 +289,6 @@ async function tallyPageUrlsByOrigin(
   return pageCountByOrigin;
 }
 
-async function tallyLocalPagesByOrigin(
-  runId: string,
-): Promise<Map<string, number>> {
-  const pageCountByOrigin = new Map<string, number>();
-  try {
-    const res = await fetch(
-      `${crawleeApiUrl()}/crawls/${encodeURIComponent(runId)}/pages`,
-      { cache: "no-store", signal: AbortSignal.timeout(10_000) },
-    );
-    if (!res.ok) return pageCountByOrigin;
-    const body = await res.json();
-    const pages = Array.isArray(body.pages) ? body.pages : [];
-    for (const page of pages) {
-      const url = String(page.finalUrl ?? page.url ?? "");
-      if (!url) continue;
-      const key = originKey(url);
-      pageCountByOrigin.set(key, (pageCountByOrigin.get(key) ?? 0) + 1);
-    }
-  } catch {
-    /* empty local pages is normal in api-only persist mode */
-  }
-  return pageCountByOrigin;
-}
-
 /**
  * Build seed-report rows for one run.
  * Prefers GeekAPI when reachable; falls back to local Crawlee stubs so
@@ -358,10 +334,10 @@ export async function buildSeedReportForRun(
       .map((h) => [originKey(String(h.origin)), h]),
   );
 
-  let pageCountByOrigin = await tallyPageUrlsByOrigin(runId);
-  if (pageCountByOrigin.size === 0) {
-    pageCountByOrigin = await tallyLocalPagesByOrigin(runId);
-  }
+  // One source, GeekAPI. The second path that used to sit here read pages.jsonl
+  // through the crawler API, and nothing has ever written that file, so it could
+  // not succeed - it only made an always-empty answer look like a considered one.
+  const pageCountByOrigin = await tallyPageUrlsByOrigin(runId);
 
   const seeds =
     (geek?.seedUrls?.length ? geek.seedUrls : null) ||
