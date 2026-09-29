@@ -18,8 +18,27 @@ type RagIndexStatus = {
   finishedAtUtc?: string;
 };
 
-const CONCURRENCY = 20;
-const STATUS_TIMEOUT_MS = 4_000;
+/**
+ * The deadline is the setting that matters here, not the fan-out width.
+ *
+ * Measured against production on 2026-09-29 over the same 21 runs. GeekAPI
+ * answers this endpoint in about 0.1s most of the time and then stalls for
+ * seconds with no pattern: a single request took 5.07s cold, one run at
+ * concurrency 1 took 15.14s while its 20 siblings averaged well under a second,
+ * and a pass at concurrency 3 finished every lookup in 0.19s or less. The stall
+ * is not a load curve - it does not grow with width and it does not disappear
+ * when serialised.
+ *
+ * So the old 4s deadline was below the stall and above the normal case, which
+ * is the worst place to put it: a report over 21 runs reliably reported 21
+ * failed lookups and rendered no rows at all, and the data behind it was fine.
+ * 20s sits clear of every stall measured. A slow report is a report; a report
+ * that gives up at 4s is a blank page.
+ *
+ * Width stays modest so one stalled lookup delays a slot rather than the run.
+ */
+const CONCURRENCY = 5;
+const STATUS_TIMEOUT_MS = 20_000;
 
 export async function GET() {
   try {
