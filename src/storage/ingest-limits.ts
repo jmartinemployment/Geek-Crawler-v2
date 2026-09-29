@@ -7,9 +7,9 @@
  *
  * MAX_LINKS_PER_BATCH is bounded by the request body and nothing else, and the
  * three reasons previously given for it were all wrong. It is not the Mongo BSON
- * cap: links are separate documents, not one document. It is not a Postgres
- * insert ceiling: the crawl store is Mongo end to end and nothing writes crawl
- * data to Postgres. And it is not atomicity: the server's
+ * cap: links are separate documents, not one document. It is not a relational
+ * insert ceiling: the crawl store is Mongo end to end, and no other store is in
+ * this path. And it is not atomicity: the server's
  * InsertLinksIgnoringDuplicatesAsync loops InsertOneAsync per document and
  * swallows duplicate-key errors one at a time, so a batch of any size is already
  * N independent writes with no rollback. There was never an atomic batch to
