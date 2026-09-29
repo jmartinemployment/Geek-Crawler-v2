@@ -27,7 +27,7 @@ accessibility, or exhaustive correctness of business logic. GeekOAuth received t
 | [GeekBackend](./audit-geekbackend.md) | GeekAPI + GeekRepository: generation, ingest, storage | 5 | **critical** |
 | [Geek-Crawler-v2](./audit-geek-crawler-v2.md) | the crawler; writes corpus to Mongo via GeekAPI | 5 | **high** |
 | [content-creator-v2](./audit-content-creator-v2.md) | the live operator frontend | 4 | **medium** |
-| [Geek-Crawler-Rag](./audit-geek-crawler-rag.md) | Library half: retrieval + quote verification | 3 | **medium** |
+| [Geek-Crawler-Rag](./audit-geek-crawler-rag.md) | Library half: retrieval + quote verification | 3 | **high** (F3, after classification) |
 | [GeekOAuth](./audit-geekoauth.md) | OIDC provider CCv2 authenticates against | 2 | **low** |
 
 ## Cross-repo findings, ranked

@@ -62,21 +62,83 @@ ever adds a cleanliness check, include stale bytecode for removed modules.
 
 ---
 
-## F3 — Broad exception handling, unaudited — **low, needs a pass I did not do**
+## F3 — Broad exception handling, classified — **one fail-open, high**
 
-34 `except Exception` sites across `src`. I did not classify them individually, so this is a
-flagged area rather than a finding.
+The pass the earlier draft of this file said it had not done. 34 `except Exception`
+sites across `src`. Four were read in full; the remaining 30 were classified from the
+handler body, which is where the fail-open/fail-closed distinction actually lives.
 
-It matters here more than elsewhere: this repo's job is **verification**. A broad `except` around
-`citation_verify.quote_in_text` that returns "unverified" is correct fail-closed behaviour; one
-that returns "verified" or swallows a retrieval error into an empty result set is the failure mode
-the whole Library exists to prevent.
+### Fail open — fix
 
-**Fix** — one pass over those 34 sites, classifying each as (a) fail-closed, correct;
-(b) fail-open, must change; (c) too broad to tell. Only (b) needs work, but (c) needs narrowing so
-the next audit can tell.
+**`rerank.py:65` — fabricated relevance scores. High.**
 
----
+```python
+except Exception:
+    logger.exception("Cohere rerank failed; using dense/hybrid order")
+    return [(i, float(len(documents) - i)) for i in range(top_n)]
+```
+
+On any rerank failure this returns synthetic scores descending by input position.
+That is not "no rerank applied" — it is a scored list the caller cannot distinguish
+from a real one, built from data no reranker ever saw. Rule 2 names this exactly:
+never default to unverified data to salvage the operation.
+
+It matters more here than it would elsewhere. Rerank order decides which chunks reach
+the model as grounding evidence, so a silent degradation to positional order changes
+what gets cited, with nothing in the response saying so.
+
+*Fix:* return a clean failure the caller can see. `query.py` already has the vocabulary
+for it — see below — so this can report unranked rather than invent ranking.
+
+### Fail closed, and the pattern to copy
+
+**`query.py:145` is the model.** It distinguishes two things most of this codebase
+collapses:
+
+```python
+retrieval="error"    # with warning: "Query failed due to an internal retrieval error."
+retrieval="empty"    # genuinely no chunks for this runId
+```
+
+An empty result and a broken search are different answers and it says which. Every
+other site in this list that returns `[]` or `None` on failure should be measured
+against this one.
+
+### Worth narrowing, low risk
+
+| site | behaviour | why it is tolerable, and what to tighten |
+|---|---|---|
+| `qdrant_store.py:732` | scroll failure → `[]` | An empty search result reads as "no matches". Logged, but the caller cannot tell. Give it the `query.py` treatment |
+| `qdrant_store.py:779` | host lookup failure → `None` | Same shape. `/v1/index/hosts` resolves a host to a runId, so "not found" and "lookup broke" have different consequences |
+| `unusable.py:93` | any exception → `False` | False means "not locale-excluded", i.e. keep the page. Consistent with the function's own default for a URL with no path segment, so a malformed URL is kept rather than dropped. Narrow to the parse error rather than `Exception` |
+| `mongo.py:264` | load failure → default entity | The value returned is computed unconditionally above and is also the legitimate no-match answer, so this is a default rather than a backup path. The word "fallback" in the message is misleading. A failed load should still be distinguishable from no match |
+| `extract.py:29` | `continue` | Skips one item silently during extraction. Bounded, but a dropped item leaves no trace |
+| `ad_templates.py:186` | → empty response | Empty and failed are indistinguishable to the caller |
+| `indexer.py:440` | `pass` | Bare swallow, no log |
+
+### Correct as written — no action
+
+`app.py:246,252,271` report each health failure into an `errors` list rather than
+hiding it. `indexer.py:295,355,376,715` log and fail the index. `indexer.py:462` raises
+`LeaseLostError` once the failure limit is passed. `llama_engine.py:135-147` ignore
+client-close errors during shutdown, which is the one place ignoring is right.
+`llama_engine.py:332,360` feed quarantine logic. `qdrant_store.py:129,196,216,258,272`
+are idempotent index and collection setup. `qdrant_store.py:330` is deliberately broad
+and documents why, narrowing immediately via `_is_missing_collection`. `scheduler.py:101`
+keeps the loop alive after a failed tick; `:162` records and re-raises. `webhook.py:48`
+states its reason outright: never fail the indexer because GeekAPI is down.
+`ad_templates.py:86` skips one payload index field at debug level.
+
+### Plan for F3
+
+1. `rerank.py:65` — stop returning fabricated scores. The only genuine fail-open.
+2. Give `qdrant_store.py:732` and `:779` the `query.py` error/empty distinction.
+3. Narrow `unusable.py:93` to the parse error it is actually guarding.
+4. Reword the `mongo.py:264` message so it stops describing a default as a fallback.
+5. Add a log line at `indexer.py:440`; a bare `pass` leaves nothing to find.
+
+Only item 1 changes behaviour that could affect what gets cited. The rest make failures
+legible without changing outcomes.
 
 ## Confirmed clean
 
