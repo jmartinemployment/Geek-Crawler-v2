@@ -10,6 +10,7 @@ type CrawlSnapshot = {
 
 type RagIndexStatus = {
   state?: string;
+  error?: string | null;
   mongoPageCount?: number;
   pagesEnglish?: number;
   chunksUpserted?: number;
@@ -56,6 +57,18 @@ export async function GET() {
     let failedLookups = 0;
     const indexed = await mapPool(crawls, CONCURRENCY, async (crawl) => {
       if (!crawl.runId) return null;
+      const base_row = {
+        runId: crawl.runId,
+        url: crawl.seedUrls?.[0] ?? "",
+        crawlType: crawl.crawlType ?? "",
+        mongoPageCount: 0,
+        pagesEnglish: 0,
+        chunksUpserted: 0,
+        attempt: 0,
+        trigger: "",
+        finishedAtUtc: null as string | null,
+        error: null as string | null,
+      };
       try {
         const response = await fetch(
           `${base}/api/geek-crawler/crawls/${encodeURIComponent(crawl.runId)}/rag-index`,
@@ -65,42 +78,70 @@ export async function GET() {
             signal: AbortSignal.timeout(STATUS_TIMEOUT_MS),
           },
         );
+        // A 404 is an answer, not a failure: this run has never been indexed.
+        // Reported as its own state so a run nobody has queued is told apart
+        // from one whose lookup did not come back.
+        if (response.status === 404) {
+          return { ...base_row, state: "not indexed" };
+        }
         if (!response.ok) {
-          if (response.status >= 500) failedLookups += 1;
-          return null;
+          failedLookups += 1;
+          return { ...base_row, state: "unknown" };
         }
 
         const status = (await response.json()) as RagIndexStatus;
-        if (status.state?.toLowerCase() !== "complete") return null;
         return {
-          runId: crawl.runId,
-          url: crawl.seedUrls?.[0] ?? "",
-          crawlType: crawl.crawlType ?? "",
+          ...base_row,
+          state: (status.state ?? "unknown").toLowerCase(),
           mongoPageCount: status.mongoPageCount ?? 0,
           pagesEnglish: status.pagesEnglish ?? 0,
           chunksUpserted: status.chunksUpserted ?? 0,
           attempt: status.attempt ?? 0,
           trigger: status.trigger ?? "manual",
           finishedAtUtc: status.finishedAtUtc ?? null,
+          error: status.error ?? null,
         };
       } catch {
+        // The lookup itself did not answer. The run still appears, because a
+        // run dropped from the table reads as a run that does not exist.
         failedLookups += 1;
-        return null;
+        return { ...base_row, state: "unknown" };
       }
     });
+
+    // Complete first, newest completion first, which is the order this report
+    // has always promised. Everything else follows in the order an operator
+    // acts on it: what broke, what is moving, what is waiting, what nobody has
+    // asked for yet.
+    const STATE_ORDER: Record<string, number> = {
+      complete: 0,
+      failed: 1,
+      running: 2,
+      pending: 3,
+      "not indexed": 4,
+      unknown: 5,
+    };
 
     const rows = indexed
       .filter((row): row is NonNullable<typeof row> => row !== null)
       .sort((a, b) => {
+        const rank =
+          (STATE_ORDER[a.state] ?? 9) - (STATE_ORDER[b.state] ?? 9);
+        if (rank !== 0) return rank;
         const completed = (b.finishedAtUtc ?? "").localeCompare(
           a.finishedAtUtc ?? "",
         );
         return completed || a.url.localeCompare(b.url);
       });
 
+    const byState: Record<string, number> = {};
+    for (const row of rows) byState[row.state] = (byState[row.state] ?? 0) + 1;
+
     return NextResponse.json({
       ok: true,
       count: rows.length,
+      indexedCount: byState.complete ?? 0,
+      byState,
       rows,
       partial: failedLookups > 0,
       failedLookups,

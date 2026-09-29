@@ -7,10 +7,12 @@ type IndexedRunRow = {
   runId: string;
   url: string;
   crawlType: string;
+  state: string;
   mongoPageCount: number;
   pagesEnglish: number;
   chunksUpserted: number;
   finishedAtUtc: string | null;
+  error: string | null;
 };
 
 export function IndexedRunsReport() {
@@ -18,6 +20,7 @@ export function IndexedRunsReport() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
+  const [byState, setByState] = useState<Record<string, number>>({});
 
   useEffect(() => {
     let cancelled = false;
@@ -30,6 +33,9 @@ export function IndexedRunsReport() {
         if (!response.ok) throw new Error(body.error ?? "Report failed");
         if (!cancelled) {
           setRows(Array.isArray(body.rows) ? body.rows : []);
+          setByState(
+            body.byState && typeof body.byState === "object" ? body.byState : {},
+          );
           setWarning(typeof body.warning === "string" ? body.warning : null);
         }
       } catch (err) {
@@ -46,16 +52,18 @@ export function IndexedRunsReport() {
 
   function downloadCsv() {
     const lines = [
-      "url,runId,crawlType,mongoPageCount,pagesEnglish,chunksUpserted,indexedAtUtc",
+      "url,runId,crawlType,state,mongoPageCount,pagesEnglish,chunksUpserted,indexedAtUtc,error",
       ...rows.map((row) =>
         [
           JSON.stringify(row.url),
           JSON.stringify(row.runId),
           JSON.stringify(row.crawlType),
+          JSON.stringify(row.state),
           row.mongoPageCount,
           row.pagesEnglish,
           row.chunksUpserted,
           JSON.stringify(row.finishedAtUtc ?? ""),
+          JSON.stringify(row.error ?? ""),
         ].join(","),
       ),
     ];
@@ -77,27 +85,38 @@ export function IndexedRunsReport() {
           gap: "1rem",
         }}
       >
-        <h1>Successfully Indexed Runs</h1>
+        <h1>Run Index Status</h1>
         <button type="button" onClick={downloadCsv} disabled={rows.length === 0}>
           Download report CSV
         </button>
       </div>
       <p className="lede">
         One authoritative report from GeekAPI crawl metadata joined with RAG
-        index status. Newest indexing completion appears first.
+        index status. Every crawl is listed, indexed or not: a run missing from
+        this table is a run GeekAPI does not have. Complete first, newest
+        completion first, then whatever needs attention.
       </p>
       {error ? <pre className="result">{error}</pre> : null}
       {warning ? <pre className="result">{warning}</pre> : null}
+      {Object.keys(byState).length > 0 ? (
+        <p className="muted">
+          {Object.entries(byState)
+            .sort((a, b) => b[1] - a[1])
+            .map(([state, n]) => `${n} ${state}`)
+            .join(" · ")}
+        </p>
+      ) : null}
       {loading ? (
         <div className="panel">Loading indexed runs…</div>
       ) : rows.length === 0 ? (
-        <div className="panel">No successfully indexed runs.</div>
+        <div className="panel">GeekAPI returned no crawls.</div>
       ) : (
         <table>
           <thead>
             <tr>
               <th>URL</th>
               <th>Type</th>
+              <th>Index</th>
               <th>Pages</th>
               <th>English</th>
               <th>Chunks</th>
@@ -113,7 +132,10 @@ export function IndexedRunsReport() {
                     {row.url || "—"}
                   </a>
                 </td>
-                <td>{row.crawlType}</td>
+                <td title={row.error ?? undefined}>
+                  {row.state}
+                  {row.error ? " *" : ""}
+                </td>
                 <td>{row.mongoPageCount}</td>
                 <td>{row.pagesEnglish}</td>
                 <td>{row.chunksUpserted}</td>
