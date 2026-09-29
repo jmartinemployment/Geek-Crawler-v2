@@ -207,8 +207,10 @@ coverage against them.
 
 ## Supersedes
 
-`plans/site-structure-view.md` — it builds the structure view in this repo's UI and adds another
-`pages` proxy here. Delete it when change 1 lands.
+`plans/site-structure-view.md` — it built the structure view in this repo's UI and added another
+`pages` proxy here. Change 1 landed (`GeekCrawlerController.cs:256` serves
+`crawls/{runId}/site-structure`), so that plan was deleted on 2026-09-29, as its own note
+instructed.
 
 ## Verify
 
