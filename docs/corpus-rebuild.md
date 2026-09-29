@@ -1,8 +1,16 @@
 # Corpus rebuild: replace the extractor, delete the corpus, re-crawl
 
-**Status: extractor replaced and verified in the working tree, uncommitted.
+**Status: DONE. Kept as the record of what was changed and why, not as work outstanding.**
+
+The header below said "uncommitted … Nothing deleted yet" until 2026-09-29. Both were false by
+then: the extractor is committed and emits `contentHtml` plus typed `blocks`
+(`src/crawl/extract-content.ts:183-190`), and the 5,274 unusable pages were deleted from Mongo
+with their Qdrant points on 2026-09-18. §2a's "computed and discarded" is stale too — `blocks`
+reach storage and the RAG library reads them.
+
+Original status, for the record: extractor replaced and verified in the working tree, uncommitted.
 Output is clean semantic HTML — the text-format converter and Turndown are gone. Nothing deleted
-yet.**
+yet.
 
 ## Why
 
