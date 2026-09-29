@@ -9,20 +9,18 @@ The `geek_crawler` Postgres layer was removed on 2026-09-29 (`GeekCrawlerDbConte
 migrations, the seed-key backfill). **That did not cover this.** Three crawl-shaped tables live in
 a *different* context, `ContentCreatorV2DbContext`, and are still read and written today.
 
-## The one thing that actually reduces the bill
+## Why, and the order
 
-Deleting code does not drop tables, and dropping empty tables does not reclaim anything. **The
-rows are the cost.** Order matters:
+The rule is the reason. Crawl data does not belong in Postgres, so it goes — that does not wait on
+a cost analysis, and no measurement makes it acceptable to leave.
+
+Order still matters, because deleting code neither stops writes nor removes rows:
 
 1. Stop the writes (§2) — otherwise the data comes back
-2. Drop the data (§5) — this is the step that moves the bill
+2. Drop the data (§5) — code removal alone leaves the rows in place
 3. Remove the code (§3, §4) — so nothing recreates or re-reads it
 
-Doing 3 without 2 and 5 leaves the rows sitting there, billed, unreachable.
-
-*Unverified:* that these tables are what the $80 is. Confirm against Railway's Postgres storage
-metrics before assuming — crawl pages carry HTML, so they are the plausible bulk, but plausible is
-not measured.
+Doing 3 without 2 and 5 leaves crawl rows in Postgres, which is the thing the rule forbids.
 
 ## 1. The surface, complete
 
@@ -77,19 +75,20 @@ default went unnoticed.
 
 ## 5. Drop the data
 
-The step that moves the bill. Needs a migration that drops the three tables, or a manual drop
-against the database — a decision about whether an already-migrated schema gets a drop migration,
-which CLAUDE.md notes was deliberately avoided for the `geek_crawler` leftovers.
+Needs a migration that drops the three tables, or a manual drop against the database — a decision
+about whether an already-migrated schema gets a drop migration, which CLAUDE.md notes was
+deliberately avoided for the `geek_crawler` leftovers.
 
-Difference here: those were unreachable after the code went. **These hold live rows that cost
-money**, so leaving them is not the same call.
+Difference here: those were unreachable once the code went, so leaving them broke no rule. **These
+are crawl data in Postgres**, which the rule forbids outright. Removing the code without dropping
+the rows does not satisfy it.
 
 ## 6. Verify
 
 1. `GET api/geek-content-creator-v2/project-site/runs/{runId}/pages` for a Geek-Crawler-v2
    project-site run returns its pages — proves the Mongo read path serves what the crawler wrote
 2. No EF entity, DbSet, controller or client method names a crawl table
-3. Postgres storage drops by the size of the three tables
+3. The three tables no longer exist; no crawl rows remain in Postgres
 4. A generation run still grounds on project-site content
 
 ## Not in this plan
