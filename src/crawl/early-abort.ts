@@ -1,0 +1,71 @@
+/**
+ * Stop a crawl that has already proved it will yield nothing.
+ *
+ * Two sites are out of scope for a static crawler, and both of them were
+ * costing a whole crawl to identify. A JavaScript-only site answers every URL
+ * with an empty mount point. A site that refuses non-browser clients answers
+ * every URL with a 403, a 401, a 429 or a Cloudflare interstitial. In both
+ * cases every remaining URL is fetched, rejected, and counted, and the run only
+ * reports "no usable pages" once the page budget is spent.
+ *
+ * One predicate serves both because the rule is the same rule: a run that has
+ * produced nothing, and has been told the same thing enough times, stops. Two
+ * copies of it would be two thresholds to keep in step and two places for the
+ * savedAny veto to be forgotten.
+ */
+
+/**
+ * Consecutive rejects of one kind before a run that has saved nothing is
+ * abandoned.
+ *
+ * Twenty-five is well past coincidence and well inside the budget. A site with
+ * a few broken or gated pages near its entry points is nowhere near it, and a
+ * site that is wholly a shell or wholly blocked reaches it in the first wave.
+ */
+export const DEFAULT_ABORT_AFTER = 25;
+
+/**
+ * Read a threshold from the environment, falling back on anything unusable.
+ *
+ * Nonsense must not disable the guard and must not fire it instantly, so zero,
+ * negatives, blanks and non-numbers all land on the default rather than being
+ * honoured as written.
+ */
+export function abortAfterFromEnv(
+  name: string,
+  env: NodeJS.ProcessEnv = process.env,
+): number {
+  const raw = Number(env[name]);
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : DEFAULT_ABORT_AFTER;
+}
+
+/**
+ * Whether a run has seen enough of one refusal to stop.
+ *
+ * savedAny vetoes outright, and that is the whole safety of it: one page
+ * carrying prose proves the site answers a static crawler, so a real site with
+ * a handful of SPA routes or gated sections is never abandoned however many
+ * rejects follow. Only a run that has produced nothing at all can stop early.
+ */
+export function shouldAbortRun(input: {
+  savedAny: boolean;
+  rejects: number;
+  abortAfter: number;
+}): boolean {
+  if (input.savedAny) return false;
+  return input.rejects >= input.abortAfter;
+}
+
+/**
+ * Status codes that mean the server refused this client rather than failed.
+ *
+ * Crawlee's own session pool treats exactly these three as blocked. 404 and 500
+ * are deliberately absent: a missing page or a broken one says nothing about
+ * whether the site will serve the rest of its URLs, so neither may contribute
+ * to abandoning a site.
+ */
+const BLOCKED_STATUS = new Set([401, 403, 429]);
+
+export function isBlockedStatus(statusCode: number | undefined): boolean {
+  return statusCode !== undefined && BLOCKED_STATUS.has(statusCode);
+}

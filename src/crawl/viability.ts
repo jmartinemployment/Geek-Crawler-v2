@@ -43,31 +43,3 @@ export function isViableHtml(rawHtml: string, $?: CheerioLike): ViabilityResult 
 
   return { viable: true };
 }
-
-
-/** Default number of consecutive shell pages before a run is abandoned. */
-export const DEFAULT_JS_ONLY_ABORT_AFTER = 25;
-
-export function jsOnlyAbortAfter(env: NodeJS.ProcessEnv = process.env): number {
-  const raw = Number(env.JS_ONLY_ABORT_AFTER);
-  return Number.isFinite(raw) && raw > 0
-    ? Math.floor(raw)
-    : DEFAULT_JS_ONLY_ABORT_AFTER;
-}
-
-/**
- * Whether a run has seen enough to call the site JavaScript-only.
- *
- * `savedAny` vetoes outright, and that is the whole safety of it: one page
- * carrying prose without JavaScript proves the site is reachable, so a real
- * site with a handful of SPA routes is never abandoned however many shells
- * follow. Only a run that has produced nothing at all can stop early.
- */
-export function shouldAbortJsOnly(input: {
-  savedAny: boolean;
-  shellRejects: number;
-  abortAfter: number;
-}): boolean {
-  if (input.savedAny) return false;
-  return input.shellRejects >= input.abortAfter;
-}

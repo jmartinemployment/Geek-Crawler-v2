@@ -18,7 +18,12 @@ import {
 import { createRobotsGate } from './robots.js';
 import { concurrencyOptions, httpAgent, httpsAgent } from './throttle.js';
 import type { CrawlType } from './types.js';
-import { isViableHtml, jsOnlyAbortAfter, shouldAbortJsOnly } from './viability.js';
+import { isViableHtml } from './viability.js';
+import {
+  abortAfterFromEnv,
+  isBlockedStatus,
+  shouldAbortRun,
+} from './early-abort.js';
 import { classifyReject } from './reject.js';
 import { normalizeSeeds } from '../storage/seed-key.js';
 import { htmlHash } from './dedup.js';
@@ -109,19 +114,67 @@ async function executeCheerioCrawl(
   const dedup = persist.dedup;
   let cancelled = false;
 
-  // A JavaScript-only site is out of scope, and finding that out page by page
-  // costs the whole request budget: every URL fetched, every one a shell, every
-  // one rejected, and the run only reports "no usable pages" once the sitemap is
-  // exhausted -- up to MAX_PAGES_PER_SITE fetches to learn what the first
-  // twenty-five already said.
+  // Two kinds of site are out of scope for a crawler that runs no JavaScript,
+  // and identifying either one page by page costs the whole request budget:
+  // every URL fetched, every one refused the same way, and the run only reports
+  // "no usable pages" once the sitemap is exhausted -- hundreds of fetches to
+  // learn what the first twenty-five already said.
   //
-  // savedAny is the discriminator rather than a ratio. One page carrying prose
-  // means the site is not JavaScript-only, so a real site with a handful of SPA
-  // routes keeps crawling; only a site that has produced nothing is abandoned.
-  const abortAfter = jsOnlyAbortAfter();
+  // savedAny is the discriminator for both, rather than a ratio. One page
+  // carrying prose proves the site answers a static crawler, so a real site
+  // with a handful of SPA routes or gated sections keeps crawling; only a site
+  // that has produced nothing at all is abandoned.
+  const jsOnlyAbortAfter = abortAfterFromEnv('JS_ONLY_ABORT_AFTER');
+  const blockedAbortAfter = abortAfterFromEnv('BLOCKED_ABORT_AFTER');
   let shellRejects = 0;
+  let blockedRejects = 0;
   let savedAny = false;
   let abortReason: string | null = null;
+
+  /**
+   * End the run and say why. Crawlee finishes the requests already in flight,
+   * so the reason is recorded once and the terminal block acts on it.
+   */
+  const abortRun = async (reason: string, request: { noRetry: boolean }) => {
+    if (abortReason) return;
+    abortReason = reason;
+    log.warning(reason);
+    request.noRetry = true;
+    await crawler.stop();
+  };
+
+  /**
+   * Record one refusal and end the run once they are all this site offers.
+   *
+   * A refusal reaches this from three places -- a blocked status code, a
+   * challenge page served with a 200, and a rate-limited request that Crawlee
+   * threw rather than handled -- and they are one signal, so they share one
+   * counter, one threshold and one sentence.
+   */
+  const noteBlocked = async (
+    url: string,
+    detail: string,
+    request: { noRetry: boolean },
+  ) => {
+    persist.noteReject('challenge_page', url, detail);
+    blockedRejects += 1;
+    if (
+      !shouldAbortRun({
+        savedAny,
+        rejects: blockedRejects,
+        abortAfter: blockedAbortAfter,
+      })
+    ) {
+      return;
+    }
+    await abortRun(
+      `Site refuses this crawler: ${blockedRejects} pages answered 401, 403, ` +
+        `429 or a challenge page and none carried prose. Every remaining URL ` +
+        `would be refused in turn. Stopped early.`,
+      request,
+    );
+  };
+
   // Scope policy is per crawl type. project-site disables section quotas: they exist to stop a
   // third party's page farm eating the budget, and on the operator's own site they would starve
   // the very directories the heading hierarchy is built from.
@@ -294,6 +347,26 @@ async function executeCheerioCrawl(
             return;
           }
 
+          // A 4xx or 5xx body is the server's error page, not the site's
+          // content. Crawlee hands 401, 403, 404 and 410 to this handler with
+          // the body attached -- only 5xx and the codes named in
+          // additionalHttpErrorStatusCodes are thrown -- so without this gate a
+          // "You do not have permission to access this resource" page clears
+          // the prose floor and is persisted as corpus under its own URL.
+          if (statusCode !== undefined && statusCode >= 400) {
+            if (isBlockedStatus(statusCode)) {
+              // Refused, not broken: the site is turning away a non-browser
+              // client, which is the same answer it will give for every
+              // remaining URL.
+              await noteBlocked(finalUrl, `HTTP ${statusCode}`, request);
+              return;
+            }
+            // A 404 or a 500 says nothing about the rest of the site, so it is
+            // reported and never counted toward abandoning it.
+            persist.noteReject('request_failed', finalUrl, `HTTP ${statusCode}`);
+            return;
+          }
+
           dedup.learnRedirect(request.url, finalUrl, scopeUrl);
           urlKey = dedup.resolveKey(finalUrl);
           if (!urlKey) {
@@ -320,7 +393,9 @@ async function executeCheerioCrawl(
           const viability = isViableHtml(rawHtml, $ as never);
           if (!viability.viable) {
             if (viability.reason === 'challenge_page') {
-              persist.noteReject('challenge_page', finalUrl);
+              // A challenge served with a 200 is the same refusal as a 403,
+              // dressed as a page, so it feeds the same counter.
+              await noteBlocked(finalUrl, 'challenge page served with 200', request);
               return;
             }
             // A page that carries no prose without JavaScript contributes
@@ -341,14 +416,20 @@ async function executeCheerioCrawl(
             );
             if (isShell) {
               shellRejects += 1;
-              if (shouldAbortJsOnly({ savedAny, shellRejects, abortAfter })) {
-                abortReason =
-                  `JavaScript-only site: ${shellRejects} pages returned a shell and none ` +
-                  `carried prose. This crawler runs no JavaScript by design, so every ` +
-                  `remaining URL would be fetched and rejected in turn. Stopped early.`;
-                log.warning(abortReason);
-                request.noRetry = true;
-                await crawler.stop();
+              if (
+                shouldAbortRun({
+                  savedAny,
+                  rejects: shellRejects,
+                  abortAfter: jsOnlyAbortAfter,
+                })
+              ) {
+                await abortRun(
+                  `JavaScript-only site: ${shellRejects} pages returned a shell ` +
+                    `and none carried prose. This crawler runs no JavaScript by ` +
+                    `design, so every remaining URL would be fetched and rejected ` +
+                    `in turn. Stopped early.`,
+                  request,
+                );
               }
             }
             return;
@@ -472,12 +553,24 @@ async function executeCheerioCrawl(
           releaseOwned();
         }
       },
-      failedRequestHandler: async ({ request }, error) => {
+      failedRequestHandler: async ({ request, response }, error) => {
         if (isPersistenceError(error)) {
           request.noRetry = true;
           return;
         }
         log.warning(`Request failed ${request.url}: ${error}`);
+
+        // 429 and 503 are thrown rather than handled, so a rate-limited site
+        // arrives here instead of at the status gate above. The response is
+        // already on the context when the throw comes from the status code; a
+        // transport failure leaves it undefined, which is why a DNS error or a
+        // timeout cannot be mistaken for a refusal.
+        const statusCode = response?.statusCode;
+        if (isBlockedStatus(statusCode)) {
+          await noteBlocked(request.url, `HTTP ${statusCode}`, request);
+          return;
+        }
+
         persist.noteReject(
           'request_failed',
           request.url,
