@@ -142,7 +142,52 @@ failure state returned immediately, and `None` is exactly that here.
 
 Recorded rather than deleted, because the next reader will have the same instinct.
 
-### Correct as written — no action
+### Correct as written — re-checked properly, all confirmed
+
+The first pass classified these from three-line handler bodies. That method produced a
+false positive (`:779`, below), so all 23 were re-read in full: the enclosing function,
+what it returns, and what the caller does with it.
+
+**Result: all 23 confirmed correct. No further fail-open found.**
+
+| site | why it is correct |
+|---|---|
+| `app.py:246,252,271` | `mongo_ok`/`qdrant_ok` stay `False`, so `healthy` is False and the endpoint returns 503 with the reason in `errors` |
+| `indexer.py:295` | On failure the status stays un-advanced and the webhook is skipped, so the run is never marked complete; the lease expires and the scheduler re-claims it. Upserts are idempotent |
+| `indexer.py:355` | Calls `_fail_quarantined`, explicitly marking the run failed |
+| `indexer.py:376` | Lease release failed; the lease expires on its own TTL |
+| `indexer.py:462` | Tolerates transient heartbeat errors to a bound, then raises `LeaseLostError` |
+| `llama_engine.py:135,139,143,147` | Client closes during shutdown. Nothing to do, nothing at risk |
+| `llama_engine.py:332,360` | Classify then raise on **every** path. Nothing swallowed |
+| `qdrant_store.py:129` | Returns `None` not `False` on error, documented: *"I could not tell is not it is missing"*. `app.py:261` checks `is False`, so unknown never reads as missing |
+| `qdrant_store.py:196` | On-disk vectors config. Performance, not correctness |
+| `qdrant_store.py:216,258,272` | Idempotent DDL where "already exists" raises |
+| `qdrant_store.py:330` | Deliberately broad, narrowed immediately by `_is_missing_collection`, and says why |
+| `scheduler.py:101` | One bad tick must not kill the scheduler; re-raises `CancelledError` |
+| `scheduler.py:162` | Records the error for the `finally` block, then re-raises |
+| `webhook.py:48` | Best-effort push; the status is already durable in the store before notify runs |
+| `ad_templates.py:86` | Same idempotent DDL family |
+
+**What the re-check says about the method.** Excerpt-based classification erred toward
+over-flagging, not under-flagging: one false positive, zero false negatives across 23.
+That is the safer direction to be wrong in, but it is not a reason to trust it — the
+false positive cost a change, a revert, and a test failure to catch.
+
+### Observations from the re-check — not defects
+
+1. `_persist` returns `bool` and all **12** call sites discard it. Dead API surface; the
+   behaviour behind it is conservative.
+2. `app.py:271` — a scheduler failure lands in `errors` but does not flip `healthy`, so
+   `/health` reports `status: ok` while the component that does the indexing is down.
+   Deliberate for the collection case (the comment explains why 503 would block the only
+   path that heals it); less obviously intended for the scheduler.
+3. The idempotent-DDL family cannot tell "already exists" from "creation failed". Qdrant
+   filters unindexed fields by scanning, so this is a performance risk, not a correctness
+   one.
+4. `webhook.py:48` — if the push is GeekAPI's only completion signal, a lost notify is
+   silent. The status is durable in the store, so this turns on whether GeekAPI polls,
+   which is outside this repo.
+
 
 `app.py:246,252,271` report each health failure into an `errors` list rather than
 hiding it. `indexer.py:295,355,376,715` log and fail the index. `indexer.py:462` raises
