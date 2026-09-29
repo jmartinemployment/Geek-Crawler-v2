@@ -264,7 +264,9 @@ export function createCrawlPersist(input: {
           hostProgressJson: hostProgressJson(),
         }),
       );
-      await localMeta.markComplete(runId);
+      // The same value sent to GeekAPI, so the local record can answer whether
+      // this run is eligible for indexing without a round trip.
+      await localMeta.markComplete(runId, contentReady ? completedAtUtc : null);
     },
 
     async markCancelled(reason: string) {

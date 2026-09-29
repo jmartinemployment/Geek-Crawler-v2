@@ -155,7 +155,24 @@ async function loadLocalRun(runId: string): Promise<LocalRunStub | null> {
   }
 }
 
-async function loadGeekSnap(runId: string): Promise<GeekSnap | null> {
+/**
+ * Why this is a discriminated result rather than GeekSnap | null.
+ *
+ * Returning null for every unhappy path made three different answers
+ * indistinguishable: GeekAPI said the run is not there, GeekAPI could not be
+ * reached, and GeekAPI answered with an error. The report then called all three
+ * "GeekAPI unreachable", which is only true of one of them, and is actively
+ * misleading for the most common: a run superseded by a newer crawl of the same
+ * seed is absent by design, and reporting that as an outage sends whoever reads
+ * it looking for a broken service.
+ */
+type GeekSnapOutcome =
+  | { kind: "found"; snap: GeekSnap }
+  | { kind: "absent" }
+  | { kind: "unreachable"; reason: string }
+  | { kind: "error"; status: number };
+
+async function loadGeekSnap(runId: string): Promise<GeekSnapOutcome> {
   try {
     const headers = geekApiHeaders();
     const res = await fetch(
@@ -166,14 +183,18 @@ async function loadGeekSnap(runId: string): Promise<GeekSnap | null> {
         signal: AbortSignal.timeout(GEEK_API_MS),
       },
     );
-    if (!res.ok) return null;
+    // 404 is an answer, not a failure: GeekAPI keys a run by its seed, so a
+    // newer crawl of the same seed replaces this one and the old id stops
+    // resolving. Separating it from an outage is the whole point of this type.
+    if (res.status === 404) return { kind: "absent" };
+    if (!res.ok) return { kind: "error", status: res.status };
     const snap = await res.json();
     const hosts = Array.isArray(snap.hosts) ? snap.hosts : [];
     const rejectHost = hosts.find(
       (h: HostRow & Record<string, unknown>) =>
         String(h.origin ?? "") === "__crawlee_reject_stats__",
     ) as (HostRow & Record<string, unknown>) | undefined;
-    return {
+    const found: GeekSnap = {
       status: String(snap.status ?? ""),
       crawlType: String(snap.crawlType ?? ""),
       seedUrls: Array.isArray(snap.seedUrls) ? snap.seedUrls.map(String) : [],
@@ -196,8 +217,32 @@ async function loadGeekSnap(runId: string): Promise<GeekSnap | null> {
           ? (rejectHost.rejectSamples as RejectSamples)
           : undefined,
     };
-  } catch {
-    return null;
+    return { kind: "found", snap: found };
+  } catch (error) {
+    // Transport failure or timeout. This is the only case that genuinely means
+    // the service could not be reached.
+    return {
+      kind: "unreachable",
+      reason: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+/**
+ * What to say when GeekAPI did not supply this run. Each case reads as the
+ * thing that actually happened, so nobody goes looking for an outage that is
+ * really a superseded run.
+ */
+function geekApiAbsenceReason(outcome: GeekSnapOutcome): string | null {
+  switch (outcome.kind) {
+    case "found":
+      return null;
+    case "absent":
+      return "Not in GeekAPI — superseded by a newer crawl of this seed, or deleted. Local record only.";
+    case "unreachable":
+      return `GeekAPI unreachable (${outcome.reason}) — local record only.`;
+    case "error":
+      return `GeekAPI returned ${outcome.status} — local record only.`;
   }
 }
 
@@ -282,10 +327,11 @@ export async function buildSeedReportForRun(
   rows: SeedReportRow[];
   source: "geekapi" | "local" | "merged";
 } | null> {
-  const [local, geek] = await Promise.all([
+  const [local, geekOutcome] = await Promise.all([
     loadLocalRun(runId),
     loadGeekSnap(runId),
   ]);
+  const geek = geekOutcome.kind === "found" ? geekOutcome.snap : null;
 
   if (!local && !geek) return null;
 
@@ -357,7 +403,7 @@ export async function buildSeedReportForRun(
       host?.lastFailureReason ||
       errorSummary ||
       (sm?.error && sitemapUrlCount === 0 ? sm.error : null) ||
-      (!geek ? "GeekAPI unreachable — local stub only" : null);
+      geekApiAbsenceReason(geekOutcome);
     return {
       runId,
       seedUrl,

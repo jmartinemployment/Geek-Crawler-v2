@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -105,6 +105,16 @@ test('API persistence marks completed content runs ready', async () => {
     assert.equal(patches[0]?.status, 'complete');
     assert.equal(patches[0]?.contentReadyAt, patches[0]?.completedAtUtc);
     assert.equal(patches[0]?.clearContentReadyAt, false);
+
+    // The same readiness lands on the local record, not only in the PATCH.
+    // Without it the local view cannot say whether a completed run is eligible
+    // for indexing, and every answer has to come from a round trip.
+    const localRun = JSON.parse(
+      await readFile(path.join(dataDir, 'runs', runId, 'run.json'), 'utf8'),
+    ) as { status: string; contentReadyAt?: string };
+    assert.equal(localRun.status, 'complete');
+    assert.equal(localRun.contentReadyAt, patches[0]?.contentReadyAt);
+
     const stats = await persist.stats();
     assert.equal(stats.pagesSaved, 1);
     assert.equal(stats.pagesRejectedRequestFailed, 1);

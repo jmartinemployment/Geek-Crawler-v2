@@ -13,6 +13,16 @@ export type CrawlRunMeta = {
   createdAtUtc: string;
   startedAtUtc?: string;
   completedAtUtc?: string;
+  /**
+   * When the run's content became ready for downstream indexing, mirroring what
+   * was sent to GeekAPI on completion. Undefined means not ready.
+   *
+   * Kept locally because this is the signal the RAG library schedules on, and
+   * without it a local record cannot say whether a completed run is eligible
+   * for indexing. Nothing here decides readiness - GeekAPI owns that - this
+   * only stops the local view having to guess.
+   */
+  contentReadyAt?: string;
   errorSummary?: string;
   pagesSaved: number;
   pagesWithoutContent?: number;
@@ -81,7 +91,7 @@ export type RunStore = {
     seeds: string[];
   }): Promise<CrawlRunMeta>;
   markRunning(runId: string): Promise<void>;
-  markComplete(runId: string): Promise<void>;
+  markComplete(runId: string, contentReadyAt?: string | null): Promise<void>;
   markFailed(runId: string, errorSummary: string): Promise<void>;
   /** Merge reject counters + samples into run.json (no page body). */
   recordRejectStats(
@@ -222,11 +232,16 @@ export function createJsonRunStore(dataDir: string): RunStore {
       });
     },
 
-    async markComplete(runId) {
+    async markComplete(runId, contentReadyAt) {
       await withRunLock(runId, async () => {
         const run = await loadRun(runId);
         run.status = 'complete';
         run.completedAtUtc = new Date().toISOString();
+        if (contentReadyAt) {
+          run.contentReadyAt = contentReadyAt;
+        } else {
+          delete run.contentReadyAt;
+        }
         await saveRun(run);
       });
     },
