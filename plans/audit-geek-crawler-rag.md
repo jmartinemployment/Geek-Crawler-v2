@@ -116,13 +116,31 @@ against this one.
 
 | site | behaviour | why it is tolerable, and what to tighten |
 |---|---|---|
-| `qdrant_store.py:732` | scroll failure → `[]` | An empty search result reads as "no matches". Logged, but the caller cannot tell. Give it the `query.py` treatment |
-| `qdrant_store.py:779` | host lookup failure → `None` | Same shape. `/v1/index/hosts` resolves a host to a runId, so "not found" and "lookup broke" have different consequences |
+| `qdrant_store.py:732` | scroll failure → `[]` | **FIXED, c8f24f4.** Re-raised into the boundary handler `QueryService` already had, so a broken lexical search returns `retrieval="error"` instead of a dense-only answer labelled hybrid |
 | `unusable.py:93` | any exception → `False` | False means "not locale-excluded", i.e. keep the page. Consistent with the function's own default for a URL with no path segment, so a malformed URL is kept rather than dropped. Narrow to the parse error rather than `Exception` |
 | `mongo.py:264` | load failure → default entity | The value returned is computed unconditionally above and is also the legitimate no-match answer, so this is a default rather than a backup path. The word "fallback" in the message is misleading. A failed load should still be distinguishable from no match |
 | `extract.py:29` | `continue` | Skips one item silently during extraction. Bounded, but a dropped item leaves no trace |
 | `ad_templates.py:186` | → empty response | Empty and failed are indistinguishable to the caller |
 | `indexer.py:440` | `pass` | Bare swallow, no log |
+
+### Corrected: `qdrant_store.py:779` was misclassified here
+
+The first version of this file listed `find_host_index_payload` returning `None` on any
+failure as a fail-open worth tightening. **That was wrong**, and the change was made and
+then reverted.
+
+It is deliberate, tested, and has an incident behind it.
+`tests/test_host_index_missing_collection.py::test_any_other_failure_also_fails_closed`
+asserts it, and the module records why: raising turned `/v1/index/hosts` into a 500 and
+every consumer into a 502 on 2026-09-24, when the collection was deleted out from under
+a running API.
+
+The reasoning error was directional. "Not indexed" makes the caller **withhold** that
+host as grounding evidence rather than reach for something else, so `None` is the
+conservative answer — the opposite of what the audit assumed. Rule 2 asks for a clean
+failure state returned immediately, and `None` is exactly that here.
+
+Recorded rather than deleted, because the next reader will have the same instinct.
 
 ### Correct as written — no action
 
@@ -140,13 +158,13 @@ states its reason outright: never fail the indexer because GeekAPI is down.
 ### Plan for F3
 
 1. ~~`rerank.py:65` — stop returning fabricated scores.~~ **Done, b64cac7.**
-2. Give `qdrant_store.py:732` and `:779` the `query.py` error/empty distinction.
-3. Narrow `unusable.py:93` to the parse error it is actually guarding.
-4. Reword the `mongo.py:264` message so it stops describing a default as a fallback.
-5. Add a log line at `indexer.py:440`; a bare `pass` leaves nothing to find.
+2. ~~Give `qdrant_store.py:732` the `query.py` error/empty distinction.~~ **Done, c8f24f4.** `:779` was misclassified — see above.
+3. ~~Narrow `unusable.py:93` to the parse error it is actually guarding.~~ **Done, c8f24f4.**
+4. ~~Reword the `mongo.py:264` message.~~ **Done, c8f24f4.**
+5. ~~Add a log line at `indexer.py:440`.~~ **Done, c8f24f4.**
 
-Item 1 was the only one that could affect what gets cited, and it is done. Items 2-5
-remain: they make failures legible without changing outcomes.
+All five are closed. One of them, `:779`, closed by establishing that the finding was
+wrong.
 
 ## Confirmed clean
 
