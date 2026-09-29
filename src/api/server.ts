@@ -377,9 +377,16 @@ export function createCrawlApiServer(options?: { dataDir?: string; port?: number
         reconciled.problems.length > 0 ||
         reconciled.skippedRecent.length > 0
       ) {
-        console.log(
-          `startup: ${reconciled.reconciled.length} orphaned run(s) marked failed`,
-        );
+        if (reconciled.reconciled.length > 0) {
+          console.log(
+            `startup: ${reconciled.reconciled.length} orphaned run(s) marked failed`,
+          );
+        } else {
+          // Saying "0 orphaned run(s) marked failed" above a list of real
+          // problems reads as "nothing happened" and buries the thing that
+          // needed attention.
+          console.log('startup: orphan check found nothing to correct');
+        }
         for (const line of describeReconcileResult(reconciled)) console.log(line);
       }
 

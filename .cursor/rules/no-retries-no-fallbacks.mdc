@@ -5,7 +5,7 @@ alwaysApply: true
 
 # No Retries. No Fallbacks. No Crappy Code.
 
-Sibling plan: `plans/fail-closed-geekapi-ingest.md`.
+Sibling record: `docs/audit-00-index.md` C4, which tracks the one part of this that is still unenforced - the ingest limits GeekAPI and the crawler must agree on, with nothing checking that they do. `plans/fail-closed-geekapi-ingest.md` held this and was deleted once its work shipped.
 
 ## Law
 

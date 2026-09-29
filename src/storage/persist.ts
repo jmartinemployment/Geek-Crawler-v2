@@ -161,8 +161,39 @@ export function createCrawlPersist(input: {
     dedup = createPageDedupTracker({ dataDir: input.dataDir, runId });
   }
 
+  /**
+   * A reject is activity, and until now it left no trace on disk.
+   *
+   * run.json is rewritten only when a page or its links are accepted, so a
+   * crawl working through a long stretch of rejected URLs - a robots-disallowed
+   * section, a non-English site under the locale filter, a JavaScript-only site
+   * where every page is a shell - stops updating the file while still making
+   * requests. The startup reconciler reads that timestamp as proof the run has
+   * no writer, so a live crawl in a separate CLI process could be marked
+   * failed: the exact inverse of the problem the reconciler exists to fix.
+   *
+   * Touched at most once per interval, because rejects can outnumber accepted
+   * pages by a wide margin on the sites this matters for.
+   */
+  const LIVENESS_TOUCH_INTERVAL_MS = 30_000;
+  let lastLivenessTouchMs = 0;
+
+  function noteLiveness(): void {
+    const now = Date.now();
+    if (now - lastLivenessTouchMs < LIVENESS_TOUCH_INTERVAL_MS) return;
+    lastLivenessTouchMs = now;
+    void localMeta.touch(runId).catch((error: unknown) => {
+      log.warning(
+        `Liveness touch failed for ${runId}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    });
+  }
+
   function recordReject(reason: RejectReason, url: string, detail?: string): void {
     bumpRejectCounter(rejectCounters, reason);
+    noteLiveness();
     const sampled = rejectSamples.note(reason, url, detail);
     if (sampled) {
       log.info(

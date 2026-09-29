@@ -1,4 +1,4 @@
-import { mkdir, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rename, stat, utimes, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { RejectSample } from '../crawl/reject.js';
 import type { CrawlType } from '../crawl/types.js';
@@ -119,6 +119,16 @@ export type RunStore = {
    * places computing the same path is the drift this repo keeps paying for.
    */
   lastWriteAt(runId: string): Promise<Date | null>;
+  /**
+   * Mark the run as still being worked on, without changing what it says.
+   *
+   * lastWriteAt is what tells a restarting API whether a run still has a writer,
+   * and the record is only rewritten when a page or its links are accepted. A
+   * crawl grinding through a long run of rejected URLs is working hard and
+   * looks idle. This closes that gap: the timestamp tracks activity, which is
+   * what every reader of it already assumed.
+   */
+  touch(runId: string): Promise<void>;
 };
 
 async function readJson<T>(file: string): Promise<T | null> {
@@ -310,6 +320,16 @@ export function createJsonRunStore(dataDir: string): RunStore {
       const run = await readJson<CrawlRunMeta>(runPath(runId));
       if (run) memory.set(runId, run);
       return run ? { ...run } : null;
+    },
+
+    async touch(runId) {
+      try {
+        const now = new Date();
+        await utimes(runPath(runId), now, now);
+      } catch {
+        // No record to touch. Nothing to report: the caller is recording a
+        // reject, not asserting the run exists.
+      }
     },
 
     async lastWriteAt(runId) {

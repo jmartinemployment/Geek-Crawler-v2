@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, stat, utimes } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -208,6 +208,84 @@ test('terminal link persistence failure throws once', async () => {
     assert.throws(() => persist.throwIfPersistenceFailed(), PersistenceError);
     assert.equal(pageWrites, 1);
     assert.equal(linkAttempts, 1);
+  } finally {
+    if (oldEnv.url === undefined) delete process.env.GEEK_API_URL;
+    else process.env.GEEK_API_URL = oldEnv.url;
+    if (oldEnv.key === undefined) delete process.env.GEEK_BACKEND_API_KEY;
+    else process.env.GEEK_BACKEND_API_KEY = oldEnv.key;
+    if (oldEnv.user === undefined) delete process.env.GEEK_USER_ID;
+    else process.env.GEEK_USER_ID = oldEnv.user;
+    server.close();
+    await rm(dataDir, { recursive: true, force: true });
+  }
+});
+
+test('a rejected page counts as activity, so a reject-heavy crawl does not look dead', async () => {
+  // The reconciler treats run.json's timestamp as proof a run still has a
+  // writer. Before this, the record was rewritten only when a page or its links
+  // were accepted, so a crawl working through a long stretch of rejects - a
+  // robots-disallowed section, a non-English site under the locale filter, a
+  // JavaScript-only site where every page is a shell - went stale while still
+  // making requests, and a restarting API could mark it failed.
+  const runId = '33333333-4444-4555-8666-777777777777';
+  const server = createServer(async (req, res) => {
+    let body = '';
+    for await (const chunk of req) body += String(chunk);
+    void body;
+    res.setHeader('content-type', 'application/json');
+    if (req.method === 'POST' && req.url?.endsWith('/ingest/runs')) {
+      return res.end(
+        JSON.stringify({
+          run: { runId, status: 'external', crawlType: 'partner' },
+          seedsAccepted: 1,
+          rejected: [],
+        }),
+      );
+    }
+    res.statusCode = 404;
+    res.end('{}');
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  assert(address && typeof address !== 'string');
+
+  const oldEnv = {
+    url: process.env.GEEK_API_URL,
+    key: process.env.GEEK_BACKEND_API_KEY,
+    user: process.env.GEEK_USER_ID,
+  };
+  process.env.GEEK_API_URL = `http://127.0.0.1:${address.port}`;
+  process.env.GEEK_BACKEND_API_KEY = 'test-key';
+  process.env.GEEK_USER_ID = 'test-user';
+  const dataDir = await mkdtemp(path.join(tmpdir(), 'reject-liveness-'));
+
+  try {
+    const persist = createCrawlPersist({
+      crawlType: 'partner',
+      seeds: ['https://example.com'],
+      dataDir,
+    });
+    await persist.begin();
+    await persist.markRunning();
+
+    // begin() generates the id, so read it back rather than assume one.
+    const created = await readdir(path.join(dataDir, 'runs'));
+    assert.equal(created.length, 1, 'one run directory');
+    const runJson = path.join(dataDir, 'runs', created[0]!, 'run.json');
+    // Backdate it so the assertion cannot pass on clock granularity alone.
+    const backdated = new Date(Date.now() - 60_000);
+    await utimes(runJson, backdated, backdated);
+    assert.equal((await stat(runJson)).mtime.getTime(), backdated.getTime());
+
+    persist.noteReject('robots_disallowed', 'https://example.com/private', 'robots.txt');
+
+    // The touch is fire-and-forget, so wait for it rather than assuming timing.
+    let moved = false;
+    for (let i = 0; i < 50 && !moved; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      moved = (await stat(runJson)).mtime.getTime() > backdated.getTime();
+    }
+    assert.ok(moved, 'a reject must mark the run as still being worked on');
   } finally {
     if (oldEnv.url === undefined) delete process.env.GEEK_API_URL;
     else process.env.GEEK_API_URL = oldEnv.url;
