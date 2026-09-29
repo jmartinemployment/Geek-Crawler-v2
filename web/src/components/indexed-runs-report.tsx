@@ -120,6 +120,7 @@ export function IndexedRunsReport() {
               <th>English</th>
               <th>Chunks</th>
               <th>Indexed (UTC)</th>
+              <th>Reason</th>
               <th>runId</th>
             </tr>
           </thead>
@@ -131,14 +132,12 @@ export function IndexedRunsReport() {
                     {row.url || "—"}
                   </a>
                 </td>
-                <td title={row.error ?? undefined}>
-                  {row.state}
-                  {row.error ? " *" : ""}
-                </td>
+                <td>{row.state}</td>
                 <td>{row.mongoPageCount}</td>
                 <td>{row.pagesEnglish}</td>
                 <td>{row.chunksUpserted}</td>
                 <td>{row.finishedAtUtc ?? "—"}</td>
+                <td className="cell-blob">{row.error ?? "—"}</td>
                 <td className="muted">
                   <Link href={`/runs/${encodeURIComponent(row.runId)}`}>
                     {row.runId}
