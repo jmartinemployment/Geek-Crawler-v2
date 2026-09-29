@@ -88,7 +88,31 @@ controller cannot be constructed.
    instance.
 
 
-### C1 — Generation reads a store the crawler never writes (critical)
+### C1 — Generation reads a store the crawler never writes — **RESOLVED 2026-09-29, GeekBackend@da6a98e**
+
+Removed entirely rather than repointed, because a second rule settled it:
+
+> THE ONLY AUTHORIZED PATH TO POSTGRES IS GEEK-API -> GEEK-REPOSITORY -> SUPABASE.
+> UNAUTHORIZED CONNECTIONS ARE TO BE DELETED. — Jeff, 2026-09-29
+
+and crawl data is barred from Postgres outright. So the fix was not "point the flag at Mongo" but
+delete the Postgres surface and the second crawler that filled it: the controller, the BFS crawler
+and its service, worker, notifier, coordinator and stall recovery, the dead SignalR hub surface,
+11 `HttpGccV2Repository` methods, 3 repository controllers, 3 DbSets, 3 entities, and
+`GccV2PostgresProjectSitePageSource`. `IGccV2ProjectSitePageSource` binds straight to Mongo with
+no flag to get wrong.
+
+`20260929130000_DropProjectSiteCrawlTables` drops the three tables on the next GeekRepository
+deploy. `PostgresIsOAuthOnlyTests` is the tripwire that keeps them gone — the enforcement this
+audit kept asking for, now a failing test rather than a sentence.
+
+Build clean, 1,192 unit and 51 integration tests passing. Trace count 382 → 191, the remainder
+being the surviving Mongo projection DTO, test fakes using it, and `ProjectSiteCrawlRunId`, a Guid
+reference that can point at a Geek-Crawler-v2 run.
+
+*Original finding, for the record:*
+
+### C1 (original) — Generation reads a store the crawler never writes (critical)
 
 `ContentCreatorV2:ProjectSitePageSource` defaults to `"postgres"`
 (`ServiceRegistration.cs:136-142`) and is set in **no appsettings file in GeekBackend**. So
