@@ -62,13 +62,13 @@ ever adds a cleanliness check, include stale bytecode for removed modules.
 
 ---
 
-## F3 — Broad exception handling, classified — **one fail-open, high**
+## F3 — Broad exception handling, classified — **the fail-open is FIXED**
 
 The pass the earlier draft of this file said it had not done. 34 `except Exception`
 sites across `src`. Four were read in full; the remaining 30 were classified from the
 handler body, which is where the fail-open/fail-closed distinction actually lives.
 
-### Fail open — fix
+### Fail open — FIXED in Geek-Crawler-Rag@b64cac7
 
 **`rerank.py:65` — fabricated relevance scores. High.**
 
@@ -87,8 +87,16 @@ It matters more here than it would elsewhere. Rerank order decides which chunks 
 the model as grounding evidence, so a silent degradation to positional order changes
 what gets cited, with nothing in the response saying so.
 
-*Fix:* return a clean failure the caller can see. `query.py` already has the vocabulary
-for it — see below — so this can report unranked rather than invent ranking.
+*Fixed.* `rerank` now returns `RerankOutcome(order, ranked, failed)`, separating the
+three outcomes the single return type had collapsed: disabled keeps positional order
+and says `ranked=False`; a real call sets `ranked=True`; a failure returns no order at
+all. `query.py` fails closed on `failed` with `retrieval="error"`, the same shape it
+already used one function above.
+
+It also stopped reporting per config flag. `rerank_score` and the retrieval label keyed
+off `self._reranker.enabled` — which says a reranker *exists*, not that it *ran* — so a
+failed call was labelled `llamaindex-hybrid+rerank` with its positional scores reported
+as `rerankScore`. Both now key on `outcome.ranked`. 266 tests pass.
 
 ### Fail closed, and the pattern to copy
 
@@ -131,14 +139,14 @@ states its reason outright: never fail the indexer because GeekAPI is down.
 
 ### Plan for F3
 
-1. `rerank.py:65` — stop returning fabricated scores. The only genuine fail-open.
+1. ~~`rerank.py:65` — stop returning fabricated scores.~~ **Done, b64cac7.**
 2. Give `qdrant_store.py:732` and `:779` the `query.py` error/empty distinction.
 3. Narrow `unusable.py:93` to the parse error it is actually guarding.
 4. Reword the `mongo.py:264` message so it stops describing a default as a fallback.
 5. Add a log line at `indexer.py:440`; a bare `pass` leaves nothing to find.
 
-Only item 1 changes behaviour that could affect what gets cited. The rest make failures
-legible without changing outcomes.
+Item 1 was the only one that could affect what gets cited, and it is done. Items 2-5
+remain: they make failures legible without changing outcomes.
 
 ## Confirmed clean
 
