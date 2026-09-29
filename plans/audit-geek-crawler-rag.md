@@ -177,10 +177,14 @@ false positive cost a change, a revert, and a test failure to catch.
 
 1. `_persist` returns `bool` and all **12** call sites discard it. Dead API surface; the
    behaviour behind it is conservative.
-2. `app.py:271` — a scheduler failure lands in `errors` but does not flip `healthy`, so
-   `/health` reports `status: ok` while the component that does the indexing is down.
-   Deliberate for the collection case (the comment explains why 503 would block the only
-   path that heals it); less obviously intended for the scheduler.
+2. `app.py:271` — **withdrawn, this was not a finding.** The first version of this note
+   said `/health` reports ok "while the component that does the indexing is down".
+   `scheduler.status()` does not check the scheduler: it is a Mongo read of stored
+   scheduler state, guarded by `if mongo_ok:` so it only runs after a successful ping.
+   A failure there means a status *read* failed, not that the scheduler stopped, and
+   flipping `healthy` would restart the container over a transient read. Nor can the
+   loop itself die while the process serves - `_loop` swallows every tick failure via
+   `except Exception` and exits only on `_stop`, which `stop()` sets at shutdown.
 3. The idempotent-DDL family cannot tell "already exists" from "creation failed". Qdrant
    filters unindexed fields by scanning, so this is a performance risk, not a correctness
    one.
