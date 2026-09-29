@@ -17,24 +17,45 @@ import {
 } from './early-abort.js';
 
 describe('shouldAbortRun', () => {
-  it('lets one saved page veto the abort, however many rejects follow', () => {
-    // The safety property, and the reason this is a veto rather than a ratio.
-    // A real site with a handful of SPA routes or gated sections must never be
-    // abandoned, so a single successful extraction disables this for good.
-    assert.equal(
-      shouldAbortRun({ savedAny: true, rejects: 10_000, abortAfter: 25 }),
-      false,
-    );
-  });
-
   it('stops at the threshold and not before', () => {
-    assert.equal(shouldAbortRun({ savedAny: false, rejects: 24, abortAfter: 25 }), false);
-    assert.equal(shouldAbortRun({ savedAny: false, rejects: 25, abortAfter: 25 }), true);
-    assert.equal(shouldAbortRun({ savedAny: false, rejects: 26, abortAfter: 25 }), true);
+    assert.equal(shouldAbortRun({ pagesSaved: 0, rejects: 24, abortAfter: 25 }), false);
+    assert.equal(shouldAbortRun({ pagesSaved: 0, rejects: 25, abortAfter: 25 }), true);
+    assert.equal(shouldAbortRun({ pagesSaved: 0, rejects: 26, abortAfter: 25 }), true);
   });
 
   it('never fires on a run that has seen nothing at all', () => {
-    assert.equal(shouldAbortRun({ savedAny: false, rejects: 0, abortAfter: 25 }), false);
+    assert.equal(shouldAbortRun({ pagesSaved: 0, rejects: 0, abortAfter: 25 }), false);
+  });
+
+  it('does not let a single saved page excuse a wall of refusals', () => {
+    // quickbooks.intuit.com, 2026-09-29: 2,499 requests refused with a 403 and
+    // exactly one let through. The earlier rule asked only whether anything had
+    // been saved, so that one page held the veto open for the whole 2,500
+    // request budget. One page is not a corpus.
+    assert.equal(
+      shouldAbortRun({ pagesSaved: 1, rejects: 2_499, abortAfter: 25 }),
+      true,
+    );
+    assert.equal(shouldAbortRun({ pagesSaved: 1, rejects: 25, abortAfter: 25 }), true);
+  });
+
+  it('keeps crawling a site that is actually yielding', () => {
+    // A real site with gated sections. The refusals are real and the pages are
+    // real, and the pages are winning.
+    assert.equal(
+      shouldAbortRun({ pagesSaved: 200, rejects: 30, abortAfter: 25 }),
+      false,
+    );
+    // The boundary: MIN_YIELD_PER_REJECT saves per reject is enough to continue.
+    assert.equal(shouldAbortRun({ pagesSaved: 3, rejects: 25, abortAfter: 25 }), false);
+    assert.equal(shouldAbortRun({ pagesSaved: 2, rejects: 25, abortAfter: 25 }), true);
+  });
+
+  it('scales the yield with the refusals rather than fixing it', () => {
+    // 10 saved excuses 99 refusals and not 101, so a site does not earn an
+    // unlimited budget by clearing the bar once early on.
+    assert.equal(shouldAbortRun({ pagesSaved: 10, rejects: 99, abortAfter: 25 }), false);
+    assert.equal(shouldAbortRun({ pagesSaved: 10, rejects: 101, abortAfter: 25 }), true);
   });
 });
 
@@ -67,7 +88,7 @@ describe('BarrenTally', () => {
     const tally = { shells: 12, refused: 8, noProse: 6 };
     assert.equal(barrenTotal(tally), 26);
     assert.equal(
-      shouldAbortRun({ savedAny: false, rejects: barrenTotal(tally), abortAfter: 25 }),
+      shouldAbortRun({ pagesSaved: 0, rejects: barrenTotal(tally), abortAfter: 25 }),
       true,
     );
   });

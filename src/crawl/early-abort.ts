@@ -40,20 +40,38 @@ export function abortAfterFromEnv(
 }
 
 /**
+ * How many refusals one saved page is allowed to excuse.
+ *
+ * A working site yields pages faster than it refuses them. This is the rate
+ * below which it is not working: fewer than one page saved per ten pages
+ * refused means the saves are the exception, not the site.
+ */
+export const MIN_YIELD_PER_REJECT = 10;
+
+/**
  * Whether a run has seen enough to stop.
  *
- * savedAny vetoes outright, and that is the whole safety of it: one page
- * carrying prose proves the site answers a static crawler, so a real site with
- * a handful of SPA routes or gated sections is never abandoned however many
- * rejects follow. Only a run that has produced nothing at all can stop early.
+ * The first version of this asked whether the run had saved ANY page, and one
+ * page vetoed the abort outright. quickbooks.intuit.com on 2026-09-29 is why
+ * that is wrong: it refused 2,499 requests with a 403 and let exactly one
+ * through, and the single save held the veto open for the entire 2,500-request
+ * budget. One page is not a corpus and was never evidence the site works.
+ *
+ * So the veto is a rate rather than a flag. A site that answers is producing
+ * pages at some fraction of the rate it refuses them; a site that is blocking
+ * produces a rounding error. Both thresholds must be met to stop: enough
+ * refusals to be sure, AND a yield too low to call the site working.
+ *
+ * A real site with gated sections keeps crawling. 200 saved against 30 refused
+ * is nowhere near this, and neither is 3 saved against 25 refused.
  */
 export function shouldAbortRun(input: {
-  savedAny: boolean;
+  pagesSaved: number;
   rejects: number;
   abortAfter: number;
 }): boolean {
-  if (input.savedAny) return false;
-  return input.rejects >= input.abortAfter;
+  if (input.rejects < input.abortAfter) return false;
+  return input.pagesSaved * MIN_YIELD_PER_REJECT < input.rejects;
 }
 
 /**

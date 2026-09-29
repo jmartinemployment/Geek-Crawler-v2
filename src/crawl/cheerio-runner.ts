@@ -123,13 +123,14 @@ async function executeCheerioCrawl(
   // "no usable pages" once the sitemap is exhausted -- hundreds of fetches to
   // learn what the first twenty-five already said.
   //
-  // savedAny is the discriminator for both, rather than a ratio. One page
-  // carrying prose proves the site answers a static crawler, so a real site
-  // with a handful of SPA routes or gated sections keeps crawling; only a site
-  // that has produced nothing at all is abandoned.
+  // The discriminator is the yield, not a flag. A site that answers produces
+  // pages at some fraction of the rate it refuses them; a site that is
+  // blocking produces a rounding error. quickbooks.intuit.com refused 2,499
+  // requests and let one through, and a flag that only asked "saved anything?"
+  // kept that crawl alive for the whole budget.
   const abortAfter = abortAfterFromEnv('CRAWL_ABORT_AFTER');
   const barren = emptyBarrenTally();
-  let savedAny = false;
+  let pagesSaved = 0;
   let abortReason: string | null = null;
 
   /**
@@ -168,7 +169,9 @@ async function executeCheerioCrawl(
   ) => {
     persist.noteReject(BARREN_REJECT[kind], url, detail);
     barren[kind === 'shell' ? 'shells' : kind === 'refused' ? 'refused' : 'noProse'] += 1;
-    if (!shouldAbortRun({ savedAny, rejects: barrenTotal(barren), abortAfter })) {
+    if (
+      !shouldAbortRun({ pagesSaved, rejects: barrenTotal(barren), abortAfter })
+    ) {
       return;
     }
     await abortRun(barrenAbortReason(barren), request);
@@ -492,9 +495,8 @@ async function executeCheerioCrawl(
           }
 
           try {
-            // Proof the site yields prose without JavaScript, which is what the
-            // early abort above tests for.
-            savedAny = true;
+            // The yield the early abort measures itself against.
+            pagesSaved += 1;
             const savedPage = await persist.savePage({
               url: request.url,
               finalUrl,
