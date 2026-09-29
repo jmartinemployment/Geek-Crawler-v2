@@ -1,4 +1,4 @@
-import { mkdir, readdir, readFile, rename, stat, utimes, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rename, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { RejectSample } from '../crawl/reject.js';
 import type { CrawlType } from '../crawl/types.js';
@@ -129,6 +129,8 @@ export type RunStore = {
    * what every reader of it already assumed.
    */
   touch(runId: string): Promise<void>;
+  /** Delete this run's own directory. The store owns its layout; callers do not. */
+  remove(runId: string): Promise<void>;
 };
 
 async function readJson<T>(file: string): Promise<T | null> {
@@ -320,6 +322,11 @@ export function createJsonRunStore(dataDir: string): RunStore {
       const run = await readJson<CrawlRunMeta>(runPath(runId));
       if (run) memory.set(runId, run);
       return run ? { ...run } : null;
+    },
+
+    async remove(runId) {
+      memory.delete(runId);
+      await rm(path.join(root, 'runs', runId), { recursive: true, force: true });
     },
 
     async touch(runId) {

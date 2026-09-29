@@ -9,7 +9,9 @@ import { createJsonRunStore } from '../storage/runs.js';
 import {
   DEFAULT_ORPHAN_STALE_MS,
   describeReconcileResult,
+  describeSupersededResult,
   reconcileOrphanedRuns,
+  reconcileSupersededRuns,
 } from '../storage/reconcile-orphans.js';
 import { computeSeedKey, normalizeSeeds } from '../storage/seed-key.js';
 import { listFailures, readFailure } from '../storage/failure-archive.js';
@@ -389,6 +391,37 @@ export function createCrawlApiServer(options?: { dataDir?: string; port?: number
         }
         for (const line of describeReconcileResult(reconciled)) console.log(line);
       }
+
+      // After the local pass, and after the socket is up, because this one asks
+      // GeekAPI about every completed run and must not hold startup on the
+      // network. Nothing is deleted without an explicit 404, so an unreachable
+      // GeekAPI removes nothing.
+      void (async () => {
+        const client = createGeekApiClient();
+        const superseded = await reconcileSupersededRuns({
+          meta,
+          isLive: (runId) => inFlight.has(runId),
+          presence: (runId) => client.runPresence(runId),
+          remove: async (runId) => {
+            await meta.remove(runId);
+            await rm(path.join(dataDir, '.crawlee', runId), {
+              recursive: true,
+              force: true,
+            });
+          },
+        });
+        if (
+          superseded.removed.length > 0 ||
+          superseded.unknown.length > 0 ||
+          superseded.problems.length > 0
+        ) {
+          console.log(
+            `startup: ${superseded.removed.length} superseded run record(s) removed, ` +
+              `${superseded.kept.length} still held by GeekAPI`,
+          );
+          for (const line of describeSupersededResult(superseded)) console.log(line);
+        }
+      })();
 
       return new Promise<void>((resolve) => {
         // Loopback only. This surface has no authentication, so a non-loopback bind puts

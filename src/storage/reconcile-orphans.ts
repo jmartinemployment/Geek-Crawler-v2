@@ -1,3 +1,4 @@
+import type { RunPresence } from './geek-api-client.js';
 import type { RunStore } from './runs.js';
 
 /**
@@ -141,6 +142,119 @@ export function describeReconcileResult(result: OrphanReconcileResult): string[]
     lines.push(
       `  left alone, written recently: ${result.skippedRecent.length} run(s)`,
     );
+  }
+  return lines;
+}
+
+/**
+ * Clear local records for completed runs GeekAPI no longer holds.
+ *
+ * GeekAPI keys a run by its seed, so every re-crawl replaces the previous run of
+ * that site and the old id stops resolving. The local record survives, and
+ * nothing removed it: the orphan pass above only looks at pending and running,
+ * because a completed run is finished rather than abandoned.
+ *
+ * They accumulate one per re-crawl. On 2026-09-29 there were 42 of them -
+ * lightyear.cloud four times, dext four, stampli three - 128 MB of page counts
+ * for corpus that no longer exists anywhere, rendered by the seed report as
+ * though they did.
+ *
+ * Safety is the whole design here, because the action is deletion. A run is
+ * removed only on an explicit 404. A transport failure, a 5xx, an auth problem
+ * - anything that is merely not an answer - leaves the record alone. If GeekAPI
+ * is unreachable every lookup returns unknown, so nothing is removed at all,
+ * which is the correct behaviour for "I cannot tell".
+ */
+export type SupersededReconcileResult = {
+  removed: Array<{ runId: string; seeds: string[] }>;
+  /** GeekAPI still holds these. */
+  kept: string[];
+  /** No usable answer. Left alone, and reported so the silence is visible. */
+  unknown: Array<{ runId: string; reason: string }>;
+  problems: Array<{ runId: string; reason: string }>;
+};
+
+export async function reconcileSupersededRuns(input: {
+  meta: RunStore;
+  presence: (runId: string) => Promise<RunPresence>;
+  /** Clears everything the run owns on this machine, not just its record. */
+  remove: (runId: string) => Promise<void>;
+  isLive: (runId: string) => boolean;
+}): Promise<SupersededReconcileResult> {
+  const result: SupersededReconcileResult = {
+    removed: [],
+    kept: [],
+    unknown: [],
+    problems: [],
+  };
+
+  let runs: Awaited<ReturnType<RunStore['listRuns']>>;
+  try {
+    runs = await input.meta.listRuns();
+  } catch (error) {
+    result.problems.push({
+      runId: '(listing)',
+      reason: error instanceof Error ? error.message : String(error),
+    });
+    return result;
+  }
+
+  for (const run of runs) {
+    // Only completed runs. A failed run's record is its post-mortem and is the
+    // one thing worth keeping after the data is gone.
+    if (run.status !== 'complete') continue;
+    if (input.isLive(run.runId)) {
+      result.kept.push(run.runId);
+      continue;
+    }
+
+    let presence: RunPresence;
+    try {
+      presence = await input.presence(run.runId);
+    } catch (error) {
+      result.problems.push({
+        runId: run.runId,
+        reason: error instanceof Error ? error.message : String(error),
+      });
+      continue;
+    }
+
+    if (presence.kind === 'present') {
+      result.kept.push(run.runId);
+      continue;
+    }
+    if (presence.kind === 'unknown') {
+      result.unknown.push({ runId: run.runId, reason: presence.reason });
+      continue;
+    }
+
+    try {
+      await input.remove(run.runId);
+      result.removed.push({ runId: run.runId, seeds: run.seeds ?? [] });
+    } catch (error) {
+      result.problems.push({
+        runId: run.runId,
+        reason: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  return result;
+}
+
+/** One line per outcome, so a startup that deleted data says what it deleted. */
+export function describeSupersededResult(result: SupersededReconcileResult): string[] {
+  const lines: string[] = [];
+  for (const entry of result.removed) {
+    lines.push(
+      `  superseded, removed: ${entry.runId} ${entry.seeds.join(', ') || '(no seed)'}`,
+    );
+  }
+  for (const entry of result.unknown) {
+    lines.push(`  left alone, no answer from GeekAPI: ${entry.runId} - ${entry.reason}`);
+  }
+  for (const entry of result.problems) {
+    lines.push(`  superseded check problem: ${entry.runId} - ${entry.reason}`);
   }
   return lines;
 }

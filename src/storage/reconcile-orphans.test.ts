@@ -4,7 +4,9 @@ import {
   DEFAULT_ORPHAN_STALE_MS,
   describeReconcileResult,
   reconcileOrphanedRuns,
+  reconcileSupersededRuns,
 } from './reconcile-orphans.js';
+import type { RunPresence } from './geek-api-client.js';
 import type { CrawlRunMeta, RunStore } from './runs.js';
 
 const NOW = Date.parse('2026-09-28T20:00:00.000Z');
@@ -214,4 +216,167 @@ test('the summary lines name each corrected run', async () => {
   assert.match(lines[0]!, /orphan reconciled: stale-1 was running, unwritten 200 min/);
   assert.match(lines[1]!, /orphan check problem: no-stamp - no run.json timestamp/);
   assert.match(lines[2]!, /left alone, written recently: 1 run\(s\)/);
+});
+
+// --- superseded runs: completed locally, gone from GeekAPI ---
+
+type PresenceMap = Record<string, RunPresence>;
+
+function supersededStore(runs: Array<{ runId: string; status: CrawlRunMeta['status']; seed: string }>) {
+  const removed: string[] = [];
+  const store = {
+    async listRuns(): Promise<CrawlRunMeta[]> {
+      return runs.map((r) => ({
+        runId: r.runId,
+        crawlType: 'partner',
+        status: r.status,
+        seeds: [r.seed],
+        createdAtUtc: '2026-09-29T10:00:00.000Z',
+        pagesSaved: 10,
+        linksSaved: 10,
+      })) as CrawlRunMeta[];
+    },
+  } as unknown as RunStore;
+  return { store, removed };
+}
+
+test('a completed run GeekAPI no longer holds is removed', async () => {
+  const { store, removed } = supersededStore([
+    { runId: 'gone', status: 'complete', seed: 'https://lightyear.cloud' },
+  ]);
+
+  const result = await reconcileSupersededRuns({
+    meta: store,
+    isLive: () => false,
+    presence: async () => ({ kind: 'absent' }),
+    remove: async (runId) => {
+      removed.push(runId);
+    },
+  });
+
+  assert.deepEqual(removed, ['gone']);
+  assert.equal(result.removed.length, 1);
+  assert.deepEqual(result.removed[0]!.seeds, ['https://lightyear.cloud']);
+});
+
+test('an unreachable GeekAPI removes nothing', async () => {
+  // The property that matters most: deletion requires an answer. If every
+  // lookup fails, every record survives.
+  const { store, removed } = supersededStore([
+    { runId: 'a', status: 'complete', seed: 'https://a.example' },
+    { runId: 'b', status: 'complete', seed: 'https://b.example' },
+  ]);
+
+  const result = await reconcileSupersededRuns({
+    meta: store,
+    isLive: () => false,
+    presence: async () => ({ kind: 'unknown', reason: 'transport: ECONNREFUSED' }),
+    remove: async (runId) => {
+      removed.push(runId);
+    },
+  });
+
+  assert.deepEqual(removed, []);
+  assert.deepEqual(result.removed, []);
+  assert.equal(result.unknown.length, 2);
+});
+
+test('a 5xx is not absence', async () => {
+  const { store, removed } = supersededStore([
+    { runId: 'x', status: 'complete', seed: 'https://x.example' },
+  ]);
+
+  await reconcileSupersededRuns({
+    meta: store,
+    isLive: () => false,
+    presence: async () => ({ kind: 'unknown', reason: 'HTTP 503' }),
+    remove: async (runId) => {
+      removed.push(runId);
+    },
+  });
+
+  assert.deepEqual(removed, [], 'a 503 must never delete local data');
+});
+
+test('runs GeekAPI still holds are kept', async () => {
+  const { store, removed } = supersededStore([
+    { runId: 'live', status: 'complete', seed: 'https://live.example' },
+  ]);
+
+  const result = await reconcileSupersededRuns({
+    meta: store,
+    isLive: () => false,
+    presence: async () => ({ kind: 'present' }),
+    remove: async (runId) => {
+      removed.push(runId);
+    },
+  });
+
+  assert.deepEqual(removed, []);
+  assert.deepEqual(result.kept, ['live']);
+});
+
+test('only completed runs are considered; a failed record is its post-mortem', async () => {
+  const { store, removed } = supersededStore([
+    { runId: 'failed', status: 'failed', seed: 'https://failed.example' },
+    { runId: 'running', status: 'running', seed: 'https://running.example' },
+    { runId: 'pending', status: 'pending', seed: 'https://pending.example' },
+  ]);
+
+  await reconcileSupersededRuns({
+    meta: store,
+    isLive: () => false,
+    presence: async () => ({ kind: 'absent' }),
+    remove: async (runId) => {
+      removed.push(runId);
+    },
+  });
+
+  assert.deepEqual(removed, [], 'non-complete records are not this pass to remove');
+});
+
+test('a run this process is crawling is never removed', async () => {
+  const { store, removed } = supersededStore([
+    { runId: 'mine', status: 'complete', seed: 'https://mine.example' },
+  ]);
+
+  await reconcileSupersededRuns({
+    meta: store,
+    isLive: (runId) => runId === 'mine',
+    presence: async () => ({ kind: 'absent' }),
+    remove: async (runId) => {
+      removed.push(runId);
+    },
+  });
+
+  assert.deepEqual(removed, []);
+});
+
+test('the 2026-09-29 shape: 42 superseded, 12 held', async () => {
+  const runs: Array<{ runId: string; status: CrawlRunMeta['status']; seed: string }> = [];
+  for (let i = 0; i < 42; i += 1) {
+    runs.push({ runId: `old-${i}`, status: 'complete', seed: `https://site-${i % 10}.example` });
+  }
+  for (let i = 0; i < 12; i += 1) {
+    runs.push({ runId: `held-${i}`, status: 'complete', seed: `https://held-${i}.example` });
+  }
+  const presence: PresenceMap = {};
+  for (const r of runs) presence[r.runId] = r.runId.startsWith('old-')
+    ? { kind: 'absent' }
+    : { kind: 'present' };
+
+  const { store, removed } = supersededStore(runs);
+  const result = await reconcileSupersededRuns({
+    meta: store,
+    isLive: () => false,
+    presence: async (runId) => presence[runId]!,
+    remove: async (runId) => {
+      removed.push(runId);
+    },
+  });
+
+  assert.equal(result.removed.length, 42);
+  assert.equal(result.kept.length, 12);
+  assert.deepEqual(result.unknown, []);
+  assert.deepEqual(result.problems, []);
 });

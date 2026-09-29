@@ -102,6 +102,17 @@ export type CrawlReport = {
   samples: Array<{ reason: string; url: string; detail?: string }>;
 };
 
+/**
+ * present  GeekAPI answered and has the run.
+ * absent   GeekAPI answered 404 - a newer crawl of this seed replaced it, or it
+ *          was deleted. The only state that justifies removing local data.
+ * unknown  No answer worth acting on. Never delete on this.
+ */
+export type RunPresence =
+  | { kind: 'present' }
+  | { kind: 'absent' }
+  | { kind: 'unknown'; reason: string };
+
 export class GeekApiClient {
   private readonly baseUrl: string;
   private readonly apiKey: string;
@@ -123,6 +134,41 @@ export class GeekApiClient {
     this.baseUrl = required.baseUrl;
     this.apiKey = required.apiKey;
     this.userId = required.userId;
+  }
+
+  /**
+   * Whether GeekAPI still holds this run.
+   *
+   * Deliberately not routed through request(): that throws a PersistenceError
+   * with the status folded into a message string, and deciding whether to
+   * delete local data by matching on message text is exactly the kind of
+   * inference this codebase keeps getting burned by. Only an explicit 404 is
+   * absence. Everything else - transport failure, 5xx, an auth problem - is
+   * unknown, and a caller must never treat unknown as gone.
+   */
+  async runPresence(runId: string): Promise<RunPresence> {
+    let res: Response;
+    try {
+      res = await fetch(
+        `${this.baseUrl}/api/geek-crawler/crawls/${encodeURIComponent(runId)}`,
+        {
+          method: 'GET',
+          headers: {
+            Accept: 'application/json',
+            'X-API-Key': this.apiKey,
+            'X-Geek-User-Id': this.userId,
+          },
+        },
+      );
+    } catch (err) {
+      return {
+        kind: 'unknown',
+        reason: `transport: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+    if (res.status === 404) return { kind: 'absent' };
+    if (res.ok) return { kind: 'present' };
+    return { kind: 'unknown', reason: `HTTP ${res.status}` };
   }
 
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
