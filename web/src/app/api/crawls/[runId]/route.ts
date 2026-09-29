@@ -33,6 +33,10 @@ export async function GET(_req: Request, ctx: Ctx) {
         error: {
           code: "UPSTREAM_UNAVAILABLE",
           message: "Upstream crawl service request failed",
+          // The upstream body stays in the server log; the status is safe to
+          // show and is the difference between "GeekAPI is down" and "this run
+          // does not exist there", which an operator reads differently.
+          status: apiRes.status,
           correlationId,
         },
       },

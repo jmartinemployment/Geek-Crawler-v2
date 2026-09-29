@@ -58,13 +58,30 @@ test('resume-all reports mixed outcomes and resume-by-URL redirects', async ({ p
   await expect(page).toHaveURL(/\/runs\/run-123$/);
 });
 
-test('run detail falls back to the local crawler snapshot when GeekAPI is unavailable', async ({
+/**
+ * The local crawler snapshot is not a substitute for the authoritative one.
+ * This test asserted the opposite until 2026-09-29, and had failed on every CI
+ * run since the fallback was deleted in d1a2df3: the route is GeekAPI only, by
+ * design, so an unavailable upstream must be reported rather than papered over
+ * with whatever the local stub happens to hold.
+ */
+test('run detail reports the upstream failure and substitutes nothing when GeekAPI is unavailable', async ({
   page,
 }) => {
   await page.goto('/runs/local-run');
-  await expect(page.locator('section').filter({ hasText: 'Status' }).locator('pre')).toContainText(
-    '"source": "crawlee"',
-  );
-  await expect(page.getByRole('cell', { name: /fixture\/local/ })).toBeVisible();
-  await expect(page.getByText(/GeekAPI unavailable|503/)).toBeVisible();
+
+  const status = page.locator('section').filter({ hasText: 'Status' }).locator('pre');
+  await expect(status).toContainText('No run snapshot loaded.');
+  // No source key at all: neither the GeekAPI snapshot nor a local stand-in.
+  await expect(status).not.toContainText('"source"');
+
+  // The operator is told what failed, which upstream status caused it, and the
+  // correlation id that finds the same request in the server log.
+  const failure = page.getByText(/UPSTREAM_UNAVAILABLE/);
+  await expect(failure).toBeVisible();
+  await expect(failure).toContainText('upstream 503');
+  await expect(failure).toContainText(/correlation [0-9a-f-]{36}/);
+
+  // The URL table stays empty rather than showing the local crawler's pages.
+  await expect(page.getByRole('cell', { name: /fixture\/local/ })).toHaveCount(0);
 });

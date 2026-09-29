@@ -33,6 +33,35 @@ type ReportRow = {
 
 const PAGE_SIZE = 100;
 
+/**
+ * Turn a failed route response into something an operator can act on.
+ *
+ * The routes answer a failure as { ok: false, error: { code, message, status,
+ * correlationId } }. Reading .error straight into an Error rendered the whole
+ * object as "[object Object]" and threw away the correlation id that ties this
+ * page to the server log line for the same request.
+ */
+function upstreamMessage(body: unknown): string {
+  const error = (body as { error?: unknown } | null)?.error;
+  if (error === null || error === undefined) return "Request failed";
+  if (typeof error === "string") return error;
+
+  const detail = error as {
+    code?: string;
+    message?: string;
+    status?: number;
+    correlationId?: string;
+  };
+  const headline = [detail.code, detail.message].filter(Boolean).join(": ");
+  if (!headline) return JSON.stringify(error);
+
+  const context = [
+    typeof detail.status === "number" ? `upstream ${detail.status}` : null,
+    detail.correlationId ? `correlation ${detail.correlationId}` : null,
+  ].filter(Boolean);
+  return context.length > 0 ? `${headline} (${context.join(", ")})` : headline;
+}
+
 export function RunLiveView({ runId }: { runId: string }) {
   const [snapshot, setSnapshot] = useState<Record<string, unknown> | null>(null);
   const [reportRows, setReportRows] = useState<ReportRow[]>([]);
@@ -49,7 +78,7 @@ export function RunLiveView({ runId }: { runId: string }) {
       cache: "no-store",
     });
     const body = await res.json();
-    if (!res.ok) throw new Error(body.error ?? res.statusText);
+    if (!res.ok) throw new Error(upstreamMessage(body));
     setSnapshot(body);
   }
 
@@ -61,7 +90,7 @@ export function RunLiveView({ runId }: { runId: string }) {
         { cache: "no-store" },
       );
       const body = await res.json();
-      if (!res.ok) throw new Error(JSON.stringify(body.error ?? body));
+      if (!res.ok) throw new Error(upstreamMessage(body));
       setReportRows(Array.isArray(body.rows) ? body.rows : []);
     } finally {
       setReportLoading(false);
@@ -76,7 +105,7 @@ export function RunLiveView({ runId }: { runId: string }) {
       { cache: "no-store" },
     );
     const body = await res.json();
-    if (!res.ok) throw new Error(JSON.stringify(body.error ?? body));
+    if (!res.ok) throw new Error(upstreamMessage(body));
     const next = Array.isArray(body.urls) ? (body.urls as UrlRow[]) : [];
     setUrls((prev) => (append ? [...prev, ...next] : next));
     setHasMore(Boolean(body.hasMore));
@@ -200,7 +229,9 @@ export function RunLiveView({ runId }: { runId: string }) {
       <section>
         <h2>Status</h2>
         <pre className="result">
-          {JSON.stringify(lastEvent ?? snapshot, null, 2)}
+          {lastEvent ?? snapshot
+            ? JSON.stringify(lastEvent ?? snapshot, null, 2)
+            : "No run snapshot loaded."}
         </pre>
       </section>
 
