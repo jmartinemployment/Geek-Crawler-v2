@@ -6,6 +6,11 @@ import { CRAWL_TYPE_VALUES } from '../crawl/types.js';
 import { createGeekApiClient, requireGeekApiEnv } from '../storage/geek-api-client.js';
 import { requestCancel } from '../crawl/cancel-registry.js';
 import { createJsonRunStore } from '../storage/runs.js';
+import {
+  DEFAULT_ORPHAN_STALE_MS,
+  describeReconcileResult,
+  reconcileOrphanedRuns,
+} from '../storage/reconcile-orphans.js';
 import { computeSeedKey, normalizeSeeds } from '../storage/seed-key.js';
 import { listFailures, readFailure } from '../storage/failure-archive.js';
 
@@ -44,6 +49,12 @@ export function createCrawlApiServer(options?: { dataDir?: string; port?: number
   requireGeekApiEnv();
   const dataDir = path.resolve(options?.dataDir ?? process.env.DATA_DIR ?? './data');
   const port = options?.port ?? Number(process.env.PORT ?? 8787);
+  // Minutes a run record may go unwritten before startup treats it as abandoned.
+  // Overridable because write cadence depends on host politeness and page size.
+  const orphanStaleMs = (() => {
+    const minutes = Number(process.env.ORPHAN_STALE_MINUTES);
+    return Number.isFinite(minutes) && minutes > 0 ? minutes * 60_000 : DEFAULT_ORPHAN_STALE_MS;
+  })();
   const meta = createJsonRunStore(dataDir);
   const inFlight = new Map<string, Promise<unknown>>();
   /**
@@ -349,7 +360,28 @@ export function createCrawlApiServer(options?: { dataDir?: string; port?: number
   });
 
   return {
-    listen() {
+    async listen() {
+      // Before the socket opens, so no request can read a run record that says
+      // running when the process that was writing it is gone. At startup this
+      // process owns nothing yet, so inFlight is empty by construction and the
+      // staleness window is what separates a dead record from one a concurrent
+      // CLI crawl is still writing.
+      const reconciled = await reconcileOrphanedRuns({
+        meta,
+        isLive: (runId) => inFlight.has(runId),
+        staleAfterMs: orphanStaleMs,
+      });
+      if (
+        reconciled.reconciled.length > 0 ||
+        reconciled.problems.length > 0 ||
+        reconciled.skippedRecent.length > 0
+      ) {
+        console.log(
+          `startup: ${reconciled.reconciled.length} orphaned run(s) marked failed`,
+        );
+        for (const line of describeReconcileResult(reconciled)) console.log(line);
+      }
+
       return new Promise<void>((resolve) => {
         // Loopback only. This surface has no authentication, so a non-loopback bind puts
         // POST /crawls and DELETE /crawls/:runId on the network. It is scheduled for deletion

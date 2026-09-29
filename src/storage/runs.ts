@@ -1,4 +1,4 @@
-import { mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { RejectSample } from '../crawl/reject.js';
 import type { CrawlType } from '../crawl/types.js';
@@ -119,6 +119,15 @@ export type RunStore = {
   insertLinks(runId: string, links: CrawlLinkMeta[]): Promise<void>;
   getRun(runId: string): Promise<CrawlRunMeta | null>;
   listRuns(): Promise<CrawlRunMeta[]>;
+  /**
+   * When this run's record was last written, or null when it has none on disk.
+   *
+   * A run that claims to be running is only believable while something is still
+   * writing to it, and the store owns its own file layout, so that question is
+   * answered here rather than by a caller rebuilding the path from dataDir. Two
+   * places computing the same path is the drift this repo keeps paying for.
+   */
+  lastWriteAt(runId: string): Promise<Date | null>;
 };
 
 async function readJson<T>(file: string): Promise<T | null> {
@@ -331,6 +340,14 @@ export function createJsonRunStore(dataDir: string): RunStore {
       const run = await readJson<CrawlRunMeta>(runPath(runId));
       if (run) memory.set(runId, run);
       return run ? { ...run } : null;
+    },
+
+    async lastWriteAt(runId) {
+      try {
+        return (await stat(runPath(runId))).mtime;
+      } catch {
+        return null;
+      }
     },
 
     async listRuns() {
