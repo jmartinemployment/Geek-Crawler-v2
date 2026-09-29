@@ -122,8 +122,15 @@ export async function GET() {
       unknown: 5,
     };
 
+    // A run nobody has queued has no dates, no pages and no chunks, and it
+    // stays that way indefinitely. Fourteen such rows buried the five that
+    // carry information, so the count stays and the rows do not. Same for a
+    // lookup that did not answer: the warning already reports those.
+    const LISTED = new Set(["complete", "failed", "running", "pending"]);
+
     const rows = indexed
       .filter((row): row is NonNullable<typeof row> => row !== null)
+      .filter((row) => LISTED.has(row.state))
       .sort((a, b) => {
         const rank =
           (STATE_ORDER[a.state] ?? 9) - (STATE_ORDER[b.state] ?? 9);
@@ -134,8 +141,12 @@ export async function GET() {
         return completed || a.url.localeCompare(b.url);
       });
 
+    // Counted over every crawl, not just the listed ones, so "14 not indexed"
+    // is still on the page even though those rows are not.
     const byState: Record<string, number> = {};
-    for (const row of rows) byState[row.state] = (byState[row.state] ?? 0) + 1;
+    for (const row of indexed) {
+      if (row) byState[row.state] = (byState[row.state] ?? 0) + 1;
+    }
 
     return NextResponse.json({
       ok: true,

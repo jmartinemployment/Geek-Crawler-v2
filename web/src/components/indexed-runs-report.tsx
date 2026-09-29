@@ -92,9 +92,8 @@ export function IndexedRunsReport() {
       </div>
       <p className="lede">
         One authoritative report from GeekAPI crawl metadata joined with RAG
-        index status. Every crawl is listed, indexed or not: a run missing from
-        this table is a run GeekAPI does not have. Complete first, newest
-        completion first, then whatever needs attention.
+        index status. Complete first, newest completion first, then what needs
+        attention. Runs nobody has queued are counted below, not listed.
       </p>
       {error ? <pre className="result">{error}</pre> : null}
       {warning ? <pre className="result">{warning}</pre> : null}
