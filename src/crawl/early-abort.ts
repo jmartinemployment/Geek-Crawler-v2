@@ -40,7 +40,7 @@ export function abortAfterFromEnv(
 }
 
 /**
- * Whether a run has seen enough of one refusal to stop.
+ * Whether a run has seen enough to stop.
  *
  * savedAny vetoes outright, and that is the whole safety of it: one page
  * carrying prose proves the site answers a static crawler, so a real site with
@@ -68,4 +68,60 @@ const BLOCKED_STATUS = new Set([401, 403, 429]);
 
 export function isBlockedStatus(statusCode: number | undefined): boolean {
   return statusCode !== undefined && BLOCKED_STATUS.has(statusCode);
+}
+
+
+/**
+ * Pages that produced nothing, by why.
+ *
+ * One tally rather than one counter per kind, because the question the abort
+ * answers is "has this site given us anything", not "has it given us nothing in
+ * this particular way". Separate thresholds missed the common case: a site that
+ * is part JavaScript shell and part 403 reaches neither of them and crawls out
+ * in full, which is exactly the outcome the abort exists to prevent.
+ *
+ * Three kinds, and the reject reason each is reported as:
+ *   shells  -> requires_javascript, a mount point with no content in it
+ *   refused -> challenge_page, a 401, 403, 429 or an interstitial
+ *   noProse -> extract_empty, a page that parsed but carried no prose
+ *
+ * Deliberately absent: locale_excluded and robots_disallowed, which are scope
+ * decisions this crawler made rather than answers the site gave; and
+ * request_failed, because a DNS error or a timeout says nothing about whether
+ * the site would serve its content to a request that arrived.
+ */
+export type BarrenTally = {
+  shells: number;
+  refused: number;
+  noProse: number;
+};
+
+export function emptyBarrenTally(): BarrenTally {
+  return { shells: 0, refused: 0, noProse: 0 };
+}
+
+export function barrenTotal(tally: BarrenTally): number {
+  return tally.shells + tally.refused + tally.noProse;
+}
+
+/**
+ * Why the run stopped, with the breakdown that says what the site actually did.
+ *
+ * The post-mortem is the only thing that survives an aborted run, so the
+ * sentence has to carry the diagnosis on its own: a wall of shells and a wall
+ * of 403s need different answers from the operator.
+ */
+export function barrenAbortReason(tally: BarrenTally): string {
+  const parts = [
+    tally.shells > 0 ? `${tally.shells} returned a JavaScript shell` : null,
+    tally.refused > 0
+      ? `${tally.refused} were refused with a 401, 403, 429 or a challenge page`
+      : null,
+    tally.noProse > 0 ? `${tally.noProse} parsed but carried no prose` : null,
+  ].filter((part): part is string => part !== null);
+
+  return (
+    `Nothing extractable after ${barrenTotal(tally)} pages: ${parts.join(', ')}. ` +
+    `No page was saved, so the remaining URLs would repeat this. Stopped early.`
+  );
 }

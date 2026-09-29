@@ -21,6 +21,9 @@ import type { CrawlType } from './types.js';
 import { isViableHtml } from './viability.js';
 import {
   abortAfterFromEnv,
+  barrenAbortReason,
+  barrenTotal,
+  emptyBarrenTally,
   isBlockedStatus,
   shouldAbortRun,
 } from './early-abort.js';
@@ -124,10 +127,8 @@ async function executeCheerioCrawl(
   // carrying prose proves the site answers a static crawler, so a real site
   // with a handful of SPA routes or gated sections keeps crawling; only a site
   // that has produced nothing at all is abandoned.
-  const jsOnlyAbortAfter = abortAfterFromEnv('JS_ONLY_ABORT_AFTER');
-  const blockedAbortAfter = abortAfterFromEnv('BLOCKED_ABORT_AFTER');
-  let shellRejects = 0;
-  let blockedRejects = 0;
+  const abortAfter = abortAfterFromEnv('CRAWL_ABORT_AFTER');
+  const barren = emptyBarrenTally();
   let savedAny = false;
   let abortReason: string | null = null;
 
@@ -143,36 +144,34 @@ async function executeCheerioCrawl(
     await crawler.stop();
   };
 
+  /** The reject reason each barren kind is reported as. */
+  const BARREN_REJECT = {
+    shell: 'requires_javascript',
+    refused: 'challenge_page',
+    noProse: 'extract_empty',
+  } as const;
+
   /**
-   * Record one refusal and end the run once they are all this site offers.
+   * Record a page that produced nothing, and end the run once that is all this
+   * site has produced.
    *
-   * A refusal reaches this from three places -- a blocked status code, a
-   * challenge page served with a 200, and a rate-limited request that Crawlee
-   * threw rather than handled -- and they are one signal, so they share one
-   * counter, one threshold and one sentence.
+   * Every barren outcome goes through here so there is one tally and one
+   * threshold. Counting each kind separately was the bug: a site answering half
+   * its URLs with a shell and half with a 403 tripped neither counter and
+   * crawled out in full.
    */
-  const noteBlocked = async (
+  const noteBarren = async (
+    kind: keyof typeof BARREN_REJECT,
     url: string,
-    detail: string,
+    detail: string | undefined,
     request: { noRetry: boolean },
   ) => {
-    persist.noteReject('challenge_page', url, detail);
-    blockedRejects += 1;
-    if (
-      !shouldAbortRun({
-        savedAny,
-        rejects: blockedRejects,
-        abortAfter: blockedAbortAfter,
-      })
-    ) {
+    persist.noteReject(BARREN_REJECT[kind], url, detail);
+    barren[kind === 'shell' ? 'shells' : kind === 'refused' ? 'refused' : 'noProse'] += 1;
+    if (!shouldAbortRun({ savedAny, rejects: barrenTotal(barren), abortAfter })) {
       return;
     }
-    await abortRun(
-      `Site refuses this crawler: ${blockedRejects} pages answered 401, 403, ` +
-        `429 or a challenge page and none carried prose. Every remaining URL ` +
-        `would be refused in turn. Stopped early.`,
-      request,
-    );
+    await abortRun(barrenAbortReason(barren), request);
   };
 
   // Scope policy is per crawl type. project-site disables section quotas: they exist to stop a
@@ -358,7 +357,7 @@ async function executeCheerioCrawl(
               // Refused, not broken: the site is turning away a non-browser
               // client, which is the same answer it will give for every
               // remaining URL.
-              await noteBlocked(finalUrl, `HTTP ${statusCode}`, request);
+              await noteBarren('refused', finalUrl, `HTTP ${statusCode}`, request);
               return;
             }
             // A 404 or a 500 says nothing about the rest of the site, so it is
@@ -395,7 +394,7 @@ async function executeCheerioCrawl(
             if (viability.reason === 'challenge_page') {
               // A challenge served with a 200 is the same refusal as a 403,
               // dressed as a page, so it feeds the same counter.
-              await noteBlocked(finalUrl, 'challenge page served with 200', request);
+              await noteBarren('refused', finalUrl, 'challenge page served with 200', request);
               return;
             }
             // A page that carries no prose without JavaScript contributes
@@ -408,30 +407,20 @@ async function executeCheerioCrawl(
             // failed extraction: nothing here is broken. A static crawler
             // meeting a JavaScript application is out of scope, the same as a
             // robots-disallowed URL.
-            const isShell = viability.reason === 'empty_or_spa_shell';
-            persist.noteReject(
-              isShell ? 'requires_javascript' : 'extract_empty',
+            //
+            // Both branches count. empty_or_spa_shell is only returned for a
+            // page with no text at all or one of three known mount-point ids
+            // (#root, #__next, #app), so a JavaScript-only site that renders a
+            // nav or a footer, or mounts anywhere else -- Next's App Router has
+            // no #__next, Angular uses app-root -- lands on insufficient_text
+            // instead. Counting only the shells left exactly those sites
+            // crawling out in full.
+            await noteBarren(
+              viability.reason === 'empty_or_spa_shell' ? 'shell' : 'noProse',
               finalUrl,
               viability.reason,
+              request,
             );
-            if (isShell) {
-              shellRejects += 1;
-              if (
-                shouldAbortRun({
-                  savedAny,
-                  rejects: shellRejects,
-                  abortAfter: jsOnlyAbortAfter,
-                })
-              ) {
-                await abortRun(
-                  `JavaScript-only site: ${shellRejects} pages returned a shell ` +
-                    `and none carried prose. This crawler runs no JavaScript by ` +
-                    `design, so every remaining URL would be fetched and rejected ` +
-                    `in turn. Stopped early.`,
-                  request,
-                );
-              }
-            }
             return;
           }
 
@@ -479,7 +468,7 @@ async function executeCheerioCrawl(
           });
           if (extractReject === 'extract_empty') {
             // Same rule after extraction as before it: no prose, no frontier.
-            persist.noteReject('extract_empty', finalUrl);
+            await noteBarren('noProse', finalUrl, 'no prose after extraction', request);
             return;
           }
 
@@ -567,7 +556,7 @@ async function executeCheerioCrawl(
         // timeout cannot be mistaken for a refusal.
         const statusCode = response?.statusCode;
         if (isBlockedStatus(statusCode)) {
-          await noteBlocked(request.url, `HTTP ${statusCode}`, request);
+          await noteBarren('refused', request.url, `HTTP ${statusCode}`, request);
           return;
         }
 

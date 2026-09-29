@@ -9,6 +9,9 @@ import { describe, it } from 'node:test';
 import {
   DEFAULT_ABORT_AFTER,
   abortAfterFromEnv,
+  barrenAbortReason,
+  barrenTotal,
+  emptyBarrenTally,
   isBlockedStatus,
   shouldAbortRun,
 } from './early-abort.js';
@@ -37,29 +40,55 @@ describe('shouldAbortRun', () => {
 
 describe('abortAfterFromEnv', () => {
   it('defaults to 25 and honours an override', () => {
-    assert.equal(abortAfterFromEnv('JS_ONLY_ABORT_AFTER', {}), DEFAULT_ABORT_AFTER);
-    assert.equal(abortAfterFromEnv('JS_ONLY_ABORT_AFTER', { JS_ONLY_ABORT_AFTER: '5' }), 5);
-    assert.equal(abortAfterFromEnv('BLOCKED_ABORT_AFTER', { BLOCKED_ABORT_AFTER: '3' }), 3);
-  });
-
-  it('reads each threshold from its own variable', () => {
-    const env = { JS_ONLY_ABORT_AFTER: '5', BLOCKED_ABORT_AFTER: '3' };
-    assert.equal(abortAfterFromEnv('JS_ONLY_ABORT_AFTER', env), 5);
-    assert.equal(abortAfterFromEnv('BLOCKED_ABORT_AFTER', env), 3);
+    assert.equal(abortAfterFromEnv('CRAWL_ABORT_AFTER', {}), DEFAULT_ABORT_AFTER);
+    assert.equal(abortAfterFromEnv('CRAWL_ABORT_AFTER', { CRAWL_ABORT_AFTER: '5' }), 5);
   });
 
   it('falls back on nonsense rather than disabling the guard or firing instantly', () => {
     for (const value of ['abc', '0', '-3', '', ' ']) {
       assert.equal(
-        abortAfterFromEnv('JS_ONLY_ABORT_AFTER', { JS_ONLY_ABORT_AFTER: value }),
+        abortAfterFromEnv('CRAWL_ABORT_AFTER', { CRAWL_ABORT_AFTER: value }),
         DEFAULT_ABORT_AFTER,
-        `JS_ONLY_ABORT_AFTER=${JSON.stringify(value)}`,
+        `CRAWL_ABORT_AFTER=${JSON.stringify(value)}`,
       );
     }
   });
 
   it('floors a fractional override instead of rejecting it', () => {
-    assert.equal(abortAfterFromEnv('BLOCKED_ABORT_AFTER', { BLOCKED_ABORT_AFTER: '7.9' }), 7);
+    assert.equal(abortAfterFromEnv('CRAWL_ABORT_AFTER', { CRAWL_ABORT_AFTER: '7.9' }), 7);
+  });
+});
+
+describe('BarrenTally', () => {
+  it('reaches the threshold on a mixture no single kind would reach', () => {
+    // The bug this replaced. Separate counters at 25 each let a site answering
+    // part shell, part 403, part empty crawl out in full: 12 and 8 and 6 trips
+    // nothing, while the site has plainly given the run nothing at all.
+    const tally = { shells: 12, refused: 8, noProse: 6 };
+    assert.equal(barrenTotal(tally), 26);
+    assert.equal(
+      shouldAbortRun({ savedAny: false, rejects: barrenTotal(tally), abortAfter: 25 }),
+      true,
+    );
+  });
+
+  it('starts empty', () => {
+    assert.equal(barrenTotal(emptyBarrenTally()), 0);
+  });
+
+  it('names every kind that fired, and only those', () => {
+    const mixed = barrenAbortReason({ shells: 12, refused: 8, noProse: 6 });
+    assert.match(mixed, /26 pages/);
+    assert.match(mixed, /12 returned a JavaScript shell/);
+    assert.match(mixed, /8 were refused with a 401, 403, 429 or a challenge page/);
+    assert.match(mixed, /6 parsed but carried no prose/);
+
+    // A wall of shells and a wall of 403s need different answers from the
+    // operator, so the sentence must not mention a kind that did not happen.
+    const refusedOnly = barrenAbortReason({ shells: 0, refused: 25, noProse: 0 });
+    assert.match(refusedOnly, /25 were refused/);
+    assert.doesNotMatch(refusedOnly, /JavaScript shell/);
+    assert.doesNotMatch(refusedOnly, /carried no prose/);
   });
 });
 
