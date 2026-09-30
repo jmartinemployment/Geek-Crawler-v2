@@ -64,6 +64,33 @@ describe('quotaKey — the section is the leftmost MATCHING segment', () => {
     assert.equal(quotaKey('https://x.com/author/jane'), 'archive');
   });
 
+  it('caps generated jurisdiction reference, both of avalara\'s two shapes', () => {
+    // The US side was caught by tax-rates. The EU side was caught by nothing, and it is 287 URLs
+    // of the identical template: one reference page per jurisdiction.
+    assert.equal(
+      quotaKey('https://www.avalara.com/us/en/taxrates/state-rates/alabama/counties/mobile-county.html'),
+      'tax-rates',
+    );
+    assert.equal(
+      quotaKey('https://www.avalara.com/us/en/vatlive/country-guides/europe/germany'),
+      'jurisdiction-guides',
+    );
+    assert.equal(quotaKey('https://www.avalara.com/us/en/vatlive/eu-vat-rules/vat-returns'), 'tax-reference');
+    // Vocabulary variants of the same shape, which is the point of a pattern.
+    assert.equal(quotaKey('https://x.com/state-profiles/texas'), 'jurisdiction-guides');
+    assert.equal(quotaKey('https://x.com/city-rates/austin'), 'jurisdiction-guides');
+    assert.equal(quotaKey('https://x.com/county-tables/travis'), 'jurisdiction-guides');
+    assert.equal(quotaKey('https://x.com/gst-rates/on'), 'tax-reference');
+    assert.equal(quotaKey('https://x.com/uk-vat-guides/imports'), 'tax-reference');
+  });
+
+  it('does not swallow ordinary pages that merely contain those words', () => {
+    // Anchored whole-segment matching: a product page about country coverage is not a farm.
+    assert.equal(quotaKey('https://x.com/products/country-coverage'), '');
+    assert.equal(quotaKey('https://x.com/solutions/vat-automation'), '');
+    assert.equal(quotaKey('https://x.com/about/our-countries'), '');
+  });
+
   it('returns empty when no segment matches, leaving the URL uncapped', () => {
     assert.equal(quotaKey('https://x.com/'), '');
     assert.equal(quotaKey('https://x.com/pricing'), '');

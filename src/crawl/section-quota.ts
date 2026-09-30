@@ -76,6 +76,16 @@ const SECTION_PATTERNS: readonly SectionPattern[] = [
   // is one template rendered over a government dataset: thousands of near-identical pages, each a
   // heading plus a percentage plus a state dropdown serialised as body text. Not editorial, so the
   // EDITORIAL_SHARE gate never saw them, and that is what left them unbounded.
+  // Generated jurisdiction reference -- one page per country, state, county or city, rendered from
+  // a dataset. avalara.com ships TWO of these and the second was the gap: the US side is
+  // /us/en/taxrates/state-rates/<state>/counties/<county>.html (1,672 URLs in the frontier, caught
+  // by tax-rates) and the EU side is /us/en/vatlive/country-guides/<region>/<country> (287 URLs,
+  // caught by nothing). Same template, same fan-out, different jurisdiction vocabulary -- which is
+  // the whole argument for matching a pattern rather than enumerating directory names.
+  { name: 'jurisdiction-guides', pattern: /^(?:countr(?:y|ies)|states?|provinces?|regions?|cities|city|count(?:y|ies)|municipalit(?:y|ies)|jurisdictions?)-(?:guides?|profiles?|pages?|rates?|rules?|tables?|reference)$/ },
+  // Tax reference tables by regime. The optional two-letter prefix is what catches `eu-vat-rules`
+  // next to `vat-rules`; it is the same shape as the locale prefix that hid `taxrates`.
+  { name: 'tax-reference', pattern: /^(?:[a-z]{2}-)?(?:vat|gst|hst|pst|sales-tax|use-tax|excise|duty)-(?:rules?|rates?|guides?|tables?|info|compliance)$/ },
   { name: 'tax-rates', pattern: /^tax-?rates?$/ },
   { name: 'rate-tables', pattern: /^(?:state|city|county|local|zip|sales-tax)-rates?$/ },
   { name: 'localities', pattern: /^(?:count(?:y|ies)|cities|states|municipalities|districts)$/ },
@@ -133,6 +143,8 @@ export const DEFAULT_SECTION_QUOTAS: ReadonlyMap<string, number> = new Map([
   ['calculators', 10],
   ['tools', 100],
   ['tax-rates', 25],
+  ['jurisdiction-guides', 25],
+  ['tax-reference', 25],
   ['rate-tables', 25],
   ['localities', 0],
   ['zip-codes', 0],
