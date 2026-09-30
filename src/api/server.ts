@@ -15,6 +15,7 @@ import {
 } from '../storage/reconcile-orphans.js';
 import { computeSeedKey, normalizeSeeds } from '../storage/seed-key.js';
 import { listFailures, readFailure } from '../storage/failure-archive.js';
+import { summarizeFailures } from '../storage/failures-report.js';
 
 type Json = Record<string, unknown>;
 
@@ -298,11 +299,19 @@ export function createCrawlApiServer(options?: { dataDir?: string; port?: number
         });
       }
 
-      // Post-mortems for purged runs. The runs themselves are gone; this is what is left of them,
-      // and it is what the failure report at /runs renders.
+      // Post-mortems. A purged run is gone and this is what is left of it; a kept run still has its
+      // pages on disk, and `purgedAtUtc: null` is how the two are told apart.
       if (req.method === 'GET' && pathname === '/failures') {
         const failures = await listFailures(dataDir);
         return send(res, 200, { ok: true, failures });
+      }
+
+      // The counts, because the raw list is what nobody read. 15 post-mortems and ~4,000 discarded
+      // pages sat here unnoticed until someone happened to look on 2026-09-30.
+      if (req.method === 'GET' && pathname === '/failures/summary') {
+        const summary = await summarizeFailures(dataDir);
+        const { records: _records, ...counts } = summary;
+        return send(res, 200, { ok: true, ...counts });
       }
 
       const failureMatch = pathname.match(/^\/failures\/([^/]+)$/);
@@ -439,6 +448,8 @@ export function createCrawlApiServer(options?: { dataDir?: string; port?: number
           console.log(`  GET  /crawls/:runId`);
           console.log(`  GET  /crawls/:runId/pages  → 410 PAGES_NOT_LOCAL (read from GeekAPI)`);
           console.log(`  POST /crawls/:runId/cancel`);
+          console.log(`  GET  /failures            post-mortems, newest first`);
+          console.log(`  GET  /failures/summary    counts by cause, and what can still be re-posted`);
           resolve();
         });
       });

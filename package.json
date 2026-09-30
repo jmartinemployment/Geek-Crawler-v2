@@ -3,11 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Geek-Crawler v2 — Crawlee CheerioCrawler raw HTML pipeline (standalone; does not modify v1)",
+  "description": "Geek-Crawler v2 \u2014 Crawlee CheerioCrawler raw HTML pipeline (standalone; does not modify v1)",
   "scripts": {
     "build": "tsc",
     "crawl": "tsx src/cli.ts crawl",
     "serve": "tsx src/cli.ts serve",
+    "failures": "tsx src/cli.ts failures",
     "start": "node dist/cli.js",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test src/**/*.test.ts",
