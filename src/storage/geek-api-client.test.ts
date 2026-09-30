@@ -457,3 +457,74 @@ test('a failure row carries no blocks and is still accepted', () => {
 
   assert.ok(bytes > 0 && bytes < MAX_PAGE_DOCUMENT_BYTES);
 });
+
+/**
+ * Which non-2xx justifies destroying a finished crawl.
+ *
+ * On 2026-09-30 at 03:35 three completed crawls were purged in one minute — parseur 180 pages,
+ * quickbooks 81, zoneandco 342 — because GeekAPI was redeploying and Railway's edge answered
+ * `404 {"status":"error","code":404,"message":"Application not found","request_id":"..."}`. The
+ * crawler read that as a deleted run, which is the one state that justifies removing local data.
+ *
+ * These serve the real bodies over a real socket, because the discriminator is the status, the
+ * content type and the body together.
+ */
+async function failureFrom(
+  status: number,
+  body: string,
+  contentType: string,
+): Promise<PersistenceError> {
+  const server = createServer((_req, res) => {
+    res.statusCode = status;
+    res.setHeader('content-type', contentType);
+    res.end(body);
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address() as { port: number };
+  try {
+    const client = new GeekApiClient(`http://127.0.0.1:${port}`, 'k', 'u');
+    await client.createRun({ crawlType: 'partner', seeds: ['https://x.com'] });
+    throw new Error('expected the call to fail');
+  } catch (err) {
+    if (!(err instanceof PersistenceError)) throw err;
+    return err;
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+}
+
+const RAILWAY_404 =
+  '{"status":"error","code":404,"message":"Application not found","request_id":"qSKfdisKRiiSktaLU79b0g"}';
+
+test("Railway's 404 is unreachable, not a deleted run", async () => {
+  const err = await failureFrom(404, RAILWAY_404, 'application/json');
+  assert.equal(err.unreachable, true);
+});
+
+test('an HTML proxy error page is unreachable', async () => {
+  const err = await failureFrom(404, '<html><body>not found</body></html>', 'text/html');
+  assert.equal(err.unreachable, true);
+});
+
+test('any 5xx is unreachable — 1,192 pages went this way', async () => {
+  const err = await failureFrom(500, '', 'text/plain');
+  assert.equal(err.unreachable, true);
+});
+
+test("GeekAPI's own 409 is determinate and still purges", async () => {
+  const err = await failureFrom(
+    409,
+    '"Crawl reported complete with no usable pages"',
+    'text/plain',
+  );
+  assert.equal(err.unreachable, false);
+});
+
+test('a ProblemDetails 400 is determinate and still purges', async () => {
+  const err = await failureFrom(
+    400,
+    '{"title":"Bad Request","status":400,"detail":"pages carry no extracted content"}',
+    'application/json',
+  );
+  assert.equal(err.unreachable, false);
+});

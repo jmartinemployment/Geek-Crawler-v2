@@ -9,7 +9,7 @@ import {
   type GeekApiClient,
 } from './geek-api-client.js';
 import { PersistenceError, isPersistenceError } from './errors.js';
-import { archiveRun, type PurgeOutcome } from './failure-archive.js';
+import { archiveRun, type FailureRecord, type PurgeOutcome } from './failure-archive.js';
 import { createJsonRunStore, type CrawlLinkMeta, type RunStore } from './runs.js';
 import { computeSeedKey, normalizeSeeds, originOf } from './seed-key.js';
 import type { CrawlType } from '../crawl/types.js';
@@ -77,6 +77,14 @@ export type CrawlPersist = {
    * that leaves no explanation behind is the one outcome this exists to prevent.
    */
   archiveAndPurge(status: 'failed' | 'cancelled', errorSummary: string): Promise<void>;
+  /**
+   * Write the post-mortem and destroy nothing.
+   *
+   * For a failure that says nothing about the crawl — GeekAPI unreachable, a platform 404 during a
+   * redeploy — the pages are still good and stay on disk for re-posting. The record is what makes
+   * that recoverable rather than merely undeleted.
+   */
+  archiveFailure(status: 'failed' | 'cancelled', errorSummary: string): Promise<void>;
   throwIfPersistenceFailed(): void;
   rootPersistenceError(): PersistenceError | null;
   noteReject(reason: RejectReason, url: string, detail?: string): void;
@@ -233,6 +241,34 @@ export function createCrawlPersist(input: {
     };
   }
 
+  /**
+   * One shape for both outcomes. A kept run and a purged run differ only in `purgedAtUtc` and
+   * `purge`, so building them from one place is what keeps the two records comparable — an
+   * operator reading `failures/` sees the same fields and can tell them apart by those two.
+   */
+  function failureRecord(
+    status: 'failed' | 'cancelled',
+    errorSummary: string,
+    purgedAtUtc: string | null,
+    purge: PurgeOutcome | null,
+  ): FailureRecord {
+    return {
+      runId,
+      seed: seeds[0] ?? '',
+      crawlType: input.crawlType,
+      status,
+      errorSummary: errorSummary.slice(0, 500) || null,
+      createdAtUtc: new Date().toISOString(),
+      purgedAtUtc,
+      pagesSaved,
+      linksSaved,
+      report: crawlReport(),
+      rejectSamples: rejectSamples.snapshot() as Record<string, RejectSample[]>,
+      dedup: { ...dedup.counters } as Record<string, number | boolean>,
+      purge,
+    };
+  }
+
   function hostProgressJson(): string {
     return JSON.stringify([
       rejectStatsHostProgressEntry(
@@ -353,6 +389,19 @@ export function createCrawlPersist(input: {
       }
     },
 
+    async archiveFailure(status: 'failed' | 'cancelled', errorSummary: string) {
+      await archiveRun(input.dataDir, failureRecord(status, errorSummary, null, null));
+      console.log(
+        JSON.stringify({
+          event: 'run_archived_kept',
+          runId,
+          status,
+          pagesSaved,
+          linksSaved,
+        }),
+      );
+    },
+
     async archiveAndPurge(status: 'failed' | 'cancelled', errorSummary: string) {
       const purgedAtUtc = new Date().toISOString();
       const errors: string[] = [];
@@ -364,21 +413,11 @@ export function createCrawlPersist(input: {
       let crawlDataDeleted = false;
       const localRemoved: string[] = [];
 
-      const record = {
-        runId,
-        seed: seeds[0] ?? '',
-        crawlType: input.crawlType,
-        status,
-        errorSummary: errorSummary.slice(0, 500) || null,
-        createdAtUtc: purgedAtUtc,
-        purgedAtUtc,
-        pagesSaved,
-        linksSaved,
-        report: crawlReport(),
-        rejectSamples: rejectSamples.snapshot() as Record<string, RejectSample[]>,
-        dedup: { ...dedup.counters } as Record<string, number | boolean>,
-        purge: { vectorsPurged, crawlDataDeleted, localRemoved } as PurgeOutcome,
-      };
+      const record = failureRecord(status, errorSummary, purgedAtUtc, {
+        vectorsPurged,
+        crawlDataDeleted,
+        localRemoved,
+      });
 
       // Archive before destroying anything. If this throws, the run keeps its data and the caller
       // sees the failure — losing the corpus and the explanation together is the worst outcome.

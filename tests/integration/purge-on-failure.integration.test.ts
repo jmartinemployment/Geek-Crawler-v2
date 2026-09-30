@@ -5,13 +5,23 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { startCrawl } from '../../src/crawl/orchestrator.js';
-import { listFailures } from '../../src/storage/failure-archive.js';
+import { listFailures, type FailureRecord } from '../../src/storage/failure-archive.js';
 import { startFixtureSite } from '../fixtures/site.js';
 
 const RUN_ID = '55555555-6666-4777-8888-999999999999';
 
+/**
+ * How the link batch fails, which is the whole point of these two tests.
+ *
+ * `determinate` is GeekAPI answering for itself: a 400 in its own ProblemDetails shape, a judgement
+ * about this crawl. `unreachable` is the shape that cost 603 pages on 2026-09-30 — a 5xx, or
+ * Railway's edge answering `{"message":"Application not found"}` mid-deploy, neither of which says
+ * anything about the run.
+ */
+type LinkFailure = 'determinate' | 'unreachable-5xx' | 'unreachable-platform-404';
+
 /** GeekAPI that accepts the run and its pages, then refuses every link batch. */
-async function startFailingGeekApi(): Promise<{
+async function startFailingGeekApi(failure: LinkFailure): Promise<{
   origin: string;
   close: () => void;
   deleteCalls: () => number;
@@ -43,6 +53,23 @@ async function startFailingGeekApi(): Promise<{
       );
     }
     if (req.method === 'POST' && req.url?.includes('/links/batch')) {
+      if (failure === 'determinate') {
+        res.statusCode = 400;
+        return res.end(
+          JSON.stringify({
+            type: 'https://tools.ietf.org/html/rfc9110#section-15.5.1',
+            title: 'Bad Request',
+            detail: 'links refused: pageId does not belong to this run',
+            traceId: '00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-00',
+          }),
+        );
+      }
+      if (failure === 'unreachable-platform-404') {
+        // Byte-for-byte what the Railway edge returns while the service redeploys. It is a 404, so
+        // only the body distinguishes it from GeekAPI saying the run is gone.
+        res.statusCode = 404;
+        return res.end(JSON.stringify({ status: 404, code: 'NOT_FOUND', request_id: 'abc123' }));
+      }
       res.statusCode = 500;
       return res.end(JSON.stringify({ error: 'links refused' }));
     }
@@ -75,80 +102,122 @@ async function exists(target: string): Promise<boolean> {
   }
 }
 
+/**
+ * Drive one crawl against a GeekAPI that refuses the link batch in the given way, and hand back
+ * everything the caller needs to judge what survived.
+ */
+async function crawlAgainstFailure(failure: LinkFailure): Promise<{
+  deleteCalls: number;
+  failures: FailureRecord[];
+  runDirExists: boolean;
+  queueDirExists: boolean;
+  cacheFiles: string[];
+}> {
+  const geek = await startFailingGeekApi(failure);
+  const fixture = await startFixtureSite();
+  const dataDir = await mkdtemp(path.join(os.tmpdir(), 'geek-crawler-purge-'));
+  const old = {
+    url: process.env.GEEK_API_URL,
+    key: process.env.GEEK_BACKEND_API_KEY,
+    user: process.env.GEEK_USER_ID,
+  };
+  process.env.GEEK_API_URL = geek.origin;
+  process.env.GEEK_BACKEND_API_KEY = 'test-key';
+  process.env.GEEK_USER_ID = 'test-user';
+
+  try {
+    await assert.rejects(
+      () =>
+        startCrawl({
+          seeds: [`${fixture.origin}/`],
+          crawlType: 'partner',
+          dataDir,
+          maxConcurrency: 1,
+        }),
+      'a link persistence failure must fail the run',
+    );
+
+    const cacheDir = path.join(dataDir, 'extract-cache', RUN_ID);
+    return {
+      deleteCalls: geek.deleteCalls(),
+      failures: await listFailures(dataDir),
+      runDirExists: await exists(path.join(dataDir, 'runs', RUN_ID)),
+      queueDirExists: await exists(path.join(dataDir, '.crawlee', RUN_ID)),
+      cacheFiles: (await exists(cacheDir)) ? (await readdir(cacheDir)).sort() : [],
+    };
+  } finally {
+    if (old.url === undefined) delete process.env.GEEK_API_URL;
+    else process.env.GEEK_API_URL = old.url;
+    if (old.key === undefined) delete process.env.GEEK_BACKEND_API_KEY;
+    else process.env.GEEK_BACKEND_API_KEY = old.key;
+    if (old.user === undefined) delete process.env.GEEK_USER_ID;
+    else process.env.GEEK_USER_ID = old.user;
+    geek.close();
+    await fixture.close();
+    await rm(dataDir, { recursive: true, force: true });
+  }
+}
+
 test(
-  'a failed crawl destroys itself and leaves only its post-mortem',
+  'a determinately refused crawl destroys itself and leaves only its post-mortem',
   { timeout: 120_000 },
   async () => {
-    const geek = await startFailingGeekApi();
-    const fixture = await startFixtureSite();
-    const dataDir = await mkdtemp(path.join(os.tmpdir(), 'geek-crawler-purge-'));
-    const old = {
-      url: process.env.GEEK_API_URL,
-      key: process.env.GEEK_BACKEND_API_KEY,
-      user: process.env.GEEK_USER_ID,
-    };
-    process.env.GEEK_API_URL = geek.origin;
-    process.env.GEEK_BACKEND_API_KEY = 'test-key';
-    process.env.GEEK_USER_ID = 'test-user';
+    const out = await crawlAgainstFailure('determinate');
 
-    try {
-      await assert.rejects(
-        () =>
-          startCrawl({
-            seeds: [`${fixture.origin}/`],
-            crawlType: 'partner',
-            dataDir,
-            maxConcurrency: 1,
-          }),
-        'a link persistence failure must fail the run',
-      );
+    assert.equal(out.deleteCalls, 1, 'exactly one purge, no retry');
 
-      assert.equal(geek.deleteCalls(), 1, 'exactly one purge, no retry');
+    assert.equal(out.failures.length, 1, 'the post-mortem is what survives');
+    const record = out.failures[0]!;
+    assert.equal(record.status, 'failed');
+    assert.equal(record.runId, RUN_ID);
+    assert.match(record.errorSummary ?? '', /links\/batch/);
+    assert.equal(record.purge?.crawlDataDeleted, true);
+    assert.ok(record.purgedAtUtc, 'a purged run carries the time it was purged');
 
-      const failures = await listFailures(dataDir);
-      assert.equal(failures.length, 1, 'the post-mortem is what survives');
-      const record = failures[0]!;
+    assert.equal(out.runDirExists, false, 'the local run directory must be gone');
+    assert.equal(out.queueDirExists, false, 'the request queue must be gone');
+
+    // The extract cache is the exception, and deliberately so. Every run fails
+    // while GeekAPI rejects contentHtml, so a cache inside run scratch would be
+    // destroyed on precisely the crawls worth inspecting. It has to outlive the
+    // purge for offline chunking to have a corpus at all.
+    assert.ok(out.cacheFiles.length > 0, 'the extract cache must survive the purge');
+    assert.ok(
+      out.cacheFiles.some((f) => f.endsWith('.blocks.json')),
+      'the typed blocks survive',
+    );
+    assert.ok(
+      out.cacheFiles.some((f) => f.endsWith('.content.html')),
+      'the clean fragment survives',
+    );
+  },
+);
+
+// The regression that cost parseur 180 pages, quickbooks 81 and zoneandco 342 in one minute on
+// 2026-09-30, plus 1,192 more to 5xx on pages/batch. Every error reached archiveAndPurge, so
+// "GeekAPI was not there" destroyed finished crawls. A sink that did not answer for itself is not a
+// judgement about the run, and the pages have to still be there afterwards to be re-posted.
+for (const failure of ['unreachable-5xx', 'unreachable-platform-404'] as const) {
+  test(
+    `a crawl that failed because GeekAPI was absent (${failure}) keeps its data`,
+    { timeout: 120_000 },
+    async () => {
+      const out = await crawlAgainstFailure(failure);
+
+      assert.equal(out.deleteCalls, 0, 'an absent sink must not cause a purge');
+
+      assert.equal(out.failures.length, 1, 'a kept run is still archived, or it is invisible');
+      const record = out.failures[0]!;
       assert.equal(record.status, 'failed');
       assert.equal(record.runId, RUN_ID);
       assert.match(record.errorSummary ?? '', /links\/batch/);
-      assert.equal(record.purge.crawlDataDeleted, true);
+      assert.equal(record.purgedAtUtc, null, 'nothing was purged, so there is no purge time');
+      assert.equal(record.purge, null, 'and no purge outcome to misread as a completed purge');
+      assert.ok(record.pagesSaved > 0, 'the pages it did save are what is being kept');
 
-      assert.equal(
-        await exists(path.join(dataDir, 'runs', RUN_ID)),
-        false,
-        'the local run directory must be gone',
-      );
-      assert.equal(
-        await exists(path.join(dataDir, '.crawlee', RUN_ID)),
-        false,
-        'the request queue must be gone',
-      );
-
-      // The extract cache is the exception, and deliberately so. Every run fails
-      // while GeekAPI rejects contentHtml, so a cache inside run scratch would be
-      // destroyed on precisely the crawls worth inspecting. It has to outlive the
-      // purge for offline chunking to have a corpus at all.
-      const cacheDir = path.join(dataDir, 'extract-cache', RUN_ID);
-      assert.equal(await exists(cacheDir), true, 'the extract cache must survive the purge');
-      const cached = (await readdir(cacheDir)).sort();
-      assert.ok(
-        cached.some((f) => f.endsWith('.blocks.json')),
-        'the typed blocks survive',
-      );
-      assert.ok(
-        cached.some((f) => f.endsWith('.content.html')),
-        'the clean fragment survives',
-      );
-    } finally {
-      if (old.url === undefined) delete process.env.GEEK_API_URL;
-      else process.env.GEEK_API_URL = old.url;
-      if (old.key === undefined) delete process.env.GEEK_BACKEND_API_KEY;
-      else process.env.GEEK_BACKEND_API_KEY = old.key;
-      if (old.user === undefined) delete process.env.GEEK_USER_ID;
-      else process.env.GEEK_USER_ID = old.user;
-      geek.close();
-      await fixture.close();
-      await rm(dataDir, { recursive: true, force: true });
-    }
-  },
-);
+      assert.equal(out.runDirExists, true, 'the local run directory must survive for re-posting');
+      assert.equal(out.queueDirExists, true, 'and so must the request queue');
+      assert.ok(out.cacheFiles.length > 0, 'the extract cache survives too');
+    },
+  );
+}

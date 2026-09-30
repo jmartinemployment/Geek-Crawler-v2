@@ -105,6 +105,7 @@ test('post-mortem survives the purge that destroys the run', async () => {
     assert.equal(record.errorSummary, 'links/batch rejected the batch');
     assert.equal(record.report.excludedByPolicy.robotsDisallowed, 1);
     assert.equal(record.report.failed.extractEmpty, 1);
+    assert(record.purge, 'a purged run carries its purge outcome');
     assert.equal(record.purge.vectorsPurged, true);
     assert.equal(record.purge.crawlDataDeleted, true);
 
@@ -143,6 +144,7 @@ test('a failed purge is recorded, and leaves local scratch in place', async () =
     const record = await readFailure(dataDir, persist.runId);
     assert(record);
     assert.equal(record.status, 'cancelled');
+    assert(record.purge, 'a purge that was attempted and failed still records its outcome');
     assert.equal(record.purge.crawlDataDeleted, false);
     assert.equal(record.purge.vectorsPurged, false);
     assert(record.purge.errors?.some((e) => e.includes('deleteRun')));
@@ -173,5 +175,35 @@ test('an unwritable archive aborts before the purge', async () => {
     assert.equal(deleteCalls(), 0, 'nothing may be destroyed without a post-mortem');
 
     await chmod(path.join(dataDir, 'failures'), 0o700);
+  });
+});
+
+test('archiveFailure records the run and destroys nothing', async () => {
+  await withStubbedGeekApi({ deleteOk: true }, async (dataDir, deleteCalls) => {
+    const persist = createCrawlPersist({
+      crawlType: 'partner',
+      seeds: ['https://example.com'],
+      dataDir,
+    });
+    await persist.begin();
+    await persist.archiveFailure('failed', 'GeekAPI unreachable: 502 on pages/batch');
+
+    assert.equal(deleteCalls(), 0, 'keeping the run means no purge is attempted at all');
+
+    const record = await readFailure(dataDir, persist.runId);
+    assert(record, 'a kept run must still be archived, or nobody knows it is there');
+    assert.equal(record.status, 'failed');
+    assert.equal(record.errorSummary, 'GeekAPI unreachable: 502 on pages/batch');
+
+    // These two nulls are the whole distinction between a kept run and a purged one. An empty
+    // PurgeOutcome would read as "purge ran and removed nothing", which is the opposite claim.
+    assert.equal(record.purgedAtUtc, null);
+    assert.equal(record.purge, null);
+
+    assert.equal(
+      await exists(path.join(dataDir, 'runs', persist.runId)),
+      true,
+      'the local run directory is what is being kept',
+    );
   });
 });

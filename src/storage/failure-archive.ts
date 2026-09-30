@@ -1,10 +1,16 @@
 /**
- * Post-mortem archive for purged runs.
+ * Post-mortem archive for runs that ended badly.
  *
- * A failed or cancelled run is destroyed — pages, links, vectors, and local scratch all go. What
- * survives is this: the record of why it ended that way. The analysis used to live on the GeekAPI
- * run row, which meant deleting the run deleted its own explanation; writing it here first is what
- * makes the purge safe to perform.
+ * A purged run is destroyed — pages, links, vectors, and local scratch all go. What survives is
+ * this: the record of why it ended that way. The analysis used to live on the GeekAPI run row,
+ * which meant deleting the run deleted its own explanation; writing it here first is what makes
+ * the purge safe to perform.
+ *
+ * Since 2026-09-30 not every failed run is purged: one that failed because GeekAPI could not be
+ * reached keeps its pages for re-posting. Such a run is archived too, with `purgedAtUtc` and
+ * `purge` both null, because a kept run with no record is invisible — and being invisible to the
+ * operator is how 603 pages sat unnoticed. The two null fields are the distinction: a record with
+ * them still has crawl data on disk and something can be done about it.
  *
  * Diagnostics only. Nothing reads this to decide what to crawl, resume, or dedup, so it is not a
  * second source of crawl authority and does not breach the no-mirror law.
@@ -30,13 +36,15 @@ export type FailureRecord = {
   status: 'failed' | 'cancelled';
   errorSummary: string | null;
   createdAtUtc: string;
-  purgedAtUtc: string;
+  /** Null when the run was kept rather than purged — its crawl data is still on disk. */
+  purgedAtUtc: string | null;
   pagesSaved: number;
   linksSaved: number;
   report: CrawlReport;
   rejectSamples: Record<string, RejectSample[]>;
   dedup: Record<string, number | boolean>;
-  purge: PurgeOutcome;
+  /** Null when nothing was purged, so an empty outcome is never read as a completed purge. */
+  purge: PurgeOutcome | null;
 };
 
 function failuresDir(dataDir: string): string {
@@ -75,7 +83,7 @@ export async function readFailure(
 }
 
 /**
- * Every record, newest purge first.
+ * Every record, newest first.
  *
  * A file that will not parse is skipped rather than thrown: one corrupt post-mortem must not take
  * the whole report down, and there is no second copy to fall back to.
@@ -99,6 +107,8 @@ export async function listFailures(dataDir: string): Promise<FailureRecord[]> {
     }
   }
 
-  records.sort((a, b) => (b.purgedAtUtc ?? '').localeCompare(a.purgedAtUtc ?? ''));
+  // On createdAtUtc, not purgedAtUtc: a kept run has no purge time, and sorting on a null would
+  // bury exactly the records that still have data to recover.
+  records.sort((a, b) => (b.createdAtUtc ?? '').localeCompare(a.createdAtUtc ?? ''));
   return records;
 }

@@ -113,6 +113,90 @@ export type RunPresence =
   | { kind: 'absent' }
   | { kind: 'unknown'; reason: string };
 
+/**
+ * Whether a 404 came from GeekAPI or from something in front of it.
+ *
+ * An allowlist, deliberately, and not a match on the proxy's wording. Railway can reword
+ * "Application not found" whenever it likes; what will not change is that GeekAPI answers with its
+ * own JSON error contract. So absence has to be proven, and everything unproven is unknown --
+ * because unknown keeps the data and absent destroys it.
+ *
+ * Three conditions, all required:
+ *   1. the status is 404 (the caller has established this),
+ *   2. the content type is JSON, and
+ *   3. the body parses and carries GeekAPI's error shape.
+ *
+ * An HTML error page, an empty body, a proxy's JSON that is not our contract, or a body that will
+ * not parse all mean the same thing here: we did not hear from GeekAPI, so we do not know.
+ */
+async function classify404(res: Response): Promise<RunPresence> {
+  const contentType = (res.headers.get('content-type') ?? '').toLowerCase();
+  if (!contentType.includes('application/json')) {
+    return {
+      kind: 'unknown',
+      reason: `HTTP 404 with content-type ${contentType || '(none)'} — not GeekAPI's error shape, ` +
+        'so the application may simply be unreachable',
+    };
+  }
+
+  let body: unknown;
+  try {
+    body = await res.json();
+  } catch {
+    return { kind: 'unknown', reason: 'HTTP 404 with an unparseable JSON body' };
+  }
+
+  if (!isGeekApiError(body)) {
+    return {
+      kind: 'unknown',
+      reason: `HTTP 404 from something that is not GeekAPI: ${JSON.stringify(body).slice(0, 200)}`,
+    };
+  }
+
+  return { kind: 'absent' };
+}
+
+/**
+ * GeekAPI's own error contract, as ASP.NET produces it.
+ *
+ * Railway's 404 body carries `status`, `code`, `message` and `request_id` and would pass a loose
+ * check, so the discriminator is a field GeekAPI emits and the proxy does not: ProblemDetails'
+ * `title`/`type`/`traceId`, or a bare string body from a `NotFound("...")`.
+ */
+function isGeekApiError(body: unknown): boolean {
+  if (typeof body === 'string') return true;
+  if (typeof body !== 'object' || body === null) return false;
+  const o = body as Record<string, unknown>;
+  if ('request_id' in o && 'code' in o && 'status' in o) return false; // platform proxy shape
+  return 'title' in o || 'type' in o || 'traceId' in o || 'detail' in o || 'error' in o;
+}
+
+/**
+ * Whether a non-2xx came from GeekAPI itself, rather than from something standing in front of it.
+ *
+ * Only a determinate answer justifies destroying a finished crawl. 4xx that GeekAPI produced --
+ * 400 for pages with no extracted content, 409 for a run reported complete with nothing usable --
+ * are its judgements and are final. A 5xx, or a 404 carrying a proxy's body, is the deployment
+ * being absent; the crawl is likely fine and the data must be kept.
+ *
+ * An allowlist on purpose. Railway can reword "Application not found" at any time; what will not
+ * change is that GeekAPI answers JSON in its own error shape.
+ */
+function answeredByGeekApi(res: Response, body: string): boolean {
+  if (res.status >= 500) return false;
+  const contentType = (res.headers.get('content-type') ?? '').toLowerCase();
+  if (!contentType.includes('application/json')) {
+    // A bare string body from NotFound("...") or BadRequest("...") is still GeekAPI answering.
+    return res.status < 500 && body.trim().length > 0 && !body.trimStart().startsWith('<');
+  }
+  try {
+    const parsed = JSON.parse(body) as unknown;
+    return isGeekApiError(parsed);
+  } catch {
+    return false;
+  }
+}
+
 export class GeekApiClient {
   private readonly baseUrl: string;
   private readonly apiKey: string;
@@ -142,9 +226,17 @@ export class GeekApiClient {
    * Deliberately not routed through request(): that throws a PersistenceError
    * with the status folded into a message string, and deciding whether to
    * delete local data by matching on message text is exactly the kind of
-   * inference this codebase keeps getting burned by. Only an explicit 404 is
-   * absence. Everything else - transport failure, 5xx, an auth problem - is
-   * unknown, and a caller must never treat unknown as gone.
+   * inference this codebase keeps getting burned by. Everything except a 404 that
+   * GeekAPI itself produced - transport failure, 5xx, an auth problem, a proxy
+   * page - is unknown, and a caller must never treat unknown as gone.
+   *
+   * "An explicit 404 is absence" was the rule until 2026-09-30 and it cost 603
+   * pages in one minute. Railway's edge answers 404 with
+   * {"status":"error","code":404,"message":"Application not found","request_id":...}
+   * when the application is not running, which is what a redeploy looks like from
+   * out here. Three finished crawls - parseur 180 pages, quickbooks 81,
+   * zoneandco 342 - read that as "the run was deleted" and purged themselves.
+   * See classify404.
    */
   async runPresence(runId: string): Promise<RunPresence> {
     let res: Response;
@@ -166,8 +258,8 @@ export class GeekApiClient {
         reason: `transport: ${err instanceof Error ? err.message : String(err)}`,
       };
     }
-    if (res.status === 404) return { kind: 'absent' };
     if (res.ok) return { kind: 'present' };
+    if (res.status === 404) return await classify404(res);
     return { kind: 'unknown', reason: `HTTP ${res.status}` };
   }
 
@@ -187,13 +279,17 @@ export class GeekApiClient {
       });
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
+      // Never reached the sink at all. Says nothing about the run.
       throw new PersistenceError(`${method} ${path} → transport: ${detail.slice(0, 500)}`, {
         cause: err,
+        unreachable: true,
       });
     }
     const text = await res.text();
     if (!res.ok) {
-      throw new PersistenceError(formatIngestFailure(method, path, res.status, text));
+      throw new PersistenceError(formatIngestFailure(method, path, res.status, text), {
+        unreachable: !answeredByGeekApi(res, text),
+      });
     }
     if (!text) return undefined as T;
     try {

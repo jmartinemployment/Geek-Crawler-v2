@@ -37,6 +37,7 @@ import { MAX_PAGES_PER_SITE, clampToSiteCap } from './crawl-limits.js';
 import { createSectionQuota } from './section-quota.js';
 import { crawlProfileFor, sectionQuotasFor } from './crawl-profile.js';
 import { harvestLinks } from './link-harvest.js';
+import { isUnreachable } from '../storage/errors.js';
 
 export type RunCrawlInput = {
   crawlType: CrawlType;
@@ -642,11 +643,35 @@ async function executeCheerioCrawl(
     }
   } catch (err) {
     const root = persist.rootPersistenceError();
-    const message = (root ?? err) instanceof Error
-      ? (root ?? err as Error).message
-      : String(root ?? err);
+    const cause = root ?? err;
+    const message = cause instanceof Error ? cause.message : String(cause);
     await persist.markFailed(message);
-    await persist.archiveAndPurge('failed', message);
+
+    // Purge only when the failure is determinate.
+    //
+    // Every error took this path until 2026-09-30, and archiveAndPurge destroys the crawl. Three
+    // finished crawls went in one minute -- parseur 180 pages, quickbooks 81, zoneandco 342 --
+    // because Railway answered `404 {"message":"Application not found"}` while GeekAPI redeployed.
+    // A further 1,192 pages went to 5xx on pages/batch. None of those errors said anything about
+    // the run; they said the sink was not there.
+    //
+    // A determinate refusal still purges: GeekAPI's 400 for pages with no extracted content and its
+    // 409 for a run complete with nothing usable are judgements about this crawl, and the data
+    // genuinely should go. What changes is that "the API was absent" no longer counts as one.
+    //
+    // The post-mortem is written either way, so a kept run is recoverable rather than merely
+    // undeleted: archiveFailure writes the same record with no purge outcome. markFailed does not
+    // write it -- it only patches the GeekAPI row -- and the run that GeekAPI could not be reached
+    // to patch is precisely the one whose record has to come from here.
+    if (isUnreachable(cause)) {
+      await persist.archiveFailure('failed', message);
+      log.error(
+        `Run ${persist.runId} failed because GeekAPI was unreachable, keeping crawl data for ` +
+          `re-post: ${message}`,
+      );
+    } else {
+      await persist.archiveAndPurge('failed', message);
+    }
     throw root ?? err;
   } finally {
     clearCancel(persist.runId);
