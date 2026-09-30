@@ -76,6 +76,9 @@ export async function prepareCheerioCrawl(input: RunCrawlInput): Promise<Prepare
   for (const seed of seeds) {
     const origin = new URL(seed).origin;
     await robots.requireOrigin(origin);
+    // Before the run exists, so a site that disallows everything costs one robots.txt request
+    // instead of a full walk, a rejected ingest and a purge. See requireSeedAllowed.
+    await robots.requireSeedAllowed(seed);
   }
 
   const persist = createCrawlPersist({

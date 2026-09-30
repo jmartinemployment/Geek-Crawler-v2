@@ -53,6 +53,35 @@ export function createRobotsGate() {
       }
     },
 
+    /**
+     * Refuse a crawl whose own seed robots.txt disallows, before a run exists.
+     *
+     * taulia.com was crawled four times -- 2026-09-23, then 03:29, 05:50 and 06:01 on 09-30 --
+     * walking 202 and then 558 URLs to save zero pages, because every URL on the site is
+     * disallowed. The crawl only learned this at the end, where GeekAPI refuses the run with
+     * "Crawl reported complete with no usable pages" and the run is purged. One request to
+     * robots.txt answers it: `requireOrigin` already fetches the file to fail closed on a missing
+     * one, so this costs nothing beyond reading the seed against what it already has.
+     *
+     * The seed only. A site that disallows some sections is a normal site, and per-URL filtering
+     * stays where it is.
+     */
+    async requireSeedAllowed(seed: string): Promise<void> {
+      let origin: string;
+      try {
+        origin = new URL(seed).origin;
+      } catch {
+        throw new RobotsBlockedError(seed, 'seed_not_a_url');
+      }
+      const result = await load(origin);
+      if (!result.ok) throw new RobotsBlockedError(origin, result.reason);
+      const allowed =
+        result.robots.isAllowed(seed, BOT.name) || result.robots.isAllowed(seed, '*');
+      if (!allowed) {
+        throw new RobotsBlockedError(origin, `seed_disallowed:${seed}`);
+      }
+    },
+
     async isAllowed(url: string): Promise<boolean> {
       let origin: string;
       try {
