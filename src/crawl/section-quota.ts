@@ -1,92 +1,192 @@
 import { classifyPath, type PageTier } from './classify-path.js';
 /**
- * Per-directory page quotas, applied at enqueue admission.
+ * Per-section page quotas, applied at enqueue admission.
  *
- * A section is the first path segment of a URL. Known low-quality directories
- * carry a page cap so one programmatic page farm cannot consume the crawl
- * budget. A quota of 0 excludes the directory entirely. Sections absent from
- * the table are uncapped.
+ * A section is the FIRST PATH SEGMENT THAT MATCHES the vocabulary in `SECTION_PATTERNS`, scanning
+ * left to right -- not path segment one. Known page farms carry a cap so one programmatic
+ * directory cannot consume the crawl budget. A quota of 0 excludes the section entirely; a URL
+ * matching nothing is uncapped.
  *
- * Quota is budget allocation, not content judgement: it decides how many pages
- * a directory may contribute, never which page is better.
+ * Quota is budget allocation, not content judgement: it decides how many pages a section may
+ * contribute, never which page is better. It is also the SECONDARY control -- `EDITORIAL_SHARE`
+ * in `admit()` governs composition, and these caps are ceilings behind it.
  */
 
-/** Known low-quality directories and their per-run page caps. */
-export const DEFAULT_SECTION_QUOTAS: ReadonlyMap<string, number> = new Map([
+
+/**
+ * Canonical section names and the segment patterns that resolve to them.
+ *
+ * Two things changed here on 2026-09-30, both because avalara.com exposed them.
+ *
+ * **Patterns, not exact strings.** `classify-path.ts` had already moved its vocabulary to anchored
+ * segment regexes for precisely this reason -- exact keys missed `company-blog` next to `blog` and
+ * `case-study` next to `case-studies`. Quotas kept matching by exact string, so the two mechanisms
+ * disagreed about what a section even was.
+ *
+ * **Every segment is eligible, not just the first.** `sectionKey` returned path segment one, which
+ * on a locale-prefixed site is the locale. avalara.com serves its entire site under `/us/en/`, so
+ * every URL on it resolved to section `us`, which has no entry, so ALL of these caps were dead for
+ * the whole site -- and 475 of 572 crawled pages were county tax-rate tables under
+ * `/us/en/taxrates/state-rates/<state>/counties/<county>.html`. Scanning segments left to right and
+ * taking the first that matches makes the locale prefix irrelevant, the same way it already is for
+ * classification.
+ *
+ * Leftmost wins, so `/blog/category/accounting` is `blog` and not `category`: the section a page
+ * lives in is the outermost one that classifies, not the innermost.
+ */
+type SectionPattern = {
+  /** Canonical section name; the key looked up in the quota map. */
+  readonly name: string;
+  /** Matched against one lowercased path segment, anchored. */
+  readonly pattern: RegExp;
+  /**
+   * Only match as the first path segment.
+   *
+   * `classify-path.ts` makes the same distinction for the same reason: `/category/accounting` is a
+   * blog archive, but `/solutions/category/enterprise` is product taxonomy and `/products/tags/erp`
+   * is a product tag page. Matching `category` at any depth resolved both to `archive`, whose quota
+   * is 0, so any-segment matching would have silently excluded product pages -- the opposite of
+   * what these caps are for. Position carries the meaning, so position is what is checked.
+   */
+  readonly firstSegmentOnly?: true;
+};
+
+const SECTION_PATTERNS: readonly SectionPattern[] = [
   // Programmatic template farms
+  { name: 'templates', pattern: /^(?:[a-z0-9]+-)?templates?$/ },
+  // App / integration catalogues. `integrations` is deliberately NOT here -- see DEFAULT_SECTION_QUOTAS.
+  { name: 'apps', pattern: /^apps$/ },
+  { name: 'connectors', pattern: /^connectors$/ },
+  { name: 'plugins', pattern: /^plugins$/ },
+  { name: 'marketplace', pattern: /^marketplace$/ },
+  // Dictionary-style thin pages
+  { name: 'glossary', pattern: /^(?:glossary|definitions|dictionary|what-is)$/ },
+  // Title-substitution pages
+  { name: 'job-descriptions', pattern: /^(?:job-descriptions|roles|titles)$/ },
+  // Archive / pagination views
+  { name: 'archive', pattern: /^(?:author|authors|tag|tags|category|categories|topics|archive)$/, firstSegmentOnly: true },
+  // Interactive tool shells
+  { name: 'free-tools', pattern: /^free-tools$/ },
+  { name: 'generators', pattern: /^generators?$/ },
+  { name: 'calculators', pattern: /^calculators?$/ },
+  // Tool pages carry partner/vendor links, which is what HarvestTools reads from the anchors under
+  // a heading. Capping them at 10 starved the grounding.
+  { name: 'tools', pattern: /^tools$/ },
+  // Generated reference tables -- the avalara case. A rate table per county, per city and per ZIP
+  // is one template rendered over a government dataset: thousands of near-identical pages, each a
+  // heading plus a percentage plus a state dropdown serialised as body text. Not editorial, so the
+  // EDITORIAL_SHARE gate never saw them, and that is what left them unbounded.
+  { name: 'tax-rates', pattern: /^tax-?rates?$/ },
+  { name: 'rate-tables', pattern: /^(?:state|city|county|local|zip|sales-tax)-rates?$/ },
+  { name: 'localities', pattern: /^(?:count(?:y|ies)|cities|states|municipalities|districts)$/ },
+  { name: 'zip-codes', pattern: /^zip-?codes?$/ },
+  // Editorial -- real content, capped by volume. The EDITORIAL_SHARE gate is the primary control on
+  // these; the cap is a ceiling for the case where a site is almost entirely one editorial section.
+  { name: 'blog', pattern: /^(?:[a-z0-9]+-)?blogs?$/ },
+  { name: 'news', pattern: /^(?:[a-z0-9]+-)?news$/ },
+  { name: 'press', pattern: /^press(?:-releases?|-room|-centre?|-center)?$/ },
+  { name: 'insights', pattern: /^insights?$/ },
+  { name: 'articles', pattern: /^articles?$/ },
+  { name: 'guides', pattern: /^guides?$/ },
+  { name: 'ebooks', pattern: /^ebooks?$/ },
+  { name: 'learn', pattern: /^learn(?:ing)?$/ },
+  { name: 'academy', pattern: /^academy$/ },
+  // Listing / registration pages
+  { name: 'events', pattern: /^events?$/ },
+  { name: 'webinars', pattern: /^webinars?$/ },
+  // User-generated
+  { name: 'community', pattern: /^(?:community|forum|answers|questions)$/ },
+  // Case studies
+  { name: 'customers', pattern: /^customers$/ },
+  { name: 'case-studies', pattern: /^case-stud(?:y|ies)$/ },
+  { name: 'stories', pattern: /^(?:[a-z0-9]+-)?stor(?:y|ies)$/ },
+  // Mixed resource libraries
+  { name: 'resources', pattern: /^(?:[a-z0-9]+-)?resources?$/ },
+];
+
+/**
+ * Per-section page caps. A quota of 0 excludes the section entirely; a section with no entry is
+ * uncapped.
+ *
+ * Quota is budget allocation, not content judgement: it decides how many pages a section may
+ * contribute, never which page is better.
+ *
+ * **`integrations`, `alternatives`, `vs` and `versus` were removed on 2026-09-30.** They were here
+ * from before `classify-path.ts` existed, which now classifies all four as PRODUCT -- "a competitor
+ * comparison is exactly the evidence these crawls exist to collect". Matching any segment rather
+ * than only the first would have made those caps bite far harder than they ever did (every
+ * `/solutions/integrations/*` page, not just a site rooted at `/integrations/`), so keeping them
+ * would have quietly throttled the evidence the crawl is for. Composition for product pages is the
+ * tier order's job, not a cap's.
+ */
+export const DEFAULT_SECTION_QUOTAS: ReadonlyMap<string, number> = new Map([
   ['templates', 10],
-  ['template', 10],
-  // App / integration catalogues
   ['apps', 10],
   ['connectors', 10],
   ['plugins', 10],
   ['marketplace', 10],
-  ['integrations', 25],
-  // Competitor comparison pages
-  ['alternatives', 250],
-  ['vs', 250],
-  ['versus', 250],
-  // Dictionary-style thin pages
   ['glossary', 10],
-  ['definitions', 10],
-  ['what-is', 10],
-  ['dictionary', 10],
-  // Title-substitution pages
   ['job-descriptions', 10],
-  ['roles', 10],
-  ['titles', 10],
-  // Archive / pagination views — excluded
-  ['author', 0],
-  ['tag', 0],
-  ['tags', 0],
-  ['category', 0],
-  ['categories', 0],
-  ['topics', 0],
-  // Interactive tool shells
+  ['archive', 0],
   ['free-tools', 10],
-  // Tool pages carry partner/vendor links, which is what HarvestTools reads from the
-  // anchors under a heading. Capping them at 10 starved the grounding. One number for
-  // every crawl type - own site, partner and competitor - since tool pages are evidence
-  // on any of them.
-  ['tools', 100],
   ['generators', 10],
   ['calculators', 10],
-  // Editorial — real content, capped by volume
+  ['tools', 100],
+  ['tax-rates', 25],
+  ['rate-tables', 25],
+  ['localities', 0],
+  ['zip-codes', 0],
   ['blog', 250],
   ['news', 250],
+  ['press', 100],
   ['insights', 250],
   ['articles', 250],
-  // Listing / registration pages — excluded
+  ['guides', 250],
+  ['ebooks', 250],
+  ['learn', 250],
+  ['academy', 250],
   ['events', 0],
-  ['webinar', 0],
   ['webinars', 0],
-  // User-generated
   ['community', 10],
-  ['forum', 10],
-  ['answers', 10],
-  ['questions', 10],
-  // Case studies
   ['customers', 250],
   ['case-studies', 250],
   ['stories', 250],
-  // Mixed resource libraries
   ['resources', 250],
-  ['general-resources', 250],
-  ['guides', 250],
-  ['ebooks', 250],
 ]);
 
-/** First path segment, lowercased. Root and unparseable URLs yield ''. */
-export function sectionKey(url: string): string {
-  let u: URL;
+/** Path segments, lowercased, empties dropped. Root and unparseable URLs yield []. */
+function segmentsOf(url: string): string[] {
+  let pathname = url;
   try {
-    u = new URL(url);
+    pathname = new URL(url).pathname;
   } catch {
-    return '';
+    return [];
   }
-  const first = u.pathname.split('/').filter(Boolean)[0];
-  return first ? first.toLowerCase() : '';
+  return pathname.toLowerCase().split('/').filter(Boolean);
 }
+
+/** First path segment, lowercased. Root and unparseable URLs yield ''. Reporting only. */
+export function sectionKey(url: string): string {
+  return segmentsOf(url)[0] ?? '';
+}
+
+/**
+ * The canonical section a URL belongs to, or '' when no segment matches the vocabulary.
+ *
+ * Leftmost match wins. Returns a canonical NAME, not the matched segment, so `company-blog` and
+ * `blog` share one budget rather than each getting its own 250.
+ */
+export function quotaKey(url: string): string {
+  const segments = segmentsOf(url);
+  for (const [index, segment] of segments.entries()) {
+    for (const { name, pattern, firstSegmentOnly } of SECTION_PATTERNS) {
+      if (firstSegmentOnly && index !== 0) continue;
+      if (pattern.test(segment)) return name;
+    }
+  }
+  return '';
+}
+
 
 /**
  * Parse `SECTION_PAGE_QUOTA` overrides: "blog:500,templates:0".
@@ -205,8 +305,10 @@ export function createSectionQuota(
         }
       }
 
-      const key = sectionKey(url);
-      const limit = limits.get(key);
+      // quotaKey, not sectionKey: the section is the leftmost segment that matches the vocabulary,
+      // so a locale prefix like /us/en/ cannot hide the real one. See SECTION_PATTERNS.
+      const key = quotaKey(url);
+      const limit = key === '' ? undefined : limits.get(key);
       if (limit !== undefined) {
         const used = admitted.get(key) ?? 0;
         if (used >= limit) {
