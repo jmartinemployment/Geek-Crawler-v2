@@ -13,6 +13,8 @@ import {
   filterEnqueueUrls,
   initialCrawlUrls,
   loadSiteMapIndex,
+  normalizeCrawlUrl,
+  sectionAdmissionOrder,
   type SiteMapIndex,
 } from './sitemap.js';
 import { createRobotsGate } from './robots.js';
@@ -34,6 +36,7 @@ import { clearCancel, isCancelRequested } from './cancel-registry.js';
 import { MAX_PAGES_PER_SITE, clampToSiteCap } from './crawl-limits.js';
 import { createSectionQuota } from './section-quota.js';
 import { crawlProfileFor, sectionQuotasFor } from './crawl-profile.js';
+import { harvestLinks } from './link-harvest.js';
 
 export type RunCrawlInput = {
   crawlType: CrawlType;
@@ -581,7 +584,43 @@ async function executeCheerioCrawl(
   );
 
   try {
-    const startUrls = initialCrawlUrls(seeds, siteMap, enqueueOpts);
+    let startUrls = initialCrawlUrls(seeds, siteMap, enqueueOpts);
+
+    // Link discovery, for the sites a static fetch cannot see.
+    //
+    // Only when there is no sitemap: the map already is the url list, so bill.com and medius.com
+    // never launch a browser. Where it does run it is one page load, and the pages themselves are
+    // still fetched by Cheerio -- measured on lightyear.cloud, 6 static links became 57 in 2.0s
+    // (12 of them product), and on parseur.com 0 became 77 in 0.6s (24 product).
+    //
+    // Fails the crawl rather than continuing. A site with no sitemap and a JavaScript nav yields a
+    // blog-only corpus that looks like a successful crawl, which is the silent failure plans/rules
+    // §3a exists to forbid -- lightyear.cloud produced 148 pages, 129 of them blog posts, and
+    // reported complete.
+    if (!siteMap.hasMap) {
+      const seed = seeds[0];
+      if (seed) {
+        const harvested = await harvestLinks(seed);
+        if (!harvested.ok) {
+          throw new Error(
+            `Link discovery failed for ${seed}: ${harvested.reason}. The site has no sitemap, so ` +
+              'its urls cannot be discovered from static HTML alone; crawling it now would yield ' +
+              'whatever happens to be statically linked and report success.',
+          );
+        }
+        const before = startUrls.length;
+        const merged = new Set(startUrls);
+        for (const u of harvested.urls) {
+          const n = normalizeCrawlUrl(u);
+          if (n) merged.add(n);
+        }
+        startUrls = sectionAdmissionOrder([...merged]);
+        log.info(
+          `Link discovery: ${before} static url(s) -> ${startUrls.length} after one browser pass`,
+        );
+      }
+    }
+
     log.info(`Starting crawl with ${startUrls.length} URL(s)`);
     await crawler.run(startUrls.map((url) => applyUniqueKey({ url })));
 

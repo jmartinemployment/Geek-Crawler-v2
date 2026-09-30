@@ -23,7 +23,8 @@
   "dependencies": {
     "cheerio": "^1.0.0-rc.12",
     "crawlee": "^3.18.1",
-    "dotenv": "^16.4.7"
+    "dotenv": "^16.4.7",
+    "playwright": "^1.63.0"
   },
   "devDependencies": {
     "@types/node": "^24.13.5",

@@ -5,7 +5,13 @@ export const BOT = {
   url: 'https://geekatyourspot.com',
 } as const;
 
-/** Pixel 7–family UA — HTTP spoof only; there is no browser in this crawler. */
+/**
+ * Pixel 7–family UA. Sent on every Cheerio fetch, and set on the one browser context used for link
+ * discovery (crawl/link-harvest.ts) so a site sees one identity rather than two.
+ *
+ * Was "HTTP spoof only; there is no browser in this crawler" until 2026-09-30. There is now exactly
+ * one, it loads one page per crawl to read a JavaScript-rendered nav, and it never fetches content.
+ */
 export const MOBILE_USER_AGENT =
   'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36';
 
