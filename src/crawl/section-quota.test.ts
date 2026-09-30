@@ -80,3 +80,26 @@ describe('createSectionQuota', () => {
     assert.equal(q.totalSuppressed(), 2);
   });
 });
+
+describe('createSectionQuota — admission is idempotent per url', () => {
+  it('counts a url once however many times it is offered', () => {
+    // A url arrives twice: from the sitemap, then again as a link from a crawled page. Counting it
+    // twice inflates the non-editorial total and the editorial share is derived from that total.
+    const q = createSectionQuota(new Map());
+    for (let i = 0; i < 10; i++) assert.equal(q.admit('https://x.com/pricing'), true);
+    assert.equal(q.admittedByTier().product, 1);
+  });
+
+  it('does not let re-encounters buy extra editorial slots', () => {
+    // lightyear.cloud: 20 non-editorial in the sitemap permits 5 editorial. Re-offering those 20
+    // took it to 25 admitted blog posts against 19 product pages.
+    const q = createSectionQuota(new Map());
+    for (let i = 0; i < 20; i++) q.admit(`https://x.com/pricing/${i}`);
+    for (let round = 0; round < 5; round++) {
+      for (let i = 0; i < 20; i++) q.admit(`https://x.com/pricing/${i}`);
+    }
+    let editorial = 0;
+    for (let i = 0; i < 100; i++) if (q.admit(`https://x.com/blog/post-${i}`)) editorial++;
+    assert.equal(editorial, 5, 'allowance must follow distinct non-editorial pages, not offers');
+  });
+});

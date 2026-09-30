@@ -164,10 +164,21 @@ export function createSectionQuota(
   const suppressed = new Map<string, number>();
 
   const byTier: Record<PageTier, number> = { product: 0, other: 0, editorial: 0 };
+  const alreadyAdmitted = new Set<string>();
   let shareSuppressed = 0;
 
   return {
     admit(url: string): boolean {
+      // Idempotent per url, and it has to be. A url is offered twice: once from the sitemap in
+      // initialCrawlUrls, and again when a crawled page links to it. Counting it both times
+      // inflates the non-editorial total, which raises the editorial allowance derived from it --
+      // measured on lightyear.cloud, a 155-url sitemap admitting 20 non-editorial pages permitted 5
+      // editorial at enqueue and then let 25 through as re-encounters re-counted the same pages.
+      //
+      // The old per-section caps hid this: they were large and per-section, so a double count cost
+      // one slot out of 250. A share is derived from the totals, so a double count moves the budget.
+      if (alreadyAdmitted.has(url)) return true;
+
       const tier = classifyPath(url);
 
       // The share gate, before the per-section caps. Per-section caps cannot control composition on
@@ -206,6 +217,7 @@ export function createSectionQuota(
       }
 
       byTier[tier] += 1;
+      alreadyAdmitted.add(url);
       return true;
     },
     admittedByTier() {
