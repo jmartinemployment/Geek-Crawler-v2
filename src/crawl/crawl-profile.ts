@@ -34,45 +34,45 @@ export type CrawlProfile = {
  * competitors and local into one THIRD_PARTY profile behind a ternary, which is how competitors
  * ended up budgeted like a partner despite being a thin slice.
  */
+/**
+ * One profile for every third-party crawl.
+ *
+ * Jeff, 2026-09-30: partner, competitors and local are the same crawl. A competitor is a partner you
+ * are not affiliated with, so it gets a partner's treatment -- no thin slices, no per-type budgets.
+ * The previous competitors: 150 and local: 100 were marked "PROPOSED, pending operator
+ * confirmation" and never confirmed; this is the confirmation, in the other direction.
+ *
+ * Composition is now controlled by EDITORIAL_SHARE in section-quota.ts, not by shrinking the page
+ * budget. Capping pages was never the right lever: it made competitor crawls smaller without making
+ * them better, while the 72%-editorial problem was untouched.
+ */
+const THIRD_PARTY: CrawlProfile = {
+  defaultMaxPages: MAX_PAGES_PER_SITE,
+  maxDepth: null,
+  useSectionQuotas: true,
+};
+
+/**
+ * Keyed by crawl type with no fallback branch, so adding a type is a compile error rather than a
+ * silent inheritance of someone else's configuration.
+ *
+ * The three third-party types share a VALUE, not the structure. An earlier version collapsed them
+ * behind a ternary and that is how competitors ended up budgeted like a partner by accident; here it
+ * is the intended outcome, written once and assigned by explicit key, so a future divergence is a
+ * deliberate edit rather than a side effect.
+ */
 const PROFILES: Record<CrawlType, CrawlProfile> = {
-  // Evidence has to be thorough enough to cite. Quotas still apply — a partner's template farm is
-  // not evidence.
-  [CrawlTypes.Partner]: {
-    defaultMaxPages: MAX_PAGES_PER_SITE,
-    maxDepth: null,
-    useSectionQuotas: true,
-  },
-
-  // PROPOSED, pending operator confirmation. A rival consultancy's positioning lives on a handful
-  // of pages — services, about, pricing. 2500 was the old number and it treated a thin slice like a
-  // partner corpus.
-  [CrawlTypes.Competitors]: {
-    defaultMaxPages: 150,
-    maxDepth: 2,
-    useSectionQuotas: true,
-  },
-
-  // PROPOSED, pending operator confirmation. Geographic pages are few by nature.
-  [CrawlTypes.Local]: {
-    defaultMaxPages: 100,
-    maxDepth: 2,
-    useSectionQuotas: true,
-  },
+  [CrawlTypes.Partner]: THIRD_PARTY,
+  [CrawlTypes.Competitors]: THIRD_PARTY,
+  [CrawlTypes.Local]: THIRD_PARTY,
 
   // Quotas OFF. They exist to stop a third party's page farm eating the budget; on your own site
   // every directory is content you chose to publish, and quotas would starve the directories the
-  // heading hierarchy is built from.
+  // heading hierarchy is built from. Depth unlimited: maxDepth counts link hops from the seed, not
+  // path segments, so a cap silently drops whichever pages sit furthest from the front door.
   //
-  // Depth unlimited. It was capped at 3 on the theory that "structure lives near the surface",
-  // which contradicted this type's own purpose — the whole of your own site — and truncated it:
-  // a real site crawled 24% of its pages, because maxDepth counts link hops from the seed, not
-  // path segments. A page at /services/x reachable only after three intermediate clicks is depth
-  // 4 and was never enqueued, and a sitemap does not rescue it — the sitemap sizes the request
-  // budget (cheerio-runner.ts), while BFS still assigns depth from the seed.
-  //
-  // MAX_PAGES_PER_SITE is the guardrail that belongs here. Your own site is bounded by
-  // definition, so a page budget bounds the crawl; a depth cap silently drops whichever pages
-  // happen to sit furthest from the front door, which is not a property anyone chose.
+  // Unchanged by the 2026-09-30 composition work, deliberately. geekatyourspot.com is 83% editorial
+  // for this reason, and whether your own site should be filtered is a separate question.
   [CrawlTypes.ProjectSite]: {
     defaultMaxPages: MAX_PAGES_PER_SITE,
     maxDepth: null,

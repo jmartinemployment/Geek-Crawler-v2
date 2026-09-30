@@ -212,8 +212,16 @@ async function executeCheerioCrawl(
     maxRequestsPerCrawl = clampToSiteCap(input.maxRequestsPerCrawl);
     log.info(`Request budget override: maxRequestsPerCrawl=${maxRequestsPerCrawl}`);
   } else if (siteMap.hasMap) {
-    maxRequestsPerCrawl = clampToSiteCap(Math.max(siteMap.urls.size, seeds.length));
-    log.info(`Request budget from sitemap: maxRequestsPerCrawl=${maxRequestsPerCrawl}`);
+    // min, not the sitemap size. The sitemap used to win outright, which made profile budgets
+    // documentation rather than behaviour: medius.com is a competitors crawl whose profile said 150
+    // pages and it crawled 897, because that is how many URLs its sitemap listed.
+    maxRequestsPerCrawl = clampToSiteCap(
+      Math.max(Math.min(siteMap.urls.size, profile.defaultMaxPages), seeds.length),
+    );
+    log.info(
+      `Request budget from sitemap capped by profile: maxRequestsPerCrawl=${maxRequestsPerCrawl} ` +
+        `(sitemap=${siteMap.urls.size}, profile=${profile.defaultMaxPages})`,
+    );
   } else {
     maxRequestsPerCrawl = clampToSiteCap(profile.defaultMaxPages);
     log.info(

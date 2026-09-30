@@ -1,6 +1,7 @@
 import { hostnameKey } from './links.js';
 import { localeNormalizeForMap } from './locale-path.js';
 import { BOT } from '../bot/identity.js';
+import { TIER_ORDER, classifyPath } from './classify-path.js';
 import { crawlDedupKey, type AliasTable } from './dedup.js';
 import type { SectionQuota } from './section-quota.js';
 
@@ -221,7 +222,13 @@ export function sectionAdmissionOrder(urls: string[]): string[] {
       return Number.MAX_SAFE_INTEGER;
     }
   };
+  // Tier first. Depth-then-alphabetical alone is why the corpus came out 72% editorial: a blog post
+  // at /blog/slug is depth 2 and a product page at /solutions/category/product is depth 3, so every
+  // blog post was admitted before any nested product page, and at equal depth /blog/ beat /pricing/
+  // on the alphabet. Depth and name still break ties inside a tier, so ordering stays deterministic.
   return [...urls].sort((a, b) => {
+    const t = TIER_ORDER[classifyPath(a)] - TIER_ORDER[classifyPath(b)];
+    if (t !== 0) return t;
     const d = depth(a) - depth(b);
     return d !== 0 ? d : a.localeCompare(b);
   });
