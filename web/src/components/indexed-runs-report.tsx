@@ -132,6 +132,7 @@ export function IndexedRunsReport() {
                     {row.url || "—"}
                   </a>
                 </td>
+                <td>{row.crawlType || "—"}</td>
                 <td>{row.state}</td>
                 <td>{row.mongoPageCount}</td>
                 <td>{row.pagesEnglish}</td>
