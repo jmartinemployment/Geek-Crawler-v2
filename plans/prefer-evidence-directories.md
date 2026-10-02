@@ -22,9 +22,23 @@ Measured 2026-10-02, where each category's home directory lands today:
 | `editorial` | caseStudies (`/customers`, `/case-studies`), faqBank (`/faq`), awards (`/press`) |
 | `other` | testimonials, icp, technicalConstraints, freshnessLog, battlecardSlices, demoBeats, complianceSnippets |
 
-Only 6 of 21 sit in the tier that gets crawled first. Three are `editorial`, which is worse than last
-— they compete for the `EDITORIAL_SHARE` 20% budget against blog posts. Seven are `other`, the
-residual bucket, reached only if the 2,500-page budget survives that long.
+Only 6 of 21 sit in the tier that gets crawled first. Three are `editorial`, which is worse than
+last — they compete for the `EDITORIAL_SHARE` 20% budget against blog posts. Seven are `other`.
+
+**Correction, measured 2026-10-02 after this was first written.** The ordering argument was weaker
+than stated here. It assumed the 2,500-page cap runs out before the `other` tier is reached. It does
+not: across 47 runs, **zero** hit the cap. The largest is ramp.com at 2,010 (80%), the next stripe.com
+at 1,750, and the median crawl is 176 pages — 7% of the budget. Crawls end because they run out of
+in-scope links or because quotas and the share gate suppress enqueues, not because the budget is
+spent. On a 176-page crawl every in-scope page is fetched whatever the tier order, so TIER_ORDER
+decides sequence, not inclusion.
+
+What survives the correction is the `editorial` placement, which is an *exclusion* rather than an
+ordering: `/customers`, `/case-studies` and `/faq` are suppressed by the 20% share on a crawl of any
+size. That is the piece costing categories, and item 3 below is the whole of it. The reordering in
+items 1, 2 and 4 is cheap and harmless but should not be expected to change what gets crawled until
+a site is large enough to exhaust 2,500 — ramp.com is the only one that has come close, and 54% of
+its 2,010 pages were a generated page farm.
 
 ## But the yield is small, and this is the part that matters
 
