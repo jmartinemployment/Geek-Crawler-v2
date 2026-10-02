@@ -20,13 +20,14 @@
  * must stay PRODUCT while `/resources/` is EDITORIAL.
  */
 
-export type PageTier = 'product' | 'other' | 'editorial';
+export type PageTier = 'product' | 'evidence' | 'other' | 'editorial';
 
 /** Sort weight. Lower is crawled first. */
 export const TIER_ORDER: Readonly<Record<PageTier, number>> = {
   product: 0,
-  other: 1,
-  editorial: 2,
+  evidence: 1,
+  other: 2,
+  editorial: 3,
 };
 
 /**
@@ -120,6 +121,37 @@ const PRODUCT_SEGMENTS: readonly RegExp[] = [
 ];
 
 /**
+ * Directories whose pages ARE the evidence a tool page is grounded in.
+ *
+ * Separate from `editorial` for one reason, and it is not ordering: `admit()` rations editorial
+ * against `EDITORIAL_SHARE`, so a case study competes with blog posts for a 20% budget and loses.
+ * Measured 2026-10-02 by diffing crawl_links against crawl_pages — bill.com discovered 75 of these
+ * and crawled 1, melio.com discovered 23 and crawled 1, 111 refused across five partners. Every one
+ * classified `editorial`, checked by running this function over them rather than inferred.
+ *
+ * They are not editorial in any useful sense. `melio.com/case-studies/cubepros` is a named client
+ * with a stated outcome, which is the `caseStudies` extraction category verbatim; `/faq` is
+ * `faqBank`; customer pages carry `testimonials`. Three of the 22 categories a tool page is refused
+ * for lacking live here.
+ *
+ * Deliberately NOT here: security, trust, changelog, demo, docs, limits, awards. They fill five more
+ * categories but already tier `other`, so moving them would change crawl order only — and ordering
+ * changes nothing while the 2,500-page cap goes unreached, which it has on all 47 runs to date.
+ *
+ * The leading-qualifier group mirrors `blog`'s, so dext's `smb-testimonials` is caught. Whole
+ * segments only: `/blog/case-studies-in-ap-automation` is an article about case studies and stays
+ * editorial.
+ */
+const EVIDENCE_SEGMENTS: readonly RegExp[] = [
+  /^customers$/,
+  /^(?:[a-z0-9]+-)?case-stud(?:y|ies)$/,       // case-study, case-studies, customer-case-studies
+  /^(?:[a-z0-9]+-)?success-stor(?:y|ies)$/,
+  /^(?:[a-z0-9]+-)?stories$/,                  // stories, customer-stories, success-stories
+  /^(?:[a-z0-9]+-)?testimonials?$/,            // testimonials, smb-testimonials
+  /^(?:faqs?|frequently-asked(?:-questions)?)$/,
+];
+
+/**
  * Archive and pagination views. Editorial only as the FIRST segment.
  *
  * `/category/accounting` is a blog archive; `/solutions/category/enterprise` is product taxonomy,
@@ -170,6 +202,11 @@ export function classifyPath(urlOrPath: string): PageTier {
 
   for (const [i, seg] of segments.entries()) {
     if (PRODUCT_SEGMENTS.some((re) => re.test(seg))) return 'product';
+    // Before EDITORIAL_SEGMENTS, because `stories` and `customers` appear in both vocabularies and
+    // evidence is the more specific reading. Still inside the leftmost scan, so this does not
+    // override an outer section: plooto.com/resources/case-studies stays editorial because
+    // `resources` classifies first. That consequence is accepted, not overlooked.
+    if (EVIDENCE_SEGMENTS.some((re) => re.test(seg))) return 'evidence';
     if (EDITORIAL_SEGMENTS.some((re) => re.test(seg))) return 'editorial';
     if (i === 0 && ARCHIVE_SEGMENTS.some((re) => re.test(seg))) return 'editorial';
   }

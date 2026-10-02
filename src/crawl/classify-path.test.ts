@@ -9,14 +9,17 @@ import { classifyPath, TIER_ORDER } from './classify-path.js';
  */
 
 describe('classifyPath — the leaks that made the corpus 72% editorial', () => {
+  // Two rows left this table on 2026-10-02: case-study (207 pages) and customer-stories (59).
+  // They were correctly identified here as not-product, and the conclusion "therefore editorial"
+  // was wrong -- a named client with a stated outcome is the `caseStudies` extraction category, not
+  // an article. They are now `evidence` and tested below. The counts are kept because they are what
+  // made the leak visible in the first place.
   const leaks: Array<[string, string]> = [
     ['https://bill.com/learning/2-way-matching', 'learning, 510 pages, no quota key existed'],
     ['https://avidxchange.com/press-releases/acumatica-selects-avidxchange', 'press-releases, 254'],
     ['https://bill.com/accountant-resource-center/ap-and-ar', 'accountant-resource-center, 230'],
-    ['https://bill.com/case-study/9to5-national-association', 'case-study singular, 207'],
     ['https://lightyear.cloud/company-blog/10-tips-for-ap-teams/', 'company-blog compound, 129'],
     ['https://medius.com/videos/about-medius/', 'videos, 94'],
-    ['https://avidxchange.com/customer-stories/a-mission-that-serves/', 'customer-stories, 59'],
     ['https://bill.com/business-templates/balance-sheet', 'business-templates, 42'],
     ['https://avidxchange.com/company-news/avidxchange-announces/', 'company-news, 28'],
     ['https://medius.com/resources/case-studies/', 'resources, 310'],
@@ -29,6 +32,50 @@ describe('classifyPath — the leaks that made the corpus 72% editorial', () => 
       assert.equal(classifyPath(url), 'editorial');
     });
   }
+});
+
+describe('classifyPath — evidence, the directories the editorial share was refusing', () => {
+  // Not an ordering concern. `admit()` rations editorial against EDITORIAL_SHARE, so these competed
+  // with blog posts for a 20% budget and lost. Measured 2026-10-02 by diffing crawl_links against
+  // crawl_pages: bill.com discovered 75 and crawled 1; melio.com discovered 23 and crawled 1; 111
+  // refused across five partners, every one of them classified editorial at the time.
+  const evidence: Array<[string, string]> = [
+    ['https://www.bill.com/case-study/9to5-national-association', 'case-study singular, 207 pages'],
+    ['https://avidxchange.com/customer-stories/a-mission-that-serves/', 'customer-stories, 59'],
+    ['https://melio.com/case-studies/cubepros', 'named client, stated outcome — caseStudies'],
+    ['https://ramp.com/customers/notion', 'customers, 5,312 links discovered on ramp alone'],
+    ['https://stampli.com/success-stories/acme', 'success-stories'],
+    ['https://dext.com/smb-testimonials/', 'leading qualifier, the way company-blog is handled'],
+    ['https://x.com/faq', 'faqBank'],
+    ['https://x.com/frequently-asked-questions', 'faqBank, spelled out'],
+  ];
+
+  for (const [url, why] of evidence) {
+    it(`treats ${new URL(url).pathname.split('/')[1]} as evidence — ${why}`, () => {
+      assert.equal(classifyPath(url), 'evidence');
+    });
+  }
+
+  it('an article ABOUT case studies is still editorial', () => {
+    // Whole segments only. The segment is `case-studies-in-ap-automation`, which does not match.
+    assert.equal(
+      classifyPath('https://x.com/blog/case-studies-in-ap-automation'),
+      'editorial',
+    );
+  });
+
+  it('evidence nested under an editorial section stays editorial — leftmost still wins', () => {
+    // Accepted consequence, decided 2026-10-02 rather than discovered later. plooto.com keeps ALL
+    // 273 of its evidence URLs under /resources/, so plooto gains nothing from this change. Fixing
+    // it would need a precedence step ahead of the leftmost scan, which would also undo the rule
+    // that keeps /solutions/category/enterprise a product page.
+    assert.equal(classifyPath('https://www.plooto.com/resources/case-studies'), 'editorial');
+    assert.equal(classifyPath('https://medius.com/resources/case-studies/'), 'editorial');
+  });
+
+  it('does not outrank a product section to its left', () => {
+    assert.equal(classifyPath('https://x.com/products/customers'), 'product');
+  });
 });
 
 describe('classifyPath — editorial nested inside a product path', () => {
@@ -134,12 +181,13 @@ describe('classifyPath — everything else lands in other, not silently in produ
 describe('classifyPath — totality and ordering', () => {
   it('never returns undefined, whatever it is given', () => {
     for (const s of ['', '/', 'not a url', 'https://x.com', 'ftp://x.com/blog']) {
-      assert.ok(['product', 'other', 'editorial'].includes(classifyPath(s)), s);
+      assert.ok(['product', 'evidence', 'other', 'editorial'].includes(classifyPath(s)), s);
     }
   });
 
-  it('orders product before other before editorial', () => {
-    assert.ok(TIER_ORDER.product < TIER_ORDER.other);
+  it('orders product before evidence before other before editorial', () => {
+    assert.ok(TIER_ORDER.product < TIER_ORDER.evidence);
+    assert.ok(TIER_ORDER.evidence < TIER_ORDER.other);
     assert.ok(TIER_ORDER.other < TIER_ORDER.editorial);
   });
 });

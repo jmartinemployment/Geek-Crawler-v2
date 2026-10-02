@@ -275,7 +275,7 @@ export function createSectionQuota(
   const admitted = new Map<string, number>();
   const suppressed = new Map<string, number>();
 
-  const byTier: Record<PageTier, number> = { product: 0, other: 0, editorial: 0 };
+  const byTier: Record<PageTier, number> = { product: 0, evidence: 0, other: 0, editorial: 0 };
   const alreadyAdmitted = new Set<string>();
   let shareSuppressed = 0;
 
@@ -302,6 +302,13 @@ export function createSectionQuota(
         // editorial already admitted and the equation then chases itself. For a share s, admitting
         // e editorial alongside n others gives e/(e+n) = s, so e = n * s/(1-s) -- at 0.2 that is a
         // quarter of the non-editorial count, which lands the finished crawl at exactly 20%.
+        // byTier.evidence is deliberately NOT in this sum, and nothing in the type system says so.
+        //
+        // Evidence pages are exempt from this gate (the `tier === 'editorial'` test above), which is
+        // the whole point of the tier. Counting them here as well would also RAISE the editorial
+        // allowance -- roughly 25 extra blog posts per 100 case studies admitted -- so the change
+        // intended to buy evidence would quietly buy blog too. The allowance stays tied to
+        // product + other exactly as it was before the tier existed.
         const nonEditorial = byTier.product + byTier.other;
         // The floor applies ONLY when there is nothing else to hold a ratio against. Used as a
         // Math.max it swamped small sites: lightyear.cloud has 19 non-editorial pages, the ratio

@@ -680,6 +680,21 @@ async function executeCheerioCrawl(
     clearCancel(persist.runId);
   }
 
+  // Composition, which nothing else reports. `admittedByTier` and `suppressedByShare` existed only
+  // in tests until 2026-10-02, and the one quota number that reaches disk --
+  // enqueueSuppressedSectionQuota -- merges share-suppression with section-cap-suppression, so it
+  // cannot say which gate refused a page. Without this line the evidence tier's effect on a live
+  // crawl is unobservable. Absent for project-site, where quotas are disabled outright.
+  if (quota) {
+    const tiers = quota.admittedByTier();
+    log.info(
+      `composition runId=${persist.runId} product=${tiers.product} evidence=${tiers.evidence} ` +
+        `other=${tiers.other} editorial=${tiers.editorial} ` +
+        `suppressedByShare=${quota.suppressedByShare()} ` +
+        `suppressedBySectionCap=${quota.totalSuppressed()}`,
+    );
+  }
+
   const stats = await persist.stats();
   return {
     runId: persist.runId,

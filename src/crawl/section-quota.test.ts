@@ -220,3 +220,60 @@ describe('createSectionQuota — admission is idempotent per url', () => {
     assert.equal(editorial, 5, 'allowance must follow distinct non-editorial pages, not offers');
   });
 });
+
+
+describe('createSectionQuota — evidence is exempt from the editorial share, not from the caps', () => {
+  it('admits evidence pages after the editorial budget is spent', () => {
+    // The whole point. Before the evidence tier these were editorial and lost this race: bill.com
+    // discovered 75 case-study pages and crawled 1, melio.com discovered 23 and crawled 1.
+    const q = createSectionQuota(new Map());
+    for (let i = 0; i < 20; i++) q.admit(`https://x.com/pricing/${i}`);
+
+    let blog = 0;
+    for (let i = 0; i < 100; i++) if (q.admit(`https://x.com/blog/post-${i}`)) blog++;
+    assert.equal(blog, 5, '20 non-editorial permits 5 editorial, unchanged');
+
+    let caseStudies = 0;
+    for (let i = 0; i < 40; i++) if (q.admit(`https://x.com/case-studies/client-${i}`)) caseStudies++;
+    assert.equal(caseStudies, 40, 'every evidence page is admitted with the editorial budget spent');
+  });
+
+  it('admitting evidence does not enlarge the editorial allowance', () => {
+    // The decision with no compiler signal: byTier.evidence is excluded from `nonEditorial`.
+    // Including it would buy roughly 25 extra blog posts per 100 case studies -- the change intended
+    // to buy evidence would quietly buy blog as well.
+    const q = createSectionQuota(new Map());
+    for (let i = 0; i < 20; i++) q.admit(`https://x.com/pricing/${i}`);
+    for (let i = 0; i < 100; i++) q.admit(`https://x.com/case-studies/client-${i}`);
+
+    let blog = 0;
+    for (let i = 0; i < 100; i++) if (q.admit(`https://x.com/blog/post-${i}`)) blog++;
+    assert.equal(blog, 5, 'allowance still follows product + other only');
+  });
+
+  it('evidence is still bound by its section quota — the ramp.com case', () => {
+    // ramp.com discovered 5,312 /customers/ links. The customers: 250 cap is the only thing between
+    // the share exemption and a crawl of nothing but customer pages.
+    const q = createSectionQuota(resolveSectionQuotas(undefined));
+    let admitted = 0;
+    for (let i = 0; i < 5312; i++) if (q.admit(`https://ramp.com/customers/client-${i}`)) admitted++;
+    assert.equal(admitted, DEFAULT_SECTION_QUOTAS.get('customers'));
+    assert.equal(admitted, 250, 'the exemption must not also exempt the per-section cap');
+  });
+
+  it('counts evidence in its own tier, not as product or editorial', () => {
+    // Four product pages, because byTier only increments on a SUCCESSFUL admit and one product page
+    // permits floor(1 * 0.25) = 0 editorial -- the blog post would be refused and never counted.
+    // Four permits exactly one, which is what makes the editorial column meaningful here.
+    const q = createSectionQuota(new Map());
+    for (let i = 0; i < 4; i++) q.admit(`https://x.com/pricing/${i}`);
+    assert.equal(q.admit('https://x.com/case-studies/b'), true);
+    assert.equal(q.admit('https://x.com/blog/c'), true);
+
+    const tiers = q.admittedByTier();
+    assert.equal(tiers.product, 4);
+    assert.equal(tiers.evidence, 1);
+    assert.equal(tiers.editorial, 1);
+    assert.equal(tiers.other, 0);
+  });
+});
