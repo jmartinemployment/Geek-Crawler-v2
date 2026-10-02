@@ -69,6 +69,38 @@ No vocabulary extension classifies `/advanced-vendor-management/`. URL shape is 
 signal of page purpose on these sites, and widening the patterns to catch them would catch everything
 else too.
 
+## Measured: the share gate is refusing 110 evidence pages
+
+Counted 2026-10-02 by diffing `crawl_links` (everything discovered) against `crawl_pages`
+(everything fetched), for the five partners:
+
+```
+partner            crawled  discovered  evid.disc  evid.crawled  MISSED
+dext.com               181         451          2             1       1
+melio.com               88         273         23             1      22
+bill.com               183         714         75             1      74
+avidxchange.com        198        1133          0             0       0
+stampli.com            231        1122         37            24      14
+TOTAL                                                        27     111
+```
+
+**80% of discovered evidence pages were never fetched.** bill.com found 75 and crawled 1; melio found
+23 and crawled 1.
+
+Every one of the 110 classifies `editorial` — verified by running `classifyPath` over the missed
+URLs, not inferred. They are `melio.com/case-studies/accountaxstic`,
+`/case-studies/antaresadvisors`, `/case-studies/aora-cargo` and so on: named clients with stated
+outcomes, which is exactly what `caseStudies` requires.
+
+Every other gate is eliminated. The 2,500 cap has never been reached on any of 47 runs. `maxDepth` is
+`null` for third-party crawls. The section quotas that apply are 250 against at most 75 discovered.
+`EDITORIAL_SHARE` is the only gate left that can refuse them.
+
+So item 3 does not merely reorder. It **increases the number of pages crawled** — 110 more across
+five partners — and the increase lands in two of the three categories a tool page is refused for
+lacking. It also returns the editorial budget to real blog content, which is currently part-spent on
+case studies that are not editorial in any useful sense.
+
 ## Blogs are not the problem
 
 Asked directly, and the answer is no. Editorial is **12%** of the partner set — the `EDITORIAL_SHARE`
