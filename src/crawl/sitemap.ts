@@ -295,6 +295,41 @@ function compareKey(url: string, aliases?: AliasTable): string {
 }
 
 /**
+ * The first step for any offered URL that is not a seed or a sitemap entry: count the offer, refuse
+ * a non-English locale or an unfetchable URL with the reason recorded, and collapse a duplicate
+ * within the batch against seen, which is mutated. Returns the fetchable URL and its comparison
+ * key, or null when the URL goes no further.
+ *
+ * One implementation for links found on pages and links harvested by the browser pass, so the two
+ * cannot drift on what a usable URL is.
+ */
+function normalizeCandidate(
+  raw: string,
+  seen: Set<string>,
+  offSitemap: boolean,
+  opts?: EnqueueDedupOpts,
+): { url: string; key: string } | null {
+  if (opts?.counters) opts.counters.enqueueAttempts += 1;
+  const localeOk = localeNormalizeForMap(raw);
+  if (!localeOk) {
+    opts?.ledger?.refuse(raw, raw, 'locale', offSitemap);
+    return null;
+  }
+  const url = normalizeCrawlUrl(localeOk);
+  if (!url) {
+    opts?.ledger?.refuse(raw, raw, 'invalid', offSitemap);
+    return null;
+  }
+  const key = compareKey(url, opts?.aliases);
+  if (seen.has(key)) {
+    if (opts?.counters) opts.counters.enqueueSuppressedLocal += 1;
+    return null;
+  }
+  seen.add(key);
+  return { url, key };
+}
+
+/**
  * Filter candidate same-site links for enqueue.
  *
  * Every link is a candidate, sitemap or not. Until 2026-10-04 a sitemap made itself an allowlist:
@@ -323,23 +358,9 @@ export function filterEnqueueUrls(
   const seen = new Set<string>();
   const ledger = opts?.ledger;
   for (const c of candidates) {
-    if (opts?.counters) opts.counters.enqueueAttempts += 1;
-    const localeOk = localeNormalizeForMap(c);
-    if (!localeOk) {
-      ledger?.refuse(c, c, 'locale', map.hasMap);
-      continue;
-    }
-    const n = normalizeCrawlUrl(localeOk);
-    if (!n) {
-      ledger?.refuse(c, c, 'invalid', map.hasMap);
-      continue;
-    }
-    const ck = compareKey(n, opts?.aliases);
-    if (seen.has(ck)) {
-      if (opts?.counters) opts.counters.enqueueSuppressedLocal += 1;
-      continue;
-    }
-    seen.add(ck);
+    const candidate = normalizeCandidate(c, seen, map.hasMap, opts);
+    if (!candidate) continue;
+    const { url: n, key: ck } = candidate;
     // Already queued, from the sitemap or an earlier page. Crawlee would drop it on uniqueKey;
     // stopping here keeps it out of the gates, which would otherwise re-decide a settled URL.
     if (ledger?.stateOf(ck) === 'enqueued') continue;
@@ -446,37 +467,27 @@ export function mergeHarvestedUrls(
   harvested: string[],
   opts?: EnqueueDedupOpts,
 ): string[] {
-  const ledger = opts?.ledger;
-  const merged = new Set(startUrls);
   const seen = new Set(startUrls.map((u) => compareKey(u, opts?.aliases)));
-  const fresh: string[] = [];
+  const keyByUrl = new Map<string, string>();
   for (const u of harvested) {
-    const localeOk = localeNormalizeForMap(u);
-    if (!localeOk) {
-      ledger?.refuse(u, u, 'locale', false);
-      continue;
-    }
-    const n = normalizeCrawlUrl(localeOk);
-    if (!n) {
-      ledger?.refuse(u, u, 'invalid', false);
-      continue;
-    }
-    const ck = compareKey(n, opts?.aliases);
-    if (seen.has(ck)) continue;
-    seen.add(ck);
-    fresh.push(n);
+    const candidate = normalizeCandidate(u, seen, false, opts);
+    if (candidate) keyByUrl.set(candidate.url, candidate.key);
   }
-  for (const n of sectionAdmissionOrder(fresh)) {
-    const ck = compareKey(n, opts?.aliases);
+  // Harvested URLs neither pass nor charge the off-sitemap directory cap. The cap bounds pages
+  // nobody declared, and a rendered nav link is declared, as a sitemap entry is: sitemap URLs do
+  // not charge it either.
+  const admitted: string[] = [];
+  for (const url of sectionAdmissionOrder([...keyByUrl.keys()])) {
+    const key = keyByUrl.get(url)!;
     if (opts?.quota) {
-      const decision = opts.quota.decide(n);
+      const decision = opts.quota.decide(url);
       if (!decision.admitted) {
-        ledger?.refuse(ck, n, decision.refusal, false);
+        opts.ledger?.refuse(key, url, decision.refusal, false);
         continue;
       }
     }
-    ledger?.enqueue(ck, n, 'harvest', false);
-    merged.add(n);
+    opts?.ledger?.enqueue(key, url, 'harvest', false);
+    admitted.push(url);
   }
-  return sectionAdmissionOrder([...merged]);
+  return sectionAdmissionOrder([...startUrls, ...admitted]);
 }

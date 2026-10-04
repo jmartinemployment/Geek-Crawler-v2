@@ -13,10 +13,9 @@ import type { RunStore } from './runs.js';
  * Observed on 2026-09-28: twenty-one such records. Ten stopped writing within
  * the same second when one serve process died, eleven more dated from four
  * days earlier. They are not harmless. GET /crawls lists them as live, the
- * operator UI shows them as in progress, resume-all would re-attach every one
- * of them, and a frozen page count reads as live progress - a netsuite run
- * dead for two hours forty minutes was reported as "currently running, 490
- * pages" on the strength of its record.
+ * operator UI shows them as in progress, and a frozen page count reads as live
+ * progress - a netsuite run dead for two hours forty minutes was reported as
+ * "currently running, 490 pages" on the strength of its record.
  *
  * Marking failed is local only. RunStore.markFailed writes status, summary and
  * a completion timestamp to run.json and nothing else: no GeekAPI call, no

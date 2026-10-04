@@ -46,18 +46,6 @@ test('completed report paginates URL rows and downloads both CSV exports', async
   expect((await reportDownload).suggestedFilename()).toBe('crawl-run-123-report.csv');
 });
 
-test('resume-all reports mixed outcomes and resume-by-URL redirects', async ({ page }) => {
-  await page.goto('/');
-  await page.getByRole('button', { name: 'Resume all running' }).click();
-  await expect(page.getByText('Resumed 1, skipped 1, failed 1 (of 3 running stubs).')).toBeVisible();
-  await expect(page.getByText(/skipped[\s\S]*already in flight/)).toBeVisible();
-  await expect(page.getByText(/failed[\s\S]*missing queue/)).toBeVisible();
-
-  await page.getByLabel('Seed URL to resume').fill('http://127.0.0.1:8899/fixture/article');
-  await page.getByRole('button', { name: 'Resume by URL' }).click();
-  await expect(page).toHaveURL(/\/runs\/run-123$/);
-});
-
 /**
  * The local crawler snapshot is not a substitute for the authoritative one.
  * This test asserted the opposite until 2026-09-29, and had failed on every CI

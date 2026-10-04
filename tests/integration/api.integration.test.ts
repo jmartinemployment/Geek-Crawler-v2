@@ -322,7 +322,9 @@ test('cancelling a live crawl stops fetching and lands it in cancelled, never co
     const fetchedAtCancel = fixture.totalRequests();
 
     const deadline = Date.now() + 30_000;
-    while (Date.now() < deadline && !statuses.includes('cancelled')) {
+    // Both, not the patch alone: archiveAndPurge writes the archive to disk between the cancelled
+    // patch and the purge DELETE, so stopping at the patch races the DELETE.
+    while (Date.now() < deadline && !(statuses.includes('cancelled') && deletes === 1)) {
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
     assert.ok(statuses.includes('cancelled'), `expected a cancelled patch, saw ${statuses.join(',')}`);

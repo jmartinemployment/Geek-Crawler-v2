@@ -49,14 +49,3 @@ export function originOf(url: string): string {
     return '';
   }
 }
-
-/** Host key for matching seed URLs (strips www., lowercases). */
-export function seedHostKey(raw: string): string | null {
-  const normalized = normalizeSeedUrl(raw);
-  if (!normalized) return null;
-  try {
-    return new URL(normalized).hostname.replace(/^www\./i, '').toLowerCase();
-  } catch {
-    return null;
-  }
-}

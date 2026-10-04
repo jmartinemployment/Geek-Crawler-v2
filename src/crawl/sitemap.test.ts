@@ -218,11 +218,16 @@ describe('mergeHarvestedUrls — a browser pass stands in for a missing sitemap'
 
   it('drops non-English locales and counts them', () => {
     const ledger = createDiscoveryLedger();
-    const out = mergeHarvestedUrls(['https://x.com/'], ['https://x.com/fr/pricing', 'https://x.com/en/pricing'], {
-      ledger,
-    });
+    const counters = { enqueueAttempts: 0, enqueueSuppressedLocal: 0 };
+    const out = mergeHarvestedUrls(
+      ['https://x.com/'],
+      ['https://x.com/fr/pricing', 'https://x.com/en/pricing', 'https://x.com/'],
+      { ledger, counters },
+    );
     assert.deepEqual(out, ['https://x.com/pricing', 'https://x.com/']);
     assert.equal(ledger.report().refused.locale, 1);
+    // Every harvested offer is counted, as page links are; the root duplicates a start url.
+    assert.deepEqual(counters, { enqueueAttempts: 3, enqueueSuppressedLocal: 1 });
   });
 
   it('holds harvested editorial to the share -- the lightyear.cloud case', () => {

@@ -82,22 +82,6 @@ const server = createServer(async (req, res) => {
       persistMode: 'local',
     });
   }
-  if (req.method === 'POST' && pathname === '/crawls/resume-by-url') {
-    const input = await body(req);
-    if (String(input.url || '').includes('missing')) {
-      return send(res, 404, { error: 'no local run found for seed URL' });
-    }
-    return send(res, 202, { ok: true, runId: 'run-123', resumed: true });
-  }
-  if (req.method === 'POST' && pathname === '/crawls/resume-running') {
-    return send(res, 200, {
-      ok: true,
-      candidateCount: 3,
-      resumed: [{ runId: 'run-123', seedUrl: `${origin}/fixture/article` }],
-      skipped: [{ runId: 'busy-run', seedUrl: `${origin}/fixture/busy`, reason: 'already in flight' }],
-      failed: [{ runId: 'broken-run', seedUrl: `${origin}/fixture/broken`, error: 'missing queue' }],
-    });
-  }
 
   const localPages = pathname.match(/^\/crawls\/([^/]+)\/pages$/);
   if (req.method === 'GET' && localPages) {

@@ -321,7 +321,7 @@ export function createJsonRunStore(dataDir: string): RunStore {
 
 
     async getRun(runId) {
-      // Multiple store instances are expected (API status reads vs. crawl/resume
+      // Multiple store instances are expected (API status reads vs. crawl
       // workers). Always refresh from disk so a server does not keep returning
       // the state cached by an earlier listRuns() call.
       const run = await readJson<CrawlRunMeta>(runPath(runId));
