@@ -2,6 +2,7 @@ import { mkdir, readdir, readFile, rename, rm, stat, utimes, writeFile } from 'n
 import path from 'node:path';
 import type { RejectSample } from '../crawl/reject.js';
 import type { CrawlType } from '../crawl/types.js';
+import type { DiscoveryReport } from '../crawl/discovery-ledger.js';
 
 export type CrawlRunMeta = {
   runId: string;
@@ -39,7 +40,6 @@ export type CrawlRunMeta = {
   enqueueAttempts?: number;
   enqueueSuppressedLocal?: number;
   enqueueSuppressedQueue?: number;
-  enqueueSuppressedSectionQuota?: number;
   httpRequests?: number;
   browserRenders?: number;
   extractionInvocations?: number;
@@ -59,6 +59,8 @@ export type CrawlRunMeta = {
     robots_disallowed?: RejectSample[];
     request_failed?: RejectSample[];
   };
+  /** What became of every URL the crawl discovered. See discovery-ledger.ts. */
+  discovery?: DiscoveryReport;
 };
 
 export type CrawlLinkMeta = {
@@ -91,7 +93,6 @@ export type RunStore = {
       enqueueAttempts?: number;
       enqueueSuppressedLocal?: number;
       enqueueSuppressedQueue?: number;
-      enqueueSuppressedSectionQuota?: number;
       httpRequests?: number;
       browserRenders?: number;
       extractionInvocations?: number;
@@ -104,6 +105,7 @@ export type RunStore = {
       skipCauseInFlight?: number;
       aliasesLearned?: number;
       rejectSamples?: CrawlRunMeta['rejectSamples'];
+      discovery?: DiscoveryReport;
     },
   ): Promise<void>;
   recordAcceptedPage(runId: string, hasContent: boolean): Promise<void>;
@@ -251,6 +253,9 @@ export function createJsonRunStore(dataDir: string): RunStore {
         if (stats.pagesRejectedLocale !== undefined) {
           run.pagesRejectedLocale = stats.pagesRejectedLocale;
         }
+        if (stats.pagesRejectedRequiresJavascript !== undefined) {
+          run.pagesRejectedRequiresJavascript = stats.pagesRejectedRequiresJavascript;
+        }
         if (stats.pagesRejectedChallenge !== undefined) {
           run.pagesRejectedChallenge = stats.pagesRejectedChallenge;
         }
@@ -271,7 +276,6 @@ export function createJsonRunStore(dataDir: string): RunStore {
           'enqueueAttempts',
           'enqueueSuppressedLocal',
           'enqueueSuppressedQueue',
-          'enqueueSuppressedSectionQuota',
           'httpRequests',
           'browserRenders',
           'extractionInvocations',
@@ -291,6 +295,7 @@ export function createJsonRunStore(dataDir: string): RunStore {
           }
         }
         if (stats.rejectSamples) run.rejectSamples = stats.rejectSamples;
+        if (stats.discovery) run.discovery = stats.discovery;
         await saveRun(run);
       });
     },

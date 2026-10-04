@@ -87,7 +87,6 @@ export type DedupCounters = {
   enqueueAttempts: number;
   enqueueSuppressedLocal: number;
   enqueueSuppressedQueue: number;
-  enqueueSuppressedSectionQuota: number;
   httpRequests: number;
   browserRenders: number;
   extractionInvocations: number;
@@ -173,7 +172,6 @@ function emptyCounters(): DedupCounters {
     enqueueAttempts: 0,
     enqueueSuppressedLocal: 0,
     enqueueSuppressedQueue: 0,
-    enqueueSuppressedSectionQuota: 0,
     httpRequests: 0,
     browserRenders: 0,
     extractionInvocations: 0,

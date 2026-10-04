@@ -20,6 +20,7 @@ import { mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { RejectSample } from '../crawl/reject.js';
 import type { CrawlReport } from './geek-api-client.js';
+import type { DiscoveryReport } from '../crawl/discovery-ledger.js';
 
 export type PurgeOutcome = {
   vectorsPurged: boolean;
@@ -43,6 +44,8 @@ export type FailureRecord = {
   report: CrawlReport;
   rejectSamples: Record<string, RejectSample[]>;
   dedup: Record<string, number | boolean>;
+  /** What became of every URL the crawl discovered. Absent on records archived before 2026-10-04. */
+  discovery?: DiscoveryReport;
   /** Null when nothing was purged, so an empty outcome is never read as a completed purge. */
   purge: PurgeOutcome | null;
 };

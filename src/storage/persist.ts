@@ -10,7 +10,12 @@ import {
 } from './geek-api-client.js';
 import { PersistenceError, isPersistenceError } from './errors.js';
 import { archiveRun, type FailureRecord, type PurgeOutcome } from './failure-archive.js';
-import { createJsonRunStore, type CrawlLinkMeta, type RunStore } from './runs.js';
+import {
+  createJsonRunStore,
+  type CrawlLinkMeta,
+  type CrawlRunMeta,
+  type RunStore,
+} from './runs.js';
 import { computeSeedKey, normalizeSeeds, originOf } from './seed-key.js';
 import type { CrawlType } from '../crawl/types.js';
 import {
@@ -28,6 +33,7 @@ import {
   type DedupCounters,
   type PageDedupTracker,
 } from './page-dedup.js';
+import { createDiscoveryLedger, type DiscoveryLedger } from '../crawl/discovery-ledger.js';
 import { log } from 'crawlee';
 
 export type PersistPageInput = {
@@ -63,6 +69,8 @@ export type CrawlPersist = {
   rawBodyStore: RawBodyStore;
   localMeta: RunStore;
   dedup: PageDedupTracker;
+  /** What became of every discovered URL. Reported on every terminal transition. */
+  discovery: DiscoveryLedger;
   begin(): Promise<void>;
   markRunning(): Promise<void>;
   markComplete(): Promise<void>;
@@ -164,6 +172,7 @@ export function createCrawlPersist(input: {
   const rejectCounters = emptyRejectCounters();
   const rejectSamples = new RejectSampleLog();
   let dedup = createPageDedupTracker({ dataDir: input.dataDir, runId: 'pending' });
+  const discovery = createDiscoveryLedger();
 
   function rebuildDedup(): void {
     dedup = createPageDedupTracker({ dataDir: input.dataDir, runId });
@@ -265,6 +274,7 @@ export function createCrawlPersist(input: {
       report: crawlReport(),
       rejectSamples: rejectSamples.snapshot() as Record<string, RejectSample[]>,
       dedup: { ...dedup.counters } as Record<string, number | boolean>,
+      discovery: discovery.report(),
       purge,
     };
   }
@@ -276,8 +286,48 @@ export function createCrawlPersist(input: {
         pagesSaved,
         rejectSamples.snapshot(),
         dedup.counters,
+        discovery.report(),
       ),
     ]);
+  }
+
+  /**
+   * The same counters, written to the local run.json.
+   *
+   * recordRejectStats existed with no caller, so run.json never carried a reject or dedup count:
+   * the local record of a finished run could say how many pages it saved and nothing about the
+   * rest. Called on every terminal transition, after the GeekAPI patch.
+   */
+  async function recordLocalStats(): Promise<void> {
+    const d = dedup.counters;
+    await localMeta.recordRejectStats(runId, {
+      ...rejectCounters,
+      ...d,
+      duplicatePagesSkipped:
+        d.skippedUrl + d.skippedHtml + d.skippedCanonicalAlias + d.skippedContent + d.skippedNearDuplicate,
+      dedupLedgerBackfilled: dedup.dedupLedgerBackfilled,
+      rejectSamples: rejectSamples.snapshot() as CrawlRunMeta['rejectSamples'],
+      discovery: discovery.report(),
+    });
+  }
+
+  /**
+   * recordLocalStats for a failed or cancelled run. Reported and swallowed: the local record is a
+   * view, the status patch above it is what matters, and a disk error here must not replace the
+   * error that ended the run.
+   */
+  async function recordLocalStatsQuietly(): Promise<void> {
+    try {
+      await recordLocalStats();
+    } catch (err) {
+      console.error(
+        JSON.stringify({
+          code: 'LOCAL_STATS_WRITE_FAILED',
+          runId,
+          message: (err instanceof Error ? err.message : String(err)).slice(0, 500),
+        }),
+      );
+    }
   }
 
   return {
@@ -291,6 +341,7 @@ export function createCrawlPersist(input: {
     get dedup() {
       return dedup;
     },
+    discovery,
 
     async begin() {
       const created = await coordinator.run(() =>
@@ -334,6 +385,7 @@ export function createCrawlPersist(input: {
       // The same value sent to GeekAPI, so the local record can answer whether
       // this run is eligible for indexing without a round trip.
       await localMeta.markComplete(runId, contentReady ? completedAtUtc : null);
+      await recordLocalStats();
     },
 
     async markCancelled(reason: string) {
@@ -361,6 +413,7 @@ export function createCrawlPersist(input: {
           }),
         );
       }
+      await recordLocalStatsQuietly();
     },
 
     async markFailed(errorSummary: string) {
@@ -387,6 +440,7 @@ export function createCrawlPersist(input: {
           }),
         );
       }
+      await recordLocalStatsQuietly();
     },
 
     async archiveFailure(status: 'failed' | 'cancelled', errorSummary: string) {

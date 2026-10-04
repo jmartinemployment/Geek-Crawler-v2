@@ -254,18 +254,31 @@ export const EDITORIAL_SHARE = 0.2;
  */
 export const MIN_EDITORIAL_PAGES = 25;
 
+/** Which gate refused a URL. */
+export type QuotaRefusal = 'share' | 'section';
+
+export type QuotaDecision = { admitted: true } | { admitted: false; refusal: QuotaRefusal };
+
+/**
+ * Refusal counts are distinct URLs, by the gate that refused each one last. A URL is offered once
+ * from the sitemap and again from every page that links to it; counting each offer made one refused
+ * URL linked from 40 pages read as 40 refusals. A URL refused and later admitted -- the editorial
+ * allowance grows as product pages arrive -- leaves the refusal counts.
+ */
 export type SectionQuota = {
   /** True when the URL may be enqueued. Mutates admission state. */
   admit(url: string): boolean;
+  /** As `admit`, naming the gate when the URL is refused. */
+  decide(url: string): QuotaDecision;
   /** Admitted count per capped section. */
   admittedBySection(): Map<string, number>;
-  /** Suppressed count per capped section. */
+  /** Distinct URLs refused per capped section because it was full. */
   suppressedBySection(): Map<string, number>;
-  /** Total URLs refused because their section was full. */
+  /** Distinct URLs refused because their section was full. */
   totalSuppressed(): number;
   /** Admitted counts by tier, for the crawl report. */
   admittedByTier(): Record<PageTier, number>;
-  /** URLs refused because the editorial share was already met. */
+  /** Distinct URLs refused because the editorial share was already met. */
   suppressedByShare(): number;
 };
 
@@ -273,90 +286,101 @@ export function createSectionQuota(
   limits: ReadonlyMap<string, number> = resolveSectionQuotas(),
 ): SectionQuota {
   const admitted = new Map<string, number>();
-  const suppressed = new Map<string, number>();
+  // Current refusal per url, by gate. A url leaves both once admitted; refusedBySection maps the
+  // url to the section that was full.
+  const refusedByShare = new Set<string>();
+  const refusedBySection = new Map<string, string>();
 
   const byTier: Record<PageTier, number> = { product: 0, evidence: 0, other: 0, editorial: 0 };
   const alreadyAdmitted = new Set<string>();
-  let shareSuppressed = 0;
+
+  const decide = (url: string): QuotaDecision => {
+    // Idempotent per url, and it has to be. A url is offered twice: once from the sitemap in
+    // initialCrawlUrls, and again when a crawled page links to it. Counting it both times
+    // inflates the non-editorial total, which raises the editorial allowance derived from it --
+    // measured on lightyear.cloud, a 155-url sitemap admitting 20 non-editorial pages permitted 5
+    // editorial at enqueue and then let 25 through as re-encounters re-counted the same pages.
+    //
+    // The old per-section caps hid this: they were large and per-section, so a double count cost
+    // one slot out of 250. A share is derived from the totals, so a double count moves the budget.
+    if (alreadyAdmitted.has(url)) return { admitted: true };
+
+    const tier = classifyPath(url);
+
+    // The share gate, before the per-section caps. Per-section caps cannot control composition on
+    // their own: six sections at 250 each still admits 1,500 editorial pages, and any section the
+    // table has no key for is uncapped entirely -- which is how `learning` contributed 510 pages
+    // and `press-releases` 254.
+    if (tier === 'editorial') {
+      // Expressed against NON-editorial pages, not the total, because the total includes the
+      // editorial already admitted and the equation then chases itself. For a share s, admitting
+      // e editorial alongside n others gives e/(e+n) = s, so e = n * s/(1-s) -- at 0.2 that is a
+      // quarter of the non-editorial count, which lands the finished crawl at exactly 20%.
+      // byTier.evidence is deliberately NOT in this sum, and nothing in the type system says so.
+      //
+      // Evidence pages are exempt from this gate (the `tier === 'editorial'` test above), which is
+      // the whole point of the tier. Counting them here as well would also RAISE the editorial
+      // allowance -- roughly 25 extra blog posts per 100 case studies admitted -- so the change
+      // intended to buy evidence would quietly buy blog too. The allowance stays tied to
+      // product + other exactly as it was before the tier existed.
+      const nonEditorial = byTier.product + byTier.other;
+      // The floor applies ONLY when there is nothing else to hold a ratio against. Used as a
+      // Math.max it swamped small sites: lightyear.cloud has 19 non-editorial pages, the ratio
+      // allows 4, and a floor of 25 took the crawl to 57% editorial -- the floor overriding the
+      // rule it exists to make survivable.
+      const allowed =
+        nonEditorial === 0
+          ? MIN_EDITORIAL_PAGES
+          : Math.floor(nonEditorial * (EDITORIAL_SHARE / (1 - EDITORIAL_SHARE)));
+      if (byTier.editorial >= allowed) {
+        refusedBySection.delete(url);
+        refusedByShare.add(url);
+        return { admitted: false, refusal: 'share' };
+      }
+    }
+
+    // quotaKey, not sectionKey: the section is the leftmost segment that matches the vocabulary,
+    // so a locale prefix like /us/en/ cannot hide the real one. See SECTION_PATTERNS.
+    const key = quotaKey(url);
+    const limit = key === '' ? undefined : limits.get(key);
+    if (limit !== undefined) {
+      const used = admitted.get(key) ?? 0;
+      if (used >= limit) {
+        refusedByShare.delete(url);
+        refusedBySection.set(url, key);
+        return { admitted: false, refusal: 'section' };
+      }
+      admitted.set(key, used + 1);
+    }
+
+    byTier[tier] += 1;
+    alreadyAdmitted.add(url);
+    refusedByShare.delete(url);
+    refusedBySection.delete(url);
+    return { admitted: true };
+  };
 
   return {
     admit(url: string): boolean {
-      // Idempotent per url, and it has to be. A url is offered twice: once from the sitemap in
-      // initialCrawlUrls, and again when a crawled page links to it. Counting it both times
-      // inflates the non-editorial total, which raises the editorial allowance derived from it --
-      // measured on lightyear.cloud, a 155-url sitemap admitting 20 non-editorial pages permitted 5
-      // editorial at enqueue and then let 25 through as re-encounters re-counted the same pages.
-      //
-      // The old per-section caps hid this: they were large and per-section, so a double count cost
-      // one slot out of 250. A share is derived from the totals, so a double count moves the budget.
-      if (alreadyAdmitted.has(url)) return true;
-
-      const tier = classifyPath(url);
-
-      // The share gate, before the per-section caps. Per-section caps cannot control composition on
-      // their own: six sections at 250 each still admits 1,500 editorial pages, and any section the
-      // table has no key for is uncapped entirely -- which is how `learning` contributed 510 pages
-      // and `press-releases` 254.
-      if (tier === 'editorial') {
-        // Expressed against NON-editorial pages, not the total, because the total includes the
-        // editorial already admitted and the equation then chases itself. For a share s, admitting
-        // e editorial alongside n others gives e/(e+n) = s, so e = n * s/(1-s) -- at 0.2 that is a
-        // quarter of the non-editorial count, which lands the finished crawl at exactly 20%.
-        // byTier.evidence is deliberately NOT in this sum, and nothing in the type system says so.
-        //
-        // Evidence pages are exempt from this gate (the `tier === 'editorial'` test above), which is
-        // the whole point of the tier. Counting them here as well would also RAISE the editorial
-        // allowance -- roughly 25 extra blog posts per 100 case studies admitted -- so the change
-        // intended to buy evidence would quietly buy blog too. The allowance stays tied to
-        // product + other exactly as it was before the tier existed.
-        const nonEditorial = byTier.product + byTier.other;
-        // The floor applies ONLY when there is nothing else to hold a ratio against. Used as a
-        // Math.max it swamped small sites: lightyear.cloud has 19 non-editorial pages, the ratio
-        // allows 4, and a floor of 25 took the crawl to 57% editorial -- the floor overriding the
-        // rule it exists to make survivable.
-        const allowed =
-          nonEditorial === 0
-            ? MIN_EDITORIAL_PAGES
-            : Math.floor(nonEditorial * (EDITORIAL_SHARE / (1 - EDITORIAL_SHARE)));
-        if (byTier.editorial >= allowed) {
-          shareSuppressed += 1;
-          return false;
-        }
-      }
-
-      // quotaKey, not sectionKey: the section is the leftmost segment that matches the vocabulary,
-      // so a locale prefix like /us/en/ cannot hide the real one. See SECTION_PATTERNS.
-      const key = quotaKey(url);
-      const limit = key === '' ? undefined : limits.get(key);
-      if (limit !== undefined) {
-        const used = admitted.get(key) ?? 0;
-        if (used >= limit) {
-          suppressed.set(key, (suppressed.get(key) ?? 0) + 1);
-          return false;
-        }
-        admitted.set(key, used + 1);
-      }
-
-      byTier[tier] += 1;
-      alreadyAdmitted.add(url);
-      return true;
+      return decide(url).admitted;
     },
+    decide,
     admittedByTier() {
       return { ...byTier };
     },
     suppressedByShare() {
-      return shareSuppressed;
+      return refusedByShare.size;
     },
     admittedBySection() {
       return new Map(admitted);
     },
     suppressedBySection() {
-      return new Map(suppressed);
+      const out = new Map<string, number>();
+      for (const key of refusedBySection.values()) out.set(key, (out.get(key) ?? 0) + 1);
+      return out;
     },
     totalSuppressed() {
-      let n = 0;
-      for (const v of suppressed.values()) n += v;
-      return n;
+      return refusedBySection.size;
     },
   };
 }

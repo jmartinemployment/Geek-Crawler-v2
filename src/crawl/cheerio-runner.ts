@@ -13,10 +13,10 @@ import {
   filterEnqueueUrls,
   initialCrawlUrls,
   loadSiteMapIndex,
-  normalizeCrawlUrl,
-  sectionAdmissionOrder,
+  mergeHarvestedUrls,
   type SiteMapIndex,
 } from './sitemap.js';
+import { createDirectoryCap } from './link-trap.js';
 import { createRobotsGate } from './robots.js';
 import { concurrencyOptions, httpAgent, httpsAgent } from './throttle.js';
 import type { CrawlType } from './types.js';
@@ -193,10 +193,14 @@ async function executeCheerioCrawl(
   if (quotaLimits === null) {
     log.info(`Section quotas disabled for crawlType=${input.crawlType}`);
   }
+  // The directory cap rides with the section quotas: both exist to stop a third party's generated
+  // directories eating the budget, and project-site disables both for the same reason.
   const enqueueOpts = {
     aliases: dedup.aliases,
     counters: dedup.counters,
     quota,
+    directoryCap: quota ? createDirectoryCap() : undefined,
+    ledger: persist.discovery,
   };
 
   const { minConcurrency, maxConcurrency, autoscaledPoolOptions } = concurrencyOptions({
@@ -205,9 +209,12 @@ async function executeCheerioCrawl(
   const proxyConfiguration = buildProxyConfiguration();
 
   const siteMap: SiteMapIndex = await loadSiteMapIndex(seeds);
+  persist.discovery.setSitemap(siteMap.hasMap, siteMap.urls.size, siteMap.truncated);
   if (siteMap.hasMap) {
     log.info(
-      `Sitemap is the map: ${siteMap.urls.size} URL(s); link enqueue restricted to map`,
+      `Sitemap seeds the crawl: ${siteMap.urls.size} URL(s)` +
+        `${siteMap.truncated ? ' (truncated at the loader ceiling)' : ''}; ` +
+        'links it omits are admitted under the trap rules and quotas',
     );
   } else {
     log.info('No sitemap map found — same-site BFS (tracking params stripped)');
@@ -218,23 +225,17 @@ async function executeCheerioCrawl(
   if (input.maxRequestsPerCrawl != null && Number.isFinite(input.maxRequestsPerCrawl)) {
     maxRequestsPerCrawl = clampToSiteCap(input.maxRequestsPerCrawl);
     log.info(`Request budget override: maxRequestsPerCrawl=${maxRequestsPerCrawl}`);
-  } else if (siteMap.hasMap) {
-    // min, not the sitemap size. The sitemap used to win outright, which made profile budgets
-    // documentation rather than behaviour: medius.com is a competitors crawl whose profile said 150
-    // pages and it crawled 897, because that is how many URLs its sitemap listed.
-    maxRequestsPerCrawl = clampToSiteCap(
-      Math.max(Math.min(siteMap.urls.size, profile.defaultMaxPages), seeds.length),
-    );
-    log.info(
-      `Request budget from sitemap capped by profile: maxRequestsPerCrawl=${maxRequestsPerCrawl} ` +
-        `(sitemap=${siteMap.urls.size}, profile=${profile.defaultMaxPages})`,
-    );
   } else {
+    // The profile, never the sitemap. Sized from the sitemap -- min(sitemap, profile) -- the budget
+    // was exactly the sitemap's length whenever that was under 2,500, so every page the sitemap
+    // omitted could only be fetched by displacing one it listed. The profile is also what keeps
+    // budgets behaviour rather than documentation, which is what the min was originally for.
     maxRequestsPerCrawl = clampToSiteCap(profile.defaultMaxPages);
     log.info(
       `Request budget from ${input.crawlType} profile: maxRequestsPerCrawl=${maxRequestsPerCrawl}`,
     );
   }
+  persist.discovery.setBudget(maxRequestsPerCrawl);
 
   const config = new Configuration({
     purgeOnStart: true,
@@ -248,7 +249,6 @@ async function executeCheerioCrawl(
     return req;
   };
 
-  let depthSuppressed = 0;
   /**
    * Whether this run has already reported a body-rooted extract. Logged once per
    * crawl, not once per page: a site that declares no `main` or `article`
@@ -258,9 +258,12 @@ async function executeCheerioCrawl(
   let bodyRootReported = false;
 
   /**
-   * `parentDepth` is the depth of the page whose links these are; seeds are depth 0. Enqueue is
-   * refused once the children would exceed the profile's cap, so a capped crawl stops widening
-   * instead of silently running to the page budget.
+   * `parentDepth` is the depth of the page whose links these are; start urls are depth 0. Past the
+   * profile's cap, links the sitemap omits are refused and counted per URL in the discovery report;
+   * links it lists are already queued at depth 0, so the cap never touches them.
+   *
+   * Two enqueue calls because forefront is per call: off-sitemap product and evidence links go to
+   * the front of the queue, everything else to the back. See filterEnqueueUrls.
    */
   const enqueueFiltered = async (
     enqueueLinks: (opts: Record<string, unknown>) => Promise<unknown>,
@@ -270,22 +273,22 @@ async function executeCheerioCrawl(
     if (persist.rootPersistenceError()) return;
 
     const childDepth = parentDepth + 1;
-    if (profile.maxDepth !== null && childDepth > profile.maxDepth) {
-      depthSuppressed += urls.length;
-      return;
+    const depthExceeded = profile.maxDepth !== null && childDepth > profile.maxDepth;
+    const toEnqueue = filterEnqueueUrls(urls, siteMap, enqueueOpts, { depthExceeded });
+    const transformRequestFunction = (req: {
+      url: string;
+      uniqueKey?: string;
+      userData?: unknown;
+    }) => {
+      const out = applyUniqueKey(req);
+      out.userData = { ...(out.userData as object | undefined), depth: childDepth };
+      return out;
+    };
+    for (const forefront of [true, false]) {
+      const batch = toEnqueue.filter((c) => c.forefront === forefront).map((c) => c.url);
+      if (batch.length === 0) continue;
+      await enqueueLinks({ urls: batch, strategy: 'all', forefront, transformRequestFunction });
     }
-
-    const toEnqueue = filterEnqueueUrls(urls, siteMap, enqueueOpts);
-    if (toEnqueue.length === 0) return;
-    await enqueueLinks({
-      urls: toEnqueue,
-      strategy: 'all',
-      transformRequestFunction: (req: { url: string; uniqueKey?: string; userData?: unknown }) => {
-        const out = applyUniqueKey(req);
-        out.userData = { ...(out.userData as object | undefined), depth: childDepth };
-        return out;
-      },
-    });
   };
 
   const HANDLER_TIMEOUT_MS = 60_000;
@@ -304,6 +307,7 @@ async function executeCheerioCrawl(
       additionalHttpErrorStatusCodes: [429, 503],
       respectRobotsTxtFile: { userAgent: BOT.name },
       onSkippedRequest: async ({ url, reason }) => {
+        persist.discovery.markFetched(url);
         if (reason === 'robotsTxt') {
           persist.noteReject('robots_disallowed', url, 'robots.txt');
         }
@@ -324,6 +328,7 @@ async function executeCheerioCrawl(
         },
       ],
       async requestHandler({ request, body, $, response, enqueueLinks }) {
+        persist.discovery.markFetched(request.url);
         const currentDepth = Number((request.userData as { depth?: number } | undefined)?.depth ?? 0);
         if (persist.rootPersistenceError()) {
           request.noRetry = true;
@@ -560,6 +565,7 @@ async function executeCheerioCrawl(
         }
       },
       failedRequestHandler: async ({ request, response }, error) => {
+        persist.discovery.markFetched(request.url);
         if (isPersistenceError(error)) {
           request.noRetry = true;
           return;
@@ -613,12 +619,7 @@ async function executeCheerioCrawl(
           );
         }
         const before = startUrls.length;
-        const merged = new Set(startUrls);
-        for (const u of harvested.urls) {
-          const n = normalizeCrawlUrl(u);
-          if (n) merged.add(n);
-        }
-        startUrls = sectionAdmissionOrder([...merged]);
+        startUrls = mergeHarvestedUrls(startUrls, harvested.urls, enqueueOpts);
         log.info(
           `Link discovery: ${before} static url(s) -> ${startUrls.length} after one browser pass`,
         );
@@ -680,11 +681,9 @@ async function executeCheerioCrawl(
     clearCancel(persist.runId);
   }
 
-  // Composition, which nothing else reports. `admittedByTier` and `suppressedByShare` existed only
-  // in tests until 2026-10-02, and the one quota number that reaches disk --
-  // enqueueSuppressedSectionQuota -- merges share-suppression with section-cap-suppression, so it
-  // cannot say which gate refused a page. Without this line the evidence tier's effect on a live
-  // crawl is unobservable. Absent for project-site, where quotas are disabled outright.
+  // Composition by tier, which the discovery report does not carry: it counts URLs by what became
+  // of them, not by what kind of page they are. Without this line the evidence tier's effect on a
+  // live crawl is unobservable. Absent for project-site, where quotas are disabled outright.
   if (quota) {
     const tiers = quota.admittedByTier();
     log.info(
@@ -694,6 +693,22 @@ async function executeCheerioCrawl(
         `suppressedBySectionCap=${quota.totalSuppressed()}`,
     );
   }
+
+  // The same report sent in hostProgressJson, summarised so a crawl log answers "what did it skip"
+  // without a GeekAPI round trip.
+  const discovery = persist.discovery.report();
+  const refusals = Object.entries(discovery.refused)
+    .filter(([, n]) => n > 0)
+    .map(([rule, n]) => `${rule}=${n}`)
+    .join(' ');
+  log.info(
+    `discovery runId=${persist.runId} discovered=${discovery.discovered} ` +
+      `enqueued=${discovery.enqueued.total} fetched=${discovery.fetched} ` +
+      `unfetched=${discovery.enqueuedNotFetched} budgetExhausted=${discovery.budgetExhausted} ` +
+      `offSitemapAdmitted=${discovery.offSitemapAdmitted} ` +
+      `offSitemapSuppressed=${discovery.offSitemapSuppressed}` +
+      (refusals ? ` refused: ${refusals}` : ''),
+  );
 
   const stats = await persist.stats();
   return {

@@ -4,6 +4,7 @@
  */
 
 import { shouldExcludeLocalePath } from './locale-path.js';
+import type { DiscoveryReport } from './discovery-ledger.js';
 
 export type RejectReason =
   | 'locale_excluded'
@@ -162,7 +163,14 @@ export class RejectSampleLog {
   }
 }
 
-/** Synthetic hostProgressJson entry so GeekAPI can store reject totals without schema change. */
+/**
+ * Synthetic hostProgressJson entry so GeekAPI can store reject totals without schema change.
+ *
+ * The discovery report travels here rather than in CrawlReport. GeekAPI stores hostProgressJson
+ * verbatim and serves it back parsed as untyped JSON; CrawlReport is deserialized into a typed C#
+ * record, which drops any field it does not declare -- so a field added there would be sent and
+ * silently discarded.
+ */
 export const REJECT_STATS_ORIGIN = '__crawlee_reject_stats__';
 
 export function rejectStatsHostProgressEntry(
@@ -170,6 +178,7 @@ export function rejectStatsHostProgressEntry(
   pagesSaved: number,
   rejectSamples?: Partial<Record<RejectReason, RejectSample[]>>,
   dedup?: Record<string, number | boolean>,
+  discovery?: DiscoveryReport,
 ): Record<string, unknown> {
   return {
     origin: REJECT_STATS_ORIGIN,
@@ -182,5 +191,6 @@ export function rejectStatsHostProgressEntry(
     pagesRejectedRequestFailed: counters.pagesRejectedRequestFailed,
     ...(rejectSamples ? { rejectSamples } : {}),
     ...(dedup ?? {}),
+    ...(discovery ? { discovery } : {}),
   };
 }

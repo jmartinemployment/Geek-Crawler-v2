@@ -48,6 +48,11 @@ export type CrawlProfile = {
  */
 const THIRD_PARTY: CrawlProfile = {
   defaultMaxPages: MAX_PAGES_PER_SITE,
+  // Unlimited, still. Opening discovery past the sitemap (2026-10-04) made a depth cap the obvious
+  // trap backstop, but a cap is what 03a53ce removed: link hops from the seed dropped nested product
+  // pages three hops behind a nav. The trap rules in link-trap.ts and the page budget bound a trap
+  // instead. Depth now only governs links the sitemap omits, and each URL it refuses is counted
+  // under `depth` in the discovery report, so setting a cap here is measurable.
   maxDepth: null,
   useSectionQuotas: true,
 };

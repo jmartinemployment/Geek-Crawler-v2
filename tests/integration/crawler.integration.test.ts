@@ -12,9 +12,11 @@ async function startMockGeekApi(): Promise<{
   close: () => void;
   pageWrites: () => number;
   linkWrites: () => number;
+  lastPatch: () => Record<string, unknown> | null;
 }> {
   let pageWrites = 0;
   let linkWrites = 0;
+  let lastPatch: Record<string, unknown> | null = null;
   let runSeq = 0;
   const server = createServer(async (req, res) => {
     let body = '';
@@ -54,6 +56,7 @@ async function startMockGeekApi(): Promise<{
       return res.end(JSON.stringify({ count: parsed.links.length }));
     }
     if (req.method === 'PATCH') {
+      lastPatch = JSON.parse(body) as Record<string, unknown>;
       return res.end(JSON.stringify({ runId: 'x', status: 'complete', crawlType: 'partner' }));
     }
     res.statusCode = 404;
@@ -67,6 +70,7 @@ async function startMockGeekApi(): Promise<{
     close: () => server.close(),
     pageWrites: () => pageWrites,
     linkWrites: () => linkWrites,
+    lastPatch: () => lastPatch,
   };
 }
 
@@ -96,6 +100,35 @@ test('cheerio-only crawl persists via GeekAPI with retries disabled', { timeout:
     assert.ok(fixture.requests('/retry') <= 1, 'maxRequestRetries=0 must not re-fetch');
     assert.equal(fixture.requests('/blocked'), 0);
     assert.equal(fixture.requests('/fr/article'), 0);
+
+    // The fixture sitemap does not list /nested/one; the home page links to it. Until 2026-10-04 the
+    // sitemap was an allowlist and this link was dropped without a count.
+    assert.equal(fixture.requests('/nested/one'), 1, 'an off-sitemap link must be followed');
+    assert.equal(fixture.requests('/nested/two'), 1, 'and the links on that page too');
+
+    // The terminal patch carries the discovery report in hostProgressJson, and it accounts for
+    // every discovered URL: fetched, refused by a named rule, or left unfetched.
+    const patch = geek.lastPatch();
+    assert.ok(patch, 'the run must be patched terminal');
+    const hosts = JSON.parse(String(patch.hostProgressJson)) as Array<Record<string, unknown>>;
+    const stats = hosts.find((h) => h.origin === '__crawlee_reject_stats__');
+    const discovery = stats?.discovery as {
+      discovered: number;
+      enqueued: { total: number };
+      fetched: number;
+      enqueuedNotFetched: number;
+      refused: Record<string, number>;
+      offSitemapAdmitted: number;
+      sitemap: { present: boolean; truncated: boolean };
+    };
+    assert.ok(discovery, 'hostProgressJson must carry the discovery report');
+    const refused = Object.values(discovery.refused).reduce((a, b) => a + b, 0);
+    assert.equal(discovery.discovered, discovery.enqueued.total + refused);
+    assert.equal(discovery.enqueued.total, discovery.fetched + discovery.enqueuedNotFetched);
+    assert.equal(discovery.enqueuedNotFetched, 0, 'nothing is left unfetched on a small site');
+    assert.equal(discovery.offSitemapAdmitted, 2, '/nested/one and /nested/two');
+    assert.equal(discovery.refused.locale, 1, '/fr/article, linked from the home page');
+    assert.deepEqual(discovery.sitemap, { present: true, urls: discovery.sitemap.urls, truncated: false });
   } finally {
     if (old.url === undefined) delete process.env.GEEK_API_URL;
     else process.env.GEEK_API_URL = old.url;

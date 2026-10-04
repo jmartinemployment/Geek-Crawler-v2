@@ -1,6 +1,6 @@
 /**
  * Fetch and count same-site URLs from robots.txt Sitemap: entries and /sitemap.xml.
- * Report-only. Crawl policy lives in src/crawl/sitemap.ts (sitemap is the map).
+ * Report-only. Crawl policy lives in src/crawl/sitemap.ts (the sitemap seeds the crawl; it does not bound it).
  * Locale rules: keep in sync with src/crawl/locale-path.ts
  */
 

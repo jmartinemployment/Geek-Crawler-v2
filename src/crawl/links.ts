@@ -1,4 +1,3 @@
-import { shouldExcludeLocalePath } from './locale-path.js';
 
 export type ExtractedLink = {
   linkUrl: string;
@@ -95,9 +94,13 @@ export function extractHrefs(
   return out;
 }
 
-/** Same-site URLs for BFS enqueue — drops non-US regions and non-English locales. */
+/**
+ * Same-site URLs for enqueue.
+ *
+ * Locale is not filtered here. It was, uncounted, ahead of the counted locale gate in
+ * filterEnqueueUrls -- two implementations of one rule, and the one that ran first left no trace in
+ * the discovery report. filterEnqueueUrls is now the only locale gate for links.
+ */
 export function sameOriginUrls(links: ExtractedLink[]): string[] {
-  return links
-    .filter((l) => l.isSameOrigin && !shouldExcludeLocalePath(l.linkUrl))
-    .map((l) => l.linkUrl);
+  return links.filter((l) => l.isSameOrigin).map((l) => l.linkUrl);
 }

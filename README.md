@@ -10,7 +10,7 @@ Geek-Crawler v2 builds clean, citation-ready research corpora from partner and c
 
 ### Capabilities
 
-- Sitemap-first inventory with same-origin discovery when no sitemap applies
+- Sitemap-first inventory: the sitemap seeds the crawl in tier order, and same-origin links it omits are followed under link-trap rules (`src/crawl/link-trap.ts`) and the section quotas
 - One renderer, one path: static HTML via CheerioCrawler. A page whose content does not exist until JavaScript runs is rejected, not promoted to a browser
 - Tracking-parameter normalization and US/English locale filtering
 - `robots.txt` handling, configurable concurrency, and durable resume queues (Crawlee request-queue behavior for **source-page fetching** is not GeekAPI ingest retry)
@@ -139,7 +139,7 @@ Then on the home page: enter one seed URL, set max requests / max concurrency, *
 
 - **One seed URL = one `runId`**
 - **Max concurrency** = parallel fetches *for that run* (default 1 in the UI)
-- **Request budget** = locale-filtered sitemap URL count when a map exists (no Max requests field), clamped to the per-site cap of **2,500 pages** (`MAX_PAGES_PER_SITE` in `src/crawl/crawl-limits.ts`). Optional API/CLI `--max` / `maxRequestsPerCrawl` overrides are clamped to the same cap. Known low-quality directories carry per-section page quotas (`src/crawl/section-quota.ts`, override with `SECTION_PAGE_QUOTA`).
+- **Request budget** = the crawl type's profile budget (`src/crawl/crawl-profile.ts`), never the sitemap size, clamped to the per-site cap of **2,500 pages** (`MAX_PAGES_PER_SITE` in `src/crawl/crawl-limits.ts`). Optional API/CLI `--max` / `maxRequestsPerCrawl` overrides are clamped to the same cap. Known low-quality directories carry per-section page quotas (`src/crawl/section-quota.ts`, override with `SECTION_PAGE_QUOTA`).
 - **Locale filter on sitemap map** (crawl + report): **keep** `/us/…`; **drop** other region dirt (`/gb/`, `/uk/`, `/au/`, …) and non-English languages (`/fr/`, `/de/`, …); **strip** English language prefixes only (`/en/`, `/en-us/`, …) to the bare path
 - **Unusable pages are not stored** — Cloudflare/challenge interstitials, locale-excluded final URLs, and extracts carrying too little prose are **rejected** (counters + capped URL samples on the run / seed report). The floor measures prose, not markup, so a page of pure boilerplate cannot clear it. Corpus content is only saved for viable pages.
 - **JavaScript-only pages are out of scope, and so are their links** — a page carrying no prose without JavaScript is reported as `requiresJavascript` under `excludedByPolicy`, beside robots and locale, **not** as a failure: this crawler runs no JavaScript by design, so nothing about such a page is broken. Its links are not enqueued either. There is no browser to promote to, so every URL found on a shell would be fetched and rejected in turn — the crawl would pay for the whole site and store none of it. A shell is a dead end, not a frontier.
@@ -159,7 +159,7 @@ npm run web:dev -- -- -p 3001
 ### Without the UI
 
 ```bash
-# one-shot CLI (omit --max to use sitemap size)
+# one-shot CLI (omit --max to use the crawl type's profile budget)
 npm run crawl -- --seed https://example.com --type partner
 npm run crawl -- --seed https://example.com --type partner --max 10
 
@@ -333,8 +333,8 @@ Localhost Next.js app. Does **not** replace Geek-Crawler v1. Start commands: see
 - `POST /crawls` (private API) returns `runId` immediately (HTTP 202); crawl continues in background
 - `GET /crawls` (private API) lists local run stubs — a duplicate of GeekAPI's public run list, and
   scheduled for removal
-- Seed report (URL-first on `/runs`) with sitemap totals; sitemap is the map when present
-- Locale filter on sitemap map + report counts (keep `/us/`; drop other regions + non-English; strip `en` / `en-*`)
+- Seed report (URL-first on `/runs`) with sitemap totals; the sitemap seeds the crawl when present
+- Locale filter on sitemap, discovered links + report counts (keep `/us/`; drop other regions + non-English; strip `en` / `en-*`)
 - GeekAPI `page-urls` + optional SignalR after Sign in
 
 ### Deferred

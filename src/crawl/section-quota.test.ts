@@ -196,6 +196,36 @@ describe('createSectionQuota', () => {
     assert.equal(q.admit('https://x.com/templates/b'), false);
     assert.equal(q.totalSuppressed(), 2);
   });
+
+  it('counts a refused url once however often it is offered', () => {
+    // A url is offered again by every page that links to it. Counting offers made one refused url
+    // linked from 40 pages read as 40 refusals.
+    const q = createSectionQuota(new Map([['blog', 0]]));
+    for (let i = 0; i < 40; i++) q.admit('https://x.com/blog/a');
+    assert.equal(q.totalSuppressed(), 1);
+    assert.equal(q.suppressedBySection().get('blog'), 1);
+
+    const s = createSectionQuota(new Map());
+    for (let i = 0; i < 40; i++) {
+      for (let p = 0; p < 30; p++) s.admit(`https://x.com/blog/post-${p}`);
+    }
+    // No non-editorial pages, so the floor of 25 applies and 5 posts are refused -- 5, not 5 x 40.
+    assert.equal(s.suppressedByShare(), 5);
+  });
+
+  it('names the gate that refused a url, and forgets the refusal once it is admitted', () => {
+    const q = createSectionQuota(new Map());
+    for (let p = 0; p < 25; p++) q.admit(`https://x.com/blog/post-${p}`);
+    assert.deepEqual(q.decide('https://x.com/blog/late'), { admitted: false, refusal: 'share' });
+    assert.equal(q.suppressedByShare(), 1);
+    // 200 product pages raise the editorial allowance well past 26.
+    for (let p = 0; p < 200; p++) q.admit(`https://x.com/pricing/${p}`);
+    assert.deepEqual(q.decide('https://x.com/blog/late'), { admitted: true });
+    assert.equal(q.suppressedByShare(), 0);
+
+    const z = createSectionQuota(new Map([['zip-codes', 0]]));
+    assert.deepEqual(z.decide('https://x.com/zip-codes/1'), { admitted: false, refusal: 'section' });
+  });
 });
 
 describe('createSectionQuota — admission is idempotent per url', () => {

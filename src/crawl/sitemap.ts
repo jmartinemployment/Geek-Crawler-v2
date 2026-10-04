@@ -4,6 +4,8 @@ import { BOT } from '../bot/identity.js';
 import { TIER_ORDER, classifyPath } from './classify-path.js';
 import { crawlDedupKey, type AliasTable } from './dedup.js';
 import type { SectionQuota } from './section-quota.js';
+import type { DiscoveryLedger } from './discovery-ledger.js';
+import { trapRuleFor, type DirectoryCap } from './link-trap.js';
 
 const MAX_SITEMAPS = 40;
 const MAX_URLS = 50_000;
@@ -35,13 +37,54 @@ const TRACKING_PARAMS = new Set([
 
 export type SiteMapIndex = {
   /**
-   * When true, only URLs in `urls` may be enqueued (sitemap is the map).
-   * When false, no usable sitemap — open same-site BFS (after normalize).
+   * True when a usable sitemap was found. The sitemap seeds the crawl in tier order; it does not
+   * bound discovery. A same-origin link it omits is admitted under the trap rules and quotas like
+   * any other (see filterEnqueueUrls).
    */
   hasMap: boolean;
   urls: Set<string>;
   sources: string[];
+  /** The loader stopped at MAX_URLS or MAX_SITEMAPS, so the map is incomplete. */
+  truncated: boolean;
+  /** sitemapMemberKey of every url, so membership survives trailing-slash, case and www variants. */
+  memberKeys: Set<string>;
 };
+
+/**
+ * Membership key: lowercase host without `www.`, no trailing slash on a non-root path, query kept.
+ *
+ * Exact string membership read /pricing/ as off-sitemap when the map listed /pricing. That cost
+ * nothing while the map was an allowlist -- the variant was dropped -- but it now decides whether a
+ * link is subject to the trap rules and whether it is reported as off-sitemap.
+ */
+export function sitemapMemberKey(url: string): string {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return url;
+  }
+  let host = u.hostname.toLowerCase();
+  if (host.startsWith('www.')) host = host.slice(4);
+  let pathname = u.pathname;
+  if (pathname.length > 1 && pathname.endsWith('/')) pathname = pathname.slice(0, -1);
+  return `${u.protocol}//${host}${u.port ? `:${u.port}` : ''}${pathname}${u.search}`;
+}
+
+export function siteMapIndex(
+  urls: Iterable<string>,
+  sources: string[],
+  truncated: boolean,
+): SiteMapIndex {
+  const set = new Set(urls);
+  const memberKeys = new Set<string>();
+  for (const u of set) memberKeys.add(sitemapMemberKey(u));
+  return { hasMap: set.size > 0, urls: set, sources, truncated, memberKeys };
+}
+
+export function inSiteMap(map: SiteMapIndex, url: string): boolean {
+  return map.hasMap && map.memberKeys.has(sitemapMemberKey(url));
+}
 
 function sameSite(seed: URL, candidate: URL): boolean {
   if (seed.protocol !== candidate.protocol) return false;
@@ -118,7 +161,7 @@ export async function loadSiteMapForSeed(seedUrl: string): Promise<SiteMapIndex>
   try {
     seed = new URL(seedUrl);
   } catch {
-    return { hasMap: false, urls: new Set(), sources: [] };
+    return siteMapIndex([], [], false);
   }
 
   const origin = seed.origin;
@@ -137,6 +180,8 @@ export async function loadSiteMapForSeed(seedUrl: string): Promise<SiteMapIndex>
   const urlSet = new Set<string>();
   const seenSitemaps = new Set<string>();
   let sitemapsFetched = 0;
+  // Set whenever a ceiling stops the load with work left, so an incomplete map says so.
+  let truncated = false;
 
   while (queue.length > 0 && sitemapsFetched < MAX_SITEMAPS && urlSet.size < MAX_URLS) {
     const smUrl = queue.shift()!;
@@ -151,15 +196,21 @@ export async function loadSiteMapForSeed(seedUrl: string): Promise<SiteMapIndex>
     const locs = extractLocs(xml);
     if (isSitemapIndex(xml)) {
       for (const child of locs) {
-        if (!seenSitemaps.has(child) && queue.length + seenSitemaps.size < MAX_SITEMAPS * 2) {
+        if (seenSitemaps.has(child)) continue;
+        if (queue.length + seenSitemaps.size < MAX_SITEMAPS * 2) {
           queue.push(child);
+        } else {
+          truncated = true;
         }
       }
       continue;
     }
 
     for (const loc of locs) {
-      if (urlSet.size >= MAX_URLS) break;
+      if (urlSet.size >= MAX_URLS) {
+        truncated = true;
+        break;
+      }
       let u: URL;
       try {
         u = new URL(loc);
@@ -174,43 +225,47 @@ export async function loadSiteMapForSeed(seedUrl: string): Promise<SiteMapIndex>
       if (normalized) urlSet.add(normalized);
     }
   }
+  if (queue.some((q) => !seenSitemaps.has(q))) truncated = true;
 
-  return {
-    hasMap: urlSet.size > 0,
-    urls: urlSet,
-    sources: [...sources].slice(0, 20),
-  };
+  return siteMapIndex(urlSet, [...sources].slice(0, 20), truncated);
 }
 
 /** Merge per-seed maps (legacy multi-seed runs). */
 export async function loadSiteMapIndex(seeds: string[]): Promise<SiteMapIndex> {
   const urls = new Set<string>();
   const sources: string[] = [];
+  let truncated = false;
   for (const seed of seeds) {
     const part = await loadSiteMapForSeed(seed);
     for (const u of part.urls) urls.add(u);
     for (const s of part.sources) {
       if (!sources.includes(s)) sources.push(s);
     }
+    truncated ||= part.truncated;
   }
-  return {
-    hasMap: urls.size > 0,
-    urls,
-    sources: sources.slice(0, 40),
-  };
+  return siteMapIndex(urls, sources.slice(0, 40), truncated);
 }
 
 export type EnqueueDedupOpts = {
   /** Redirect alias table — compare on resolved dedup keys. */
   aliases?: AliasTable;
-  /** Mutated: enqueueAttempts / enqueueSuppressedLocal / enqueueSuppressedSectionQuota. */
+  /** Mutated: enqueueAttempts / enqueueSuppressedLocal. Per offer, not per URL. */
   counters?: {
     enqueueAttempts: number;
     enqueueSuppressedLocal: number;
-    enqueueSuppressedSectionQuota: number;
   };
   /** Per-directory page caps; shared by both enqueue planes. */
   quota?: SectionQuota;
+  /** Run-wide cap on admitted off-sitemap other-tier pages per directory. */
+  directoryCap?: DirectoryCap;
+  /** Records what became of every discovered URL, once per URL. */
+  ledger?: DiscoveryLedger;
+};
+
+/** A URL cleared for enqueue. `forefront` puts it ahead of the queued sitemap. */
+export type EnqueueCandidate = {
+  url: string;
+  forefront: boolean;
 };
 
 /** Shallowest path first, then lexicographic — deterministic across runs. */
@@ -234,46 +289,95 @@ export function sectionAdmissionOrder(urls: string[]): string[] {
   });
 }
 
-function admitBySection(url: string, opts?: EnqueueDedupOpts): boolean {
-  if (!opts?.quota) return true;
-  if (opts.quota.admit(url)) return true;
-  if (opts.counters) opts.counters.enqueueSuppressedSectionQuota += 1;
-  return false;
-}
-
-
 function compareKey(url: string, aliases?: AliasTable): string {
   const k = crawlDedupKey(url) ?? url;
   return aliases ? aliases.resolve(k) : k;
 }
 
 /**
- * Filter candidate same-site URLs for enqueue.
- * Sitemap present → only map members. No sitemap → all candidates (normalized).
+ * Filter candidate same-site links for enqueue.
+ *
+ * Every link is a candidate, sitemap or not. Until 2026-10-04 a sitemap made itself an allowlist:
+ * a link it did not list was dropped without a count, which is how ramp.com's /products, bill.com's
+ * /pricing and lightyear.cloud's /features/* never entered the corpus. The sitemap now seeds the
+ * crawl (initialCrawlUrls) and nothing more.
+ *
+ * A link the sitemap does not list -- every link, when there is no sitemap -- passes three further
+ * gates first, because the allowlist was also the only link-trap defence: depth, the trap rules,
+ * and the per-directory cap for other-tier pages. See link-trap.ts. Then the section quota, which
+ * every URL passes through.
+ *
+ * Off-sitemap product and evidence links go to the front of the queue. Appended, they would wait
+ * behind every queued sitemap URL including the editorial ones, which inverts the tier order the
+ * sitemap is seeded in.
+ *
  * Local `seen` compares on crawlDedupKey (alias-resolved); pushed URL stays normalizeCrawlUrl.
  */
 export function filterEnqueueUrls(
   candidates: string[],
   map: SiteMapIndex,
   opts?: EnqueueDedupOpts,
-): string[] {
-  const out: string[] = [];
+  page?: { depthExceeded: boolean },
+): EnqueueCandidate[] {
+  const out: EnqueueCandidate[] = [];
   const seen = new Set<string>();
+  const ledger = opts?.ledger;
   for (const c of candidates) {
     if (opts?.counters) opts.counters.enqueueAttempts += 1;
     const localeOk = localeNormalizeForMap(c);
-    if (!localeOk) continue;
+    if (!localeOk) {
+      ledger?.refuse(c, c, 'locale', map.hasMap);
+      continue;
+    }
     const n = normalizeCrawlUrl(localeOk);
-    if (!n) continue;
+    if (!n) {
+      ledger?.refuse(c, c, 'invalid', map.hasMap);
+      continue;
+    }
     const ck = compareKey(n, opts?.aliases);
     if (seen.has(ck)) {
       if (opts?.counters) opts.counters.enqueueSuppressedLocal += 1;
       continue;
     }
-    if (map.hasMap && !map.urls.has(n)) continue;
-    if (!admitBySection(n, opts)) continue;
     seen.add(ck);
-    out.push(n);
+    // Already queued, from the sitemap or an earlier page. Crawlee would drop it on uniqueKey;
+    // stopping here keeps it out of the gates, which would otherwise re-decide a settled URL.
+    if (ledger?.stateOf(ck) === 'enqueued') continue;
+
+    const discovered = !inSiteMap(map, n);
+    const offSitemap = map.hasMap && discovered;
+    const tier = classifyPath(n);
+
+    if (discovered) {
+      if (page?.depthExceeded) {
+        ledger?.refuse(ck, n, 'depth', offSitemap);
+        continue;
+      }
+      const trap = trapRuleFor(n);
+      if (trap) {
+        ledger?.refuse(ck, n, trap, offSitemap);
+        continue;
+      }
+      // Checked before the quota and committed after it. The quota counts every admission toward
+      // the editorial allowance, so a page the directory cap then refused would still have raised
+      // it; and a page the quota refused must not hold a directory slot.
+      if (tier === 'other' && opts?.directoryCap && !opts.directoryCap.hasRoom(n)) {
+        ledger?.refuse(ck, n, 'directoryCap', offSitemap);
+        continue;
+      }
+    }
+
+    if (opts?.quota) {
+      const decision = opts.quota.decide(n);
+      if (!decision.admitted) {
+        ledger?.refuse(ck, n, decision.refusal, offSitemap);
+        continue;
+      }
+    }
+    if (discovered && tier === 'other') opts?.directoryCap?.commit(n);
+
+    ledger?.enqueue(ck, n, 'link', offSitemap);
+    out.push({ url: n, forefront: discovered && (tier === 'product' || tier === 'evidence') });
   }
   return out;
 }
@@ -286,6 +390,7 @@ export function initialCrawlUrls(
 ): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
+  const ledger = opts?.ledger;
   for (const s of seeds) {
     if (opts?.counters) opts.counters.enqueueAttempts += 1;
     // Prefer stripped English form so seed matches map keys; keep non-English seeds as-is.
@@ -297,6 +402,7 @@ export function initialCrawlUrls(
       continue;
     }
     seen.add(ck);
+    ledger?.enqueue(ck, n, 'seed', false);
     out.push(n);
   }
   if (map.hasMap) {
@@ -307,11 +413,38 @@ export function initialCrawlUrls(
         if (opts?.counters) opts.counters.enqueueSuppressedLocal += 1;
         continue;
       }
-      if (!admitBySection(u, opts)) continue;
+      if (opts?.quota) {
+        const decision = opts.quota.decide(u);
+        if (!decision.admitted) {
+          ledger?.refuse(ck, u, decision.refusal, false);
+          continue;
+        }
+      }
       seen.add(ck);
+      ledger?.enqueue(ck, u, 'sitemap', false);
       out.push(u);
-      if (out.length >= MAX_URLS + seeds.length) break;
     }
   }
   return out;
+}
+
+/**
+ * Merge a browser link-discovery pass into the start URLs, in tier order.
+ *
+ * Harvested URLs are start URLs, so they are not gated: the pass runs only when there is no
+ * sitemap, and it stands in for one.
+ */
+export function mergeHarvestedUrls(
+  startUrls: string[],
+  harvested: string[],
+  opts?: EnqueueDedupOpts,
+): string[] {
+  const merged = new Set(startUrls);
+  for (const u of harvested) {
+    const n = normalizeCrawlUrl(u);
+    if (!n || merged.has(n)) continue;
+    merged.add(n);
+    opts?.ledger?.enqueue(compareKey(n, opts.aliases), n, 'harvest', false);
+  }
+  return sectionAdmissionOrder([...merged]);
 }
