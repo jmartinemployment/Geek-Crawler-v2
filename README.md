@@ -50,10 +50,11 @@ local mirror / failed stub as authority.*
 | `POST crawls` · `POST crawls/{runId}/cancel` · `POST crawls/{runId}/rebuild-links` | Start, cancel, rebuild |
 | `POST seeds/check` · `GET/POST/PATCH/DELETE schedules…` | Seed admission; schedules |
 
-**The crawler service belongs on GeekAPI too.** That is how every other app on the platform does
-it — `GccV2ProjectSiteCrawlService` holds a crawl's run lifecycle and crawls in process, with no
-external crawler to call. This repo is the egress half: it fetches from the operator's own network,
-extracts, ingests, and should expose nothing.
+**The crawler service belongs on GeekAPI too.** GeekAPI should own a crawl's run lifecycle, with
+no external crawler to call. Its one in-process example, `GccV2ProjectSiteCrawlService`, was
+deleted in GeekBackend `da6a98e` (2026-09-29) together with its Postgres tables, so this repo is now
+the only crawler. It is the egress half: it fetches from the operator's own network, extracts,
+ingests, and should expose nothing. Progress: `plans/move-crawl-reads-to-geekapi.md`.
 
 **It does not match that today.** `npm run serve` listens on `:8787` and answers start, cancel,
 resume, delete, sweep, health and four reads. Three facts about it, none of them the intended
@@ -62,7 +63,7 @@ design:
 - `GET /crawls`, `GET /crawls/{runId}` and `GET /crawls/{runId}/pages` answer only here, and
   `GET /failures` is the only home for post-mortems. Those reads belong in GeekAPI.
 - It has no authentication of any kind, so it is **bound to `127.0.0.1`** — the crawler API
-  (`src/api/server.ts:357`) and the operator UI (`next dev` / `next start`, `-H 127.0.0.1`) both
+  (`src/api/server.ts:439`) and the operator UI (`next dev` / `next start`, `-H 127.0.0.1`) both
   refuse anything off-box. Nothing here is reachable from the network, including your own LAN.
 - `deploy/Dockerfile` still has `ENTRYPOINT` → `serve` and `EXPOSE 8787`. With the loopback bind a
   deployed container publishes nothing and its `/health` check cannot pass, so the deploy fails
@@ -135,11 +136,11 @@ npm run web:dev
 # open http://localhost:3000
 ```
 
-Then on the home page: enter one seed URL, set max requests / max concurrency, **Start crawl**.
+Then on the home page: enter one seed URL, set max concurrency, **Start crawl**. There is no max-requests field; the budget comes from the crawl type's profile (see Crawl scope).
 
 - **One seed URL = one `runId`**
 - **Max concurrency** = parallel fetches *for that run* (default 1 in the UI)
-- **Request budget** = the crawl type's profile budget (`src/crawl/crawl-profile.ts`), never the sitemap size, clamped to the per-site cap of **2,500 pages** (`MAX_PAGES_PER_SITE` in `src/crawl/crawl-limits.ts`). Optional API/CLI `--max` / `maxRequestsPerCrawl` overrides are clamped to the same cap. Known low-quality directories carry per-section page quotas (`src/crawl/section-quota.ts`, override with `SECTION_PAGE_QUOTA`).
+- **Request budget** = the crawl type's profile budget (`src/crawl/crawl-profile.ts`), never the sitemap size, clamped to the per-site cap of **2,500 pages** (`MAX_PAGES_PER_SITE` in `src/crawl/crawl-limits.ts`). Optional API/CLI `--max` / `maxRequestsPerCrawl` overrides are clamped to the same cap. Known low-quality directories carry per-section page quotas (`src/crawl/section-quota.ts`, override with `SECTION_PAGE_QUOTA`). Until 2026-10-04 the budget was `min(sitemap size, profile)`, which equalled the sitemap's length on every site under 2,500.
 - **Locale filter on sitemap map** (crawl + report): **keep** `/us/…`; **drop** other region dirt (`/gb/`, `/uk/`, `/au/`, …) and non-English languages (`/fr/`, `/de/`, …); **strip** English language prefixes only (`/en/`, `/en-us/`, …) to the bare path
 - **Unusable pages are not stored** — Cloudflare/challenge interstitials, locale-excluded final URLs, and extracts carrying too little prose are **rejected** (counters + capped URL samples on the run / seed report). The floor measures prose, not markup, so a page of pure boilerplate cannot clear it. Corpus content is only saved for viable pages.
 - **JavaScript-only pages are out of scope, and so are their links** — a page carrying no prose without JavaScript is reported as `requiresJavascript` under `excludedByPolicy`, beside robots and locale, **not** as a failure: this crawler runs no JavaScript by design, so nothing about such a page is broken. Its links are not enqueued either. There is no browser to promote to, so every URL found on a shell would be fetched and rejected in turn — the crawl would pay for the whole site and store none of it. A shell is a dead end, not a frontier.
@@ -168,6 +169,45 @@ curl -sS -X POST http://127.0.0.1:8787/crawls \
   -d '{"seed":"https://www.example.com","crawlType":"partner","maxConcurrency":1}'
 ```
 
+## Crawl scope
+
+Updated 2026-10-04 (`195e2df`, `4954d4d`, `639c049`, `1f8d4be`).
+
+**The sitemap seeds the crawl; it does not bound it.** Sitemap URLs are queued first, in tier order
+(product, evidence, other, editorial). A same-origin link the sitemap omits is followed. Until
+2026-10-04 the sitemap was an allowlist and such links were dropped without a count, which is how
+ramp.com's /products, bill.com's /pricing and lightyear.cloud's /features/* never reached the
+corpus. Membership ignores trailing slash, host case and `www`. Off-sitemap product and evidence
+links go to the front of the queue.
+
+**Link-trap defence** (`src/crawl/link-trap.ts`), for links the sitemap omits, and for every link
+when there is no sitemap:
+
+- listing views are refused: pagination (`/page/2`, `?page=2`), facets (`?sort=`, `?filter[...]`,
+  more than two query keys), on-site search (`/search/...`, `?q=`), calendar cells and date
+  archives (`/2026/10`, `/events/2026-10-04`)
+- at most 50 off-sitemap pages in the `other` tier per top-level directory
+- `maxDepth` stays `null` for every profile. A depth cap was removed in `03a53ce` because it cut
+  nested product pages; the depth gate still exists and counts what it refuses if a profile sets one
+
+These thresholds are not measured yet; the discovery report below is the measurement.
+
+**No-sitemap sites.** One browser pass harvests the rendered navigation's links. Since 2026-10-04
+those links pass the locale filter, the section quotas and the editorial share, in tier order, like
+sitemap URLs. Before that they went into the queue ungated.
+
+**One section vocabulary** (`src/crawl/section-vocabulary.ts`, since 2026-10-04). The classifier
+reads each entry's tier and the quotas read its name, so the two can no longer disagree about a
+directory. Product sections are never capped.
+
+**The discovery report.** Every discovered URL is counted once, in the state it finished in:
+`discovered = enqueued + refused (by rule)` and `enqueued = fetched + enqueuedNotFetched`. It also
+carries off-sitemap admitted/suppressed, per-section admitted/suppressed, sitemap truncation and
+whether the budget ran out. It travels in `hostProgressJson` (the `__crawlee_reject_stats__` entry,
+key `discovery`), which GeekAPI stores verbatim. It also goes to the failure archive and to the
+local `run.json`, and a `discovery runId=...` line is logged at the end of each crawl. It is not in
+`CrawlReport`: GeekAPI reads that into a fixed C# record, which drops fields it does not declare.
+
 ## Persist path
 
 When `GEEK_API_URL` + `GEEK_BACKEND_API_KEY` + `GEEK_USER_ID` are set:
@@ -182,6 +222,10 @@ Crawlee (localhost)
 
 Each successful page save sends the raw **HTML**, the clean **contentHtml**, the
 typed **blocks**, **title** and optional excerpt.
+
+Raw HTML stays in the contract. Stopping it (C6 / D16 in
+`content-creator-v2/plans/fix-geek-crawler-v2.md`) was withdrawn on 2026-10-04:
+`GccV2SiteSection` in GeekAPI is live and reads `page.Html`.
 
 GeekAPI carries both to Mongo as of `GeekBackend@5561209`: `contentHtml` as text
 and `blocks` as a **native BSON array**. Ingest also fails closed on this route —
@@ -202,7 +246,8 @@ non-empty `blocks` array or the batch is rejected `400`.
 > re-adjudicating that decision is what cost the corpus.
 
 After all page batches flush, successful API-backed crawls send the run-level
-`ContentReadyAt` marker, and resumes clear it until the crawl completes again.
+`ContentReadyAt` marker. A cancelled or failed run has it cleared; runs are never
+resumed.
 
 `GeekBackend@5561209` added `ContentReadyAt` / `ClearContentReadyAt` to the run
 patch as a pg-text timestamp. The legacy readiness field it once sat beside was
@@ -349,13 +394,14 @@ An optional UI deploy may exist, but **do not run crawls from Vercel** — share
 One seed URL = one `runId`. A run that failed is not resumed — start a new one.
 
 All three resume routes on the private API answer **409 `RESUME_FORBIDDEN`**
-(`src/api/server.ts:187`): `POST /crawls/resume-by-url`, `POST /crawls/resume-running`, and
+(`src/api/server.ts:200`): `POST /crawls/resume-by-url`, `POST /crawls/resume-running`, and
 `POST /crawls/{runId}/resume`. This is policy, not a defect —
 `.cursor/rules/no-retries-no-fallbacks.mdc`: *No resume of failed runs; start a new run.* There is
 no public equivalent in GeekAPI and none is wanted.
 
-The **Resume by URL** and **Resume all running** controls still render on the home page and their
-BFF routes still forward. They cannot succeed; they are dead surface awaiting removal.
+The home page's **Resume by URL** and **Resume all running** controls, their three BFF routes, and
+the runner's resume entry points were deleted on 2026-10-04 (`1f8d4be`). They could only ever fail.
+The 409 guard stays, and `tests/integration/api.integration.test.ts` asserts it.
 
 ## Failed and cancelled runs are destroyed
 
@@ -365,8 +411,9 @@ run: GeekAPI pages and links, Qdrant vectors, `DATA_DIR/runs/<runId>/`, and
 `DATA_DIR/.crawlee/<runId>/`.
 
 The post-mortem lands at `DATA_DIR/failures/<runId>.json` — reject counters, up
-to five sample URLs per reason, `errorSummary`, and what the purge actually
-managed to remove. It is written **before** anything is destroyed: if the
+to five sample URLs per reason, `errorSummary`, the discovery report (see Crawl
+scope; on records archived from 2026-10-04), and what the purge actually managed
+to remove. It is written **before** anything is destroyed: if the
 archive cannot be written, the purge does not run. Nothing reads this directory
 to decide what to crawl, resume, or dedup, so it is diagnostics and never crawl
 authority.
@@ -379,7 +426,10 @@ GET  /failures/:runId     # one, or 404
 ```
 
 Cancel is destructive. Cancelling a crawl 400 pages in discards those 400 pages;
-only the report survives.
+only the report survives. A live run observes the cancel on its next request: the
+page in flight may finish, nothing after it starts, and the run is patched
+`cancelled`, never `complete`. Covered by an integration test since 2026-10-04,
+which replaced the `test.todo` that `tests/KNOWN_GAPS.md` recorded.
 
 Orphaned request queues — `.crawlee/<id>` directories whose run is already gone —
 are swept separately, since nothing owns them:

@@ -1,6 +1,14 @@
 # Run cancel and delete
 
-**Status: BUTTONS SHIP on the run detail page. The list has none, and delete leaves local traces.**
+**Status, 2026-10-04: B done, A and C open.** Delete now removes the run's local directories and
+reports `localRemoved` (`src/api/server.ts`). Orphaned `running` runs are reconciled at startup
+(`5ab89dc`), which settles open decision 3. Cancel is covered by an integration test (`f1356d9`).
+Still open: A, a runs list with actions (it reads the local `GET /crawls`, which
+`move-crawl-reads-to-geekapi.md` schedules for removal, so it needs to be built on GeekAPI's run
+list instead); and C, status-aware buttons (`run-actions.tsx` still renders both unconditionally).
+
+**Superseded status line:** BUTTONS SHIP on the run detail page. The list has none, and delete
+leaves local traces.
 
 ## Current state — verified 2026-09-17
 

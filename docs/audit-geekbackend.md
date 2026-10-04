@@ -8,6 +8,12 @@ finding here is from source, never from a running system.
 
 ## F1 — Generation reads project-site pages from Postgres; the crawler writes Mongo — **critical**
 
+**Status, 2026-10-04: resolved** in GeekBackend `da6a98e` (2026-09-29). The Postgres page source,
+`GccV2ProjectSiteCrawlService` with its BFS crawler and worker, the three repository controllers and
+the tables are gone; project-site pages are read from Mongo only, and
+`GeekBackend.Tests/PostgresIsOAuthOnlyTests.cs` keeps Postgres out. Geek-Crawler-v2 is the only
+crawler. The finding is kept as written.
+
 **Evidence**
 
 `GeekAPI/Services/ContentCreatorV2/ServiceRegistration.cs:136-142`

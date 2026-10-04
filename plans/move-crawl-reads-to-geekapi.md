@@ -1,5 +1,12 @@
 # The crawler service belongs on GeekAPI; this repo is egress, and exposes nothing
 
+**Status, 2026-10-04: partly done.** Shipped in GeekAPI: `GET crawls/{runId}/site-structure`
+(change 1) and `GET failures` (change 5). Open: the seed-report endpoint (3), moving control to
+GeekAPI (4), deleting this repo's HTTP surface (6), and the web UI's reads (7); `npm run serve`
+still answers on `127.0.0.1:8787`. The example below of how GeekAPI owns a crawler,
+`GccV2ProjectSiteCrawlService`, was deleted in GeekBackend `da6a98e` (2026-09-29) along with its BFS
+crawler, so GeekAPI no longer crawls in process. The rule stands; that example no longer exists.
+
 ## The rule
 
 **Public** — anything another product or a browser must reach. It lives in GeekAPI. There is no

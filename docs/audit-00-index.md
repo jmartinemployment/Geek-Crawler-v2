@@ -3,6 +3,15 @@
 **Date:** 2026-09-28 · **Method:** direct read of each repo's working tree. Every finding below
 cites `file:line`. Where I inferred rather than observed, the finding says so.
 
+## Status, 2026-10-04
+
+Two of the defects that motivated this audit are closed. The `competitors` thin-slice budget is
+moot: since 2026-09-30 every third-party crawl type shares one profile, and since 2026-10-04
+(Geek-Crawler-v2 `195e2df`) the budget is the profile's alone, never the sitemap's. The project-site
+read path pointed at Postgres was removed with GeekAPI's own crawler in GeekBackend `da6a98e`
+(2026-09-29). Per-repo status is at the top of each audit where it has been rechecked; findings are
+kept as written on 2026-09-28.
+
 ## Scope, stated honestly
 
 This is a **targeted** audit, not a line-by-line review of five repos. It hunts one family of
@@ -125,6 +134,7 @@ Geek-Crawler-v2 writes corpus to Mongo `geek_crawler`. The Postgres table
 producing your corpus.
 
 **Two crawlers, two stores, and generation reads the one your crawler does not fill.**
+(Resolved 2026-09-29, GeekBackend `da6a98e`: one crawler, one store.)
 
 Spans GeekBackend (the flag, the default, the two sources) and Geek-Crawler-v2 (the writer that
 targets Mongo). Neither repo is wrong on its own.

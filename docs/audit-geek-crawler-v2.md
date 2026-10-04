@@ -4,6 +4,27 @@
 **Audited:** 2026-09-28 at `449b8ca`..`0789d4d`, working tree. Builds and tests pass
 (160 unit, 4 integration, `check-fail-closed ok`).
 
+## Status, 2026-10-04
+
+Checked against the code at `f1356d9`. The findings below are kept as written on 2026-09-28.
+
+- **F1, resolved.** Decided 2026-09-30: partner, competitors and local share one profile (2,500
+  pages, `maxDepth: null`, quotas on), and composition is controlled by `EDITORIAL_SHARE` rather than
+  by smaller budgets. Since `195e2df` (2026-10-04) the budget is the profile's alone, never sized
+  from the sitemap. Plan items 5 and 6 are closed by that: no budget depends on the sitemap any more.
+- **F2, resolved.** Startup reconciliation of runs left `running` with no writer landed in
+  `5ab89dc`, and run records are touched on every write (`runs.ts` `touch`). Item 3 is moot: the
+  Resume all running control was deleted in `1f8d4be`, and every resume route answers 409.
+- **F3, open.** Pages are still sent one per `createPagesBatch` call (`persist.ts:650`), and the
+  comment on `MAX_PAGES_PER_BATCH` does not say so.
+- **F4, resolved** in `1970b9b`: the local page store that nothing wrote was removed.
+- **F5, resolved.** `contentReadyAt` is kept on the local run record (`runs.ts` `markComplete`),
+  and the report says which of absent, unreachable or error GeekAPI answered (`0007cb4`).
+
+Also changed on 2026-10-04, outside these findings: the sitemap no longer limits which links are
+followed, link-trap rules replace it, a discovery report counts every discovered URL, and the
+classifier and quotas read one section vocabulary. See the README section Crawl scope.
+
 ---
 
 ## F1 — Two of three crawl-profile levers are inert on any site with a sitemap — **high**

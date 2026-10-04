@@ -1,5 +1,9 @@
 # RAG Query Points — Plan
 
+**Status, 2026-10-04: not started.** Every checklist item below is open. The runs page has an
+indexed report built from GeekAPI's `rag-index` counters (`web/src/app/api/crawls/indexed-report`),
+which shows how much was indexed but not what.
+
 **Give consumers a way to see what's actually in the corpus, without inventing a fake semantic query.**
 
 Scope: Geek-Crawler-Rag (new endpoints) + GeekAPI (thin proxy) + this repo's dashboard
