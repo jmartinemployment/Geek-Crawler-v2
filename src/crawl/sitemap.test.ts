@@ -215,6 +215,33 @@ describe('mergeHarvestedUrls — a browser pass stands in for a missing sitemap'
     assert.deepEqual(out, ['https://x.com/pricing', 'https://x.com/', 'https://x.com/blog/a']);
     assert.deepEqual(ledger.report().enqueued.bySource, { seed: 1, sitemap: 0, harvest: 2, link: 0 });
   });
+
+  it('drops non-English locales and counts them', () => {
+    const ledger = createDiscoveryLedger();
+    const out = mergeHarvestedUrls(['https://x.com/'], ['https://x.com/fr/pricing', 'https://x.com/en/pricing'], {
+      ledger,
+    });
+    assert.deepEqual(out, ['https://x.com/pricing', 'https://x.com/']);
+    assert.equal(ledger.report().refused.locale, 1);
+  });
+
+  it('holds harvested editorial to the share -- the lightyear.cloud case', () => {
+    // A JavaScript nav with 4 product pages and 60 blog posts. The share allows a quarter of the
+    // non-editorial admissions, and seeds are not admissions, so 4 product pages allow 1 blog post.
+    const ledger = createDiscoveryLedger();
+    const quota = createSectionQuota(new Map());
+    const start = initialCrawlUrls(['https://x.com/'], NO_MAP, { ledger, quota });
+    const harvested = [
+      ...Array.from({ length: 60 }, (_, i) => `https://x.com/blog/post-${i}`),
+      ...Array.from({ length: 4 }, (_, i) => `https://x.com/features/f-${i}`),
+    ];
+    const out = mergeHarvestedUrls(start, harvested, { ledger, quota });
+    const blog = out.filter((u) => u.includes('/blog/')).length;
+    assert.equal(out.filter((u) => u.includes('/features/')).length, 4);
+    assert.equal(blog, quota.admittedByTier().editorial);
+    assert.equal(blog, 1);
+    assert.equal(ledger.report().refused.share, 60 - blog);
+  });
 });
 
 describe('loadSiteMapForSeed — robots.txt, sitemap indexes, and the ceilings', () => {

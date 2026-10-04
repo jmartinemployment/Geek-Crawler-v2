@@ -431,20 +431,52 @@ export function initialCrawlUrls(
 /**
  * Merge a browser link-discovery pass into the start URLs, in tier order.
  *
- * Harvested URLs are start URLs, so they are not gated: the pass runs only when there is no
- * sitemap, and it stands in for one.
+ * The pass runs only when there is no sitemap, and its links stand in for one, so they get what
+ * sitemap URLs get: the locale filter, then the section quota and editorial share, decided in tier
+ * order so product pages raise the editorial allowance before any editorial page asks for it. Not
+ * the trap rules: a link in the rendered navigation is a page the site chose to show, the same
+ * standing as a sitemap entry.
+ *
+ * Until 2026-10-04 harvested URLs went into the start list ungated. The pass exists for sites like
+ * lightyear.cloud, whose 148-page crawl came back 129 blog posts, and the share gate built for that
+ * case never saw the URLs this pass contributed.
  */
 export function mergeHarvestedUrls(
   startUrls: string[],
   harvested: string[],
   opts?: EnqueueDedupOpts,
 ): string[] {
+  const ledger = opts?.ledger;
   const merged = new Set(startUrls);
+  const seen = new Set(startUrls.map((u) => compareKey(u, opts?.aliases)));
+  const fresh: string[] = [];
   for (const u of harvested) {
-    const n = normalizeCrawlUrl(u);
-    if (!n || merged.has(n)) continue;
+    const localeOk = localeNormalizeForMap(u);
+    if (!localeOk) {
+      ledger?.refuse(u, u, 'locale', false);
+      continue;
+    }
+    const n = normalizeCrawlUrl(localeOk);
+    if (!n) {
+      ledger?.refuse(u, u, 'invalid', false);
+      continue;
+    }
+    const ck = compareKey(n, opts?.aliases);
+    if (seen.has(ck)) continue;
+    seen.add(ck);
+    fresh.push(n);
+  }
+  for (const n of sectionAdmissionOrder(fresh)) {
+    const ck = compareKey(n, opts?.aliases);
+    if (opts?.quota) {
+      const decision = opts.quota.decide(n);
+      if (!decision.admitted) {
+        ledger?.refuse(ck, n, decision.refusal, false);
+        continue;
+      }
+    }
+    ledger?.enqueue(ck, n, 'harvest', false);
     merged.add(n);
-    opts?.ledger?.enqueue(compareKey(n, opts.aliases), n, 'harvest', false);
   }
   return sectionAdmissionOrder([...merged]);
 }
