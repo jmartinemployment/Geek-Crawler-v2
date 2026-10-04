@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { access, chmod, mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -168,13 +168,15 @@ test('an unwritable archive aborts before the purge', async () => {
 
     // Block the archive write. Losing the corpus and its explanation together is the one
     // outcome the ordering exists to prevent.
-    await mkdir(path.join(dataDir, 'failures'), { recursive: true });
-    await chmod(path.join(dataDir, 'failures'), 0o500);
+    //
+    // A regular file where the failures directory belongs, not a read-only directory. A chmod 0500
+    // directory blocks an ordinary user and nobody else: the container runs as root, which writes
+    // through it, so this test failed there at a08ac9e and before. No user can create a directory,
+    // or a file inside one, at a path a file already holds.
+    await writeFile(path.join(dataDir, 'failures'), 'not a directory');
 
     await assert.rejects(() => persist.archiveAndPurge('failed', 'disk is read-only'));
     assert.equal(deleteCalls(), 0, 'nothing may be destroyed without a post-mortem');
-
-    await chmod(path.join(dataDir, 'failures'), 0o700);
   });
 });
 
