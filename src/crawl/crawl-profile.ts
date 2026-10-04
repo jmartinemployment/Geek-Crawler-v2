@@ -52,7 +52,7 @@ const THIRD_PARTY: CrawlProfile = {
   // trap backstop, but a cap is what 03a53ce removed: link hops from the seed dropped nested product
   // pages three hops behind a nav. The trap rules in link-trap.ts and the page budget bound a trap
   // instead. Depth now only governs links the sitemap omits, and each URL it refuses is counted
-  // under `depth` in the discovery report, so setting a cap here is measurable.
+  // under depth in the discovery report, so setting a cap here is measurable.
   maxDepth: null,
   useSectionQuotas: true,
 };

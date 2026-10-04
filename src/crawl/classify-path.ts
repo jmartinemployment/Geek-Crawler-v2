@@ -101,7 +101,7 @@ export function classifyPath(urlOrPath: string): PageTier {
 
   // The section vocabulary is shared with the quotas; see section-vocabulary.ts. Evidence is checked
   // before editorial within a segment, but still inside the leftmost scan, so it does not override
-  // an outer section: plooto.com/resources/case-studies stays editorial because `resources`
+  // an outer section: plooto.com/resources/case-studies stays editorial because resources
   // classifies first. That consequence is accepted, not overlooked.
   const tier = segmentTier(segments);
   if (tier) return tier;

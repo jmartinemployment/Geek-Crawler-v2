@@ -1,10 +1,10 @@
 /**
  * The section vocabulary: what a path segment names, and what kind of page lives under it.
  *
- * One table, read by both consumers. `classify-path.ts` takes the tier, `section-quota.ts` takes the
+ * One table, read by both consumers. classify-path.ts takes the tier, section-quota.ts takes the
  * name. Until 2026-10-04 each kept its own list, and they drifted the way two lists always do:
- * `customer-case-studies` was evidence to the classifier and no section at all to the quotas, so
- * it was uncapped; `/page/` was an archive to the classifier and not to the quotas; `/calculator/`
+ * customer-case-studies was evidence to the classifier and no section at all to the quotas, so
+ * it was uncapped; /page/ was an archive to the classifier and not to the quotas; /calculator/
  * was capped at 10 by the quotas and an ordinary page to the classifier. Each consumer was right by
  * its own table, and the crawler ordered pages by one rule and capped them by another.
  *
@@ -12,17 +12,17 @@
  *
  *   classifyPath  scans segments left to right and returns the tier of the first segment that a
  *                 product, evidence or editorial entry matches. Within one segment the more
- *                 specific tier wins: product, then evidence, then editorial. `other` entries never
- *                 classify -- `other` is what a page with no classifying segment already is -- so
+ *                 specific tier wins: product, then evidence, then editorial. other entries never
+ *                 classify -- other is what a page with no classifying segment already is -- so
  *                 they cannot stop the scan: /tools/blog/x is still editorial.
  *
  *   quotaKey      scans segments left to right and returns the name of the first entry that is not
  *                 product. Product sections are never capped; composition for product pages is the
- *                 tier order's job, not a cap's. So /solutions/blog/x is capped as `blog` even though
+ *                 tier order's job, not a cap's. So /solutions/blog/x is capped as blog even though
  *                 it classifies product.
  *
- * Entries may share a name. They then share one quota budget while keeping their own tier: `stories`
- * is evidence and `story` is editorial, and both draw on the `stories` cap.
+ * Entries may share a name. They then share one quota budget while keeping their own tier: stories
+ * is evidence and story is editorial, and both draw on the stories cap.
  */
 
 import type { PageTier } from './classify-path.js';
@@ -34,8 +34,8 @@ export type SectionEntry = {
   readonly pattern: RegExp;
   readonly tier: PageTier;
   /**
-   * Only match as the first path segment. `/category/accounting` is a blog archive;
-   * `/solutions/category/enterprise` is product taxonomy. Position carries the meaning.
+   * Only match as the first path segment. /category/accounting is a blog archive;
+   * /solutions/category/enterprise is product taxonomy. Position carries the meaning.
    */
   readonly firstSegmentOnly?: true;
 };
@@ -48,7 +48,7 @@ export const SECTIONS: readonly SectionEntry[] = [
   { name: 'pricing', tier: 'product', pattern: /^pricing$/ },
   { name: 'plans', tier: 'product', pattern: /^plans?$/ },
   { name: 'platform', tier: 'product', pattern: /^platform$/ },
-  // integrations only. `apps`, `connectors`, `plugins` and `marketplace` stay OTHER and capped: "what
+  // integrations only. apps, connectors, plugins and marketplace stay OTHER and capped: "what
   // we integrate with" is capability evidence; "browse our app directory" is a page farm.
   { name: 'integrations', tier: 'product', pattern: /^integrations?$/ },
   { name: 'use-cases', tier: 'product', pattern: /^use-cases?$/ },
@@ -61,23 +61,23 @@ export const SECTIONS: readonly SectionEntry[] = [
   // ---- Evidence. ----
   // Directories whose pages ARE the evidence a tool page is grounded in.
   //
-  // Separate from `editorial` for one reason, and it is not ordering: `admit()` rations editorial
-  // against `EDITORIAL_SHARE`, so a case study competes with blog posts for a 20% budget and loses.
+  // Separate from editorial for one reason, and it is not ordering: admit() rations editorial
+  // against EDITORIAL_SHARE, so a case study competes with blog posts for a 20% budget and loses.
   // Measured 2026-10-02 by diffing crawl_links against crawl_pages — bill.com discovered 75 of these
   // and crawled 1, melio.com discovered 23 and crawled 1, 111 refused across five partners. Every one
-  // classified `editorial`, checked by running classifyPath over them rather than inferred.
+  // classified editorial, checked by running classifyPath over them rather than inferred.
   //
-  // They are not editorial in any useful sense. `melio.com/case-studies/cubepros` is a named client
-  // with a stated outcome, which is the `caseStudies` extraction category verbatim; `/faq` is
-  // `faqBank`; customer pages carry `testimonials`. Three of the 22 categories a tool page is refused
+  // They are not editorial in any useful sense. melio.com/case-studies/cubepros is a named client
+  // with a stated outcome, which is the caseStudies extraction category verbatim; /faq is
+  // faqBank; customer pages carry testimonials. Three of the 22 categories a tool page is refused
   // for lacking live here.
   //
   // Deliberately NOT here: security, trust, changelog, demo, docs, limits, awards. They fill five more
-  // categories but already tier `other`, so moving them would change crawl order only — and ordering
+  // categories but already tier other, so moving them would change crawl order only — and ordering
   // changes nothing while the 2,500-page cap goes unreached, which it has on all 47 runs to date.
   //
-  // The leading-qualifier group mirrors `blog`'s, so dext's `smb-testimonials` is caught. Whole
-  // segments only: `/blog/case-studies-in-ap-automation` is an article about case studies and stays
+  // The leading-qualifier group mirrors blog's, so dext's smb-testimonials is caught. Whole
+  // segments only: /blog/case-studies-in-ap-automation is an article about case studies and stays
   // editorial.
   { name: 'customers', tier: 'evidence', pattern: /^customers$/ },
   // case-study, case-studies, customer-case-studies
@@ -93,7 +93,7 @@ export const SECTIONS: readonly SectionEntry[] = [
   { name: 'blog', tier: 'editorial', pattern: /^(?:[a-z0-9]+-)?blogs?$/ },
   { name: 'news', tier: 'editorial', pattern: /^(?:[a-z0-9]+-)?news$/ },
   { name: 'press', tier: 'editorial', pattern: /^press(?:-releases?|-room|-centre?|-center)?$/ },
-  // Singular `story` is an article; plural is evidence, above. One budget.
+  // Singular story is an article; plural is evidence, above. One budget.
   { name: 'stories', tier: 'editorial', pattern: /^(?:[a-z0-9]+-)?story$/ },
   // Mixed resource libraries
   { name: 'resources', tier: 'editorial', pattern: /^(?:[a-z0-9]+-)?resources?$/ },
@@ -157,8 +157,8 @@ export const SECTIONS: readonly SectionEntry[] = [
     pattern:
       /^(?:countr(?:y|ies)|states?|provinces?|regions?|cities|city|count(?:y|ies)|municipalit(?:y|ies)|jurisdictions?)-(?:guides?|profiles?|pages?|rates?|rules?|tables?|reference)$/,
   },
-  // Tax reference tables by regime. The optional two-letter prefix is what catches `eu-vat-rules`
-  // next to `vat-rules`; it is the same shape as the locale prefix that hid `taxrates`.
+  // Tax reference tables by regime. The optional two-letter prefix is what catches eu-vat-rules
+  // next to vat-rules; it is the same shape as the locale prefix that hid taxrates.
   {
     name: 'tax-reference',
     tier: 'other',

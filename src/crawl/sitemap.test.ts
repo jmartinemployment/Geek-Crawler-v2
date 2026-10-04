@@ -130,7 +130,7 @@ describe('filterEnqueueUrls — the sitemap seeds the crawl, it does not bound i
   });
 
   it('never charges the directory cap for a page the quota refused', () => {
-    // Both urls are other tier under directory `locations`. The first is refused by the zip-codes
+    // Both urls are other tier under directory locations. The first is refused by the zip-codes
     // quota; had the cap been charged before the quota ran, its one slot would be gone and the
     // second -- which no quota covers -- refused with it.
     const directoryCap = createDirectoryCap(1);

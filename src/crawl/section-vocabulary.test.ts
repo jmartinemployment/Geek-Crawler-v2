@@ -78,8 +78,8 @@ describe('section vocabulary — the classifier and the quotas read one table', 
   it('agrees on every entry: the classifier returns its tier, the quotas its name', () => {
     for (const entry of SECTIONS) {
       const url = `https://x.com/${SAMPLES.get(entry.pattern.source)}/x`;
-      // `other` entries never classify, so the tier of a page under one is whatever the token rules
-      // say: /country-guides/x is editorial by the weak `-guides` token, as it was before the tables
+      // other entries never classify, so the tier of a page under one is whatever the token rules
+      // say: /country-guides/x is editorial by the weak -guides token, as it was before the tables
       // were merged. Only classifying entries are held to their tier.
       if (entry.tier !== 'other') assert.equal(classifyPath(url), entry.tier, `tier of ${url}`);
       // Product sections are never capped, so the quotas see no section.

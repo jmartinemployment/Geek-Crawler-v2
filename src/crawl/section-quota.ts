@@ -3,7 +3,7 @@ import { segmentSection } from './section-vocabulary.js';
 /**
  * Per-section page quotas, applied at enqueue admission.
  *
- * A section is the FIRST PATH SEGMENT THAT MATCHES the vocabulary in `section-vocabulary.ts`,
+ * A section is the FIRST PATH SEGMENT THAT MATCHES the vocabulary in section-vocabulary.ts,
  * scanning left to right -- not path segment one. Known page farms carry a cap so one programmatic
  * directory cannot consume the crawl budget. A quota of 0 excludes the section entirely; a URL
  * matching nothing is uncapped.
@@ -86,16 +86,16 @@ export function sectionKey(url: string): string {
  * The canonical section a URL belongs to, or '' when no segment matches the vocabulary.
  *
  * Read off the vocabulary the classifier also reads (section-vocabulary.ts): leftmost non-product
- * match wins, and the result is a canonical NAME, not the matched segment, so `company-blog` and
- * `blog` share one budget rather than each getting its own 250.
+ * match wins, and the result is a canonical NAME, not the matched segment, so company-blog and
+ * blog share one budget rather than each getting its own 250.
  *
- * **Every segment is eligible, not just the first** (2026-09-30). `sectionKey` returned path segment
+ * Every segment is eligible, not just the first (2026-09-30). sectionKey returned path segment
  * one, which on a locale-prefixed site is the locale. avalara.com serves its entire site under
- * `/us/en/`, so every URL on it resolved to section `us`, which has no entry, so ALL of these caps
+ * /us/en/, so every URL on it resolved to section us, which has no entry, so ALL of these caps
  * were dead for the whole site -- and 475 of 572 crawled pages were county tax-rate tables under
- * `/us/en/taxrates/state-rates/<state>/counties/<county>.html`.
+ * /us/en/taxrates/state-rates/<state>/counties/<county>.html.
  *
- * Leftmost wins, so `/blog/category/accounting` is `blog` and not `category`: the section a page
+ * Leftmost wins, so /blog/category/accounting is blog and not category: the section a page
  * lives in is the outermost one that matches, not the innermost.
  */
 export function quotaKey(url: string): string {
@@ -171,7 +171,7 @@ export type QuotaDecision = { admitted: true } | { admitted: false; refusal: Quo
 export type SectionQuota = {
   /** True when the URL may be enqueued. Mutates admission state. */
   admit(url: string): boolean;
-  /** As `admit`, naming the gate when the URL is refused. */
+  /** As admit, naming the gate when the URL is refused. */
   decide(url: string): QuotaDecision;
   /** Admitted count per capped section. */
   admittedBySection(): Map<string, number>;
@@ -212,8 +212,8 @@ export function createSectionQuota(
 
     // The share gate, before the per-section caps. Per-section caps cannot control composition on
     // their own: six sections at 250 each still admits 1,500 editorial pages, and any section the
-    // table has no key for is uncapped entirely -- which is how `learning` contributed 510 pages
-    // and `press-releases` 254.
+    // table has no key for is uncapped entirely -- which is how learning contributed 510 pages
+    // and press-releases 254.
     if (tier === 'editorial') {
       // Expressed against NON-editorial pages, not the total, because the total includes the
       // editorial already admitted and the equation then chases itself. For a share s, admitting
@@ -221,7 +221,7 @@ export function createSectionQuota(
       // quarter of the non-editorial count, which lands the finished crawl at exactly 20%.
       // byTier.evidence is deliberately NOT in this sum, and nothing in the type system says so.
       //
-      // Evidence pages are exempt from this gate (the `tier === 'editorial'` test above), which is
+      // Evidence pages are exempt from this gate (the tier === 'editorial' test above), which is
       // the whole point of the tier. Counting them here as well would also RAISE the editorial
       // allowance -- roughly 25 extra blog posts per 100 case studies admitted -- so the change
       // intended to buy evidence would quietly buy blog too. The allowance stays tied to

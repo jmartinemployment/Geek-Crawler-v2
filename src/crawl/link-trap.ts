@@ -30,8 +30,8 @@
 export type TrapRule = 'pagination' | 'facet' | 'search' | 'calendar';
 
 /**
- * Query keys that page through a listing. Only refused with a numeric value. Not `p`: WordPress
- * uses `?p=123` as a post id, and that URL is the post.
+ * Query keys that page through a listing. Only refused with a numeric value. Not p: WordPress
+ * uses ?p=123 as a post id, and that URL is the post.
  */
 const PAGINATION_KEYS = new Set(['page', 'paged', 'pg', 'offset', 'start']);
 
@@ -65,7 +65,7 @@ const FACET_KEYS = new Set([
   'categories',
 ]);
 
-/** Query keys that run an on-site search. Any value. Not `term`: glossaries key entries by it. */
+/** Query keys that run an on-site search. Any value. Not term: glossaries key entries by it. */
 const SEARCH_KEYS = new Set(['q', 'query', 'search', 's', 'keyword', 'keywords']);
 
 /** Query keys that step a calendar. Any value. */
@@ -83,8 +83,8 @@ const CALENDAR_KEYS = new Set([
 
 /**
  * A segment that is a date on its own: 2026, 2026-10, 2026-10-04. Anchored, so a dated slug
- * (`2026-10-04-launch-notes`) is an article and passes. The year is 19xx or 20xx, because the
- * accounting sites this crawls publish pages named for tax forms -- `/1099`, `/1096` -- and a bare
+ * (2026-10-04-launch-notes) is an article and passes. The year is 19xx or 20xx, because the
+ * accounting sites this crawls publish pages named for tax forms -- /1099, /1096 -- and a bare
  * four-digit test would refuse them as calendar cells.
  */
 const DATE_SEGMENT = /^(?:19|20)\d{2}(?:-\d{1,2}){0,2}$/;
@@ -118,7 +118,7 @@ function segments(pathname: string): string[] {
 /**
  * The trap rule a discovered URL matches, or null when it reads as a page.
  *
- * A query key is matched on its base name, so `filter[color]` is `filter`.
+ * A query key is matched on its base name, so filter[color] is filter.
  */
 export function trapRuleFor(url: string): TrapRule | null {
   let u: URL;
@@ -140,7 +140,7 @@ export function trapRuleFor(url: string): TrapRule | null {
 
   // A path that ENDS in a date is a date archive or a calendar cell: /2026, /blog/2024/05,
   // /events/2026-10-04. A date followed by a slug is a dated article and passes. There is no rule
-  // for a `calendar` segment: /features/calendar is a scheduling product's feature page.
+  // for a calendar segment: /features/calendar is a scheduling product's feature page.
   if (endsInDate(segs)) return 'calendar';
 
   const keys = new Set<string>();

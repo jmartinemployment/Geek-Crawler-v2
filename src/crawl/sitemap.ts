@@ -51,7 +51,7 @@ export type SiteMapIndex = {
 };
 
 /**
- * Membership key: lowercase host without `www.`, no trailing slash on a non-root path, query kept.
+ * Membership key: lowercase host without www., no trailing slash on a non-root path, query kept.
  *
  * Exact string membership read /pricing/ as off-sitemap when the map listed /pricing. That cost
  * nothing while the map was an allowlist -- the variant was dropped -- but it now decides whether a
@@ -262,7 +262,7 @@ export type EnqueueDedupOpts = {
   ledger?: DiscoveryLedger;
 };
 
-/** A URL cleared for enqueue. `forefront` puts it ahead of the queued sitemap. */
+/** A URL cleared for enqueue. forefront puts it ahead of the queued sitemap. */
 export type EnqueueCandidate = {
   url: string;
   forefront: boolean;

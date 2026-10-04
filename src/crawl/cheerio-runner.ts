@@ -258,7 +258,7 @@ async function executeCheerioCrawl(
   let bodyRootReported = false;
 
   /**
-   * `parentDepth` is the depth of the page whose links these are; start urls are depth 0. Past the
+   * parentDepth is the depth of the page whose links these are; start urls are depth 0. Past the
    * profile's cap, links the sitemap omits are refused and counted per URL in the discovery report;
    * links it lists are already queued at depth 0, so the cap never touches them.
    *
