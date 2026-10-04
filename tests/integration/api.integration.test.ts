@@ -233,4 +233,118 @@ test(
   },
 );
 
-test.todo('cancellation should stop active Crawlee work and persist cancelled status');
+test('cancelling a live crawl stops fetching and lands it in cancelled, never complete', { timeout: 60_000 }, async () => {
+  // A mock that records every status the crawler patches and acknowledges the purge that a cancel
+  // performs: cancel is destructive, so the run's data is deleted after its post-mortem is written.
+  const statuses: string[] = [];
+  let deletes = 0;
+  let runSeq = 0;
+  const geek = createServer(async (req, res) => {
+    let body = '';
+    for await (const chunk of req) body += String(chunk);
+    res.setHeader('content-type', 'application/json');
+    if (req.method === 'POST' && req.url?.endsWith('/ingest/runs')) {
+      runSeq += 1;
+      const seeds = (JSON.parse(body) as { seeds?: string[] }).seeds ?? [];
+      return res.end(
+        JSON.stringify({
+          run: {
+            runId: `22222222-2222-4222-8222-${String(runSeq).padStart(12, '0')}`,
+            status: 'external',
+            crawlType: 'local',
+            seedUrls: seeds,
+          },
+          seedsAccepted: seeds.length,
+          rejected: [],
+        }),
+      );
+    }
+    if (req.method === 'POST' && req.url?.includes('/pages/batch')) {
+      const parsed = JSON.parse(body) as { pages: Array<{ url: string }> };
+      return res.end(
+        JSON.stringify({ pages: parsed.pages.map((p, i) => ({ url: p.url, pageId: `c-${i}` })) }),
+      );
+    }
+    if (req.method === 'POST' && req.url?.includes('/links/batch')) {
+      const parsed = JSON.parse(body) as { links: unknown[] };
+      return res.end(JSON.stringify({ count: parsed.links.length }));
+    }
+    if (req.method === 'PATCH') {
+      const status = String((JSON.parse(body) as { status?: string }).status ?? '');
+      statuses.push(status);
+      return res.end(JSON.stringify({ runId: 'x', status, crawlType: 'local' }));
+    }
+    if (req.method === 'DELETE') {
+      deletes += 1;
+      return res.end(JSON.stringify({ vectorsPurged: true, crawlDataDeleted: true }));
+    }
+    res.statusCode = 404;
+    res.end('{}');
+  });
+  await new Promise<void>((resolve) => geek.listen(0, '127.0.0.1', resolve));
+  const geekAddress = geek.address();
+  assert(geekAddress && typeof geekAddress !== 'string');
+
+  // 400ms a page with one fetch at a time: the sitemap's dozen urls take seconds, so the cancel
+  // lands with most of the queue unfetched.
+  const fixture = await startFixtureSite({ slowMs: 400 });
+  const dataDir = await mkdtemp(path.join(os.tmpdir(), 'geek-crawler-cancel-'));
+  const old = {
+    url: process.env.GEEK_API_URL,
+    key: process.env.GEEK_BACKEND_API_KEY,
+    user: process.env.GEEK_USER_ID,
+  };
+  process.env.GEEK_API_URL = `http://127.0.0.1:${geekAddress.port}`;
+  process.env.GEEK_BACKEND_API_KEY = 'test-key';
+  process.env.GEEK_USER_ID = 'test-user';
+  const { api, origin } = await startApi(dataDir);
+  try {
+    const started = await fetch(`${origin}/crawls`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ seed: `${fixture.origin}/`, crawlType: 'local', maxConcurrency: 1 }),
+    });
+    assert.equal(started.status, 202);
+    const runId = (await json(started)).runId as string;
+
+    // Cancel mid-crawl, not before it starts: the robots and sitemap preflight are slowed too, so a
+    // fixed delay can land before the first page is fetched.
+    const startBy = Date.now() + 20_000;
+    while (Date.now() < startBy && fixture.totalRequests() < 2) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assert.ok(fixture.totalRequests() >= 2, 'the crawl must be fetching pages before it is cancelled');
+    const cancel = await fetch(`${origin}/crawls/${runId}/cancel`, { method: 'POST' });
+    assert.equal(cancel.status, 202);
+    const cancelBody = await json(cancel);
+    assert.equal(cancelBody.cancelling, true, 'a live run cancels itself');
+    assert.equal(cancelBody.orphan, false);
+    const fetchedAtCancel = fixture.totalRequests();
+
+    const deadline = Date.now() + 30_000;
+    while (Date.now() < deadline && !statuses.includes('cancelled')) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    assert.ok(statuses.includes('cancelled'), `expected a cancelled patch, saw ${statuses.join(',')}`);
+    assert.ok(!statuses.includes('complete'), 'a cancelled run is never reported complete');
+    assert.equal(deletes, 1, 'cancel purges the run after archiving it');
+    // The page in flight when the cancel arrived may finish; nothing after it starts.
+    assert.ok(
+      fixture.totalRequests() <= fetchedAtCancel + 1,
+      `fetching continued after cancel: ${fetchedAtCancel} then ${fixture.totalRequests()}`,
+    );
+    // The fixture sitemap lists 11 crawlable urls; a cancel that stopped nothing would fetch them all.
+    assert.ok(fixture.totalRequests() < 8, `cancel stopped too late: ${fixture.totalRequests()} fetched`);
+  } finally {
+    await closeServer(api.server);
+    await fixture.close();
+    geek.close();
+    if (old.url === undefined) delete process.env.GEEK_API_URL;
+    else process.env.GEEK_API_URL = old.url;
+    if (old.key === undefined) delete process.env.GEEK_BACKEND_API_KEY;
+    else process.env.GEEK_BACKEND_API_KEY = old.key;
+    if (old.user === undefined) delete process.env.GEEK_USER_ID;
+    else process.env.GEEK_USER_ID = old.user;
+    await rm(dataDir, { recursive: true, force: true });
+  }
+});

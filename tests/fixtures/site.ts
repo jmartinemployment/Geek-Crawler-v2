@@ -14,6 +14,8 @@ function page(title: string, body: string, extraHead = ''): string {
 export type FixtureSite = {
   origin: string;
   requests(pathname: string): number;
+  /** Page fetches across every path: robots.txt and sitemap files are not pages. */
+  totalRequests(): number;
   close(): Promise<void>;
 };
 
@@ -207,6 +209,14 @@ export async function startFixtureSite(options?: {
   return {
     origin,
     requests: (pathname) => counts.get(pathname) ?? 0,
+    totalRequests: () => {
+      let n = 0;
+      for (const [pathname, count] of counts) {
+        if (pathname === '/robots.txt' || pathname.endsWith('.xml')) continue;
+        n += count;
+      }
+      return n;
+    },
     close: () => closeServer(server),
   };
 }
