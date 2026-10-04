@@ -143,7 +143,9 @@ export const SECTIONS: readonly SectionEntry[] = [
   // Generated reference tables -- the avalara case. A rate table per county, per city and per ZIP
   // is one template rendered over a government dataset: thousands of near-identical pages, each a
   // heading plus a percentage plus a state dropdown serialised as body text. Not editorial, so the
-  // EDITORIAL_SHARE gate never saw them, and that is what left them unbounded.
+  // EDITORIAL_SHARE gate never saw them, and that is what left them unbounded. One exception: a
+  // segment ending in -guides, such as country-guides, trips the weak editorial token in
+  // classify-path.ts, so those pages are editorial and share-gated as well as capped here.
   //
   // Generated jurisdiction reference -- one page per country, state, county or city, rendered from
   // a dataset. avalara.com ships TWO of these and the second was the gap: the US side is
@@ -166,7 +168,10 @@ export const SECTIONS: readonly SectionEntry[] = [
       /^(?:[a-z]{2}-)?(?:vat|gst|hst|pst|sales-tax|use-tax|excise|duty)-(?:rules?|rates?|guides?|tables?|info|compliance)$/,
   },
   { name: 'tax-rates', tier: 'other', pattern: /^tax-?rates?$/ },
-  { name: 'rate-tables', tier: 'other', pattern: /^(?:state|city|county|local|zip|sales-tax)-rates?$/ },
+  // local and zip only. state-, city- and county-rates are jurisdiction-guides and sales-tax-rates is
+  // tax-reference, both listed earlier with the same 25-page cap, so naming them here was coverage
+  // that never fired.
+  { name: 'rate-tables', tier: 'other', pattern: /^(?:local|zip)-rates?$/ },
   { name: 'localities', tier: 'other', pattern: /^(?:count(?:y|ies)|cities|states|municipalities|districts)$/ },
   { name: 'zip-codes', tier: 'other', pattern: /^zip-?codes?$/ },
 ];

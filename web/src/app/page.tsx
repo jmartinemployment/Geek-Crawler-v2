@@ -1,6 +1,4 @@
 import { SubmitCrawlForm } from "@/components/submit-crawl-form";
-import { ResumeByUrlForm } from "@/components/resume-by-url-form";
-import { ResumeAllRunningButton } from "@/components/resume-all-running-button";
 
 export default function HomePage() {
   return (
@@ -12,16 +10,6 @@ export default function HomePage() {
           <code>:8787</code>).
         </p>
         <SubmitCrawlForm />
-      </div>
-      <div>
-        <h2>Resume</h2>
-        <p className="lede">
-          Paste a seed URL from the report to continue its Crawlee queue.
-          Report <strong># of Pages</strong> is crawled count for that origin —
-          not a predicted site total.
-        </p>
-        <ResumeByUrlForm />
-        <ResumeAllRunningButton />
       </div>
     </div>
   );

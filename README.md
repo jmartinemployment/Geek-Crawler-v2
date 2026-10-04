@@ -13,7 +13,7 @@ Geek-Crawler v2 builds clean, citation-ready research corpora from partner and c
 - Sitemap-first inventory: the sitemap seeds the crawl in tier order, and same-origin links it omits are followed under link-trap rules (`src/crawl/link-trap.ts`) and the section quotas
 - One renderer, one path: static HTML via CheerioCrawler. A page whose content does not exist until JavaScript runs is rejected, not promoted to a browser
 - Tracking-parameter normalization and US/English locale filtering
-- `robots.txt` handling, configurable concurrency, and durable resume queues (Crawlee request-queue behavior for **source-page fetching** is not GeekAPI ingest retry)
+- `robots.txt` handling, configurable concurrency, and a per-run Crawlee request queue. A run is never resumed; a failed run is replaced by a new one (see Resume is forbidden)
 - Cloudflare/challenge, locale, and empty-content rejection before corpus storage
 - Deterministic selector-based extraction into title, excerpt, and clean semantic HTML (`<p>`, `<h2>`, `<li>`, `<table>`) plus the same content as typed blocks
 - Local storage or authenticated GeekAPI ingestion (**no application-level retries** on `pages/batch` / `links/batch` — fail closed; see sibling Rag `plans/rules.md` §3a)
@@ -144,8 +144,6 @@ Then on the home page: enter one seed URL, set max requests / max concurrency, *
 - **Unusable pages are not stored** — Cloudflare/challenge interstitials, locale-excluded final URLs, and extracts carrying too little prose are **rejected** (counters + capped URL samples on the run / seed report). The floor measures prose, not markup, so a page of pure boilerplate cannot clear it. Corpus content is only saved for viable pages.
 - **JavaScript-only pages are out of scope, and so are their links** — a page carrying no prose without JavaScript is reported as `requiresJavascript` under `excludedByPolicy`, beside robots and locale, **not** as a failure: this crawler runs no JavaScript by design, so nothing about such a page is broken. Its links are not enqueued either. There is no browser to promote to, so every URL found on a shell would be fetched and rejected in turn — the crawl would pay for the whole site and store none of it. A shell is a dead end, not a frontier.
 - **Sign in** (nav) is only needed for live SignalR; crawls and reports work without it. Without a token the run page shows `Live updates off — no hub token` and skips the connection entirely — no console errors, no retries. Set `GEEK_USER_ACCESS_TOKEN` in `web/.env.local` to get live status without signing in. See [web/README.md](./web/README.md#live-status-signalr-is-optional)
-- **Resume by URL** on the home page continues a local `.crawlee/<runId>` queue and re-seeds from the same locale-filtered sitemap map (Crawlee skips already-handled URLs)
-- **Resume all running** on the home page re-attaches every local stub still marked `running` (useful after a `serve` restart orphans in-memory workers; skips already in-flight)
 
 If something else owns `:3000`:
 

@@ -33,7 +33,7 @@ import { classifyReject } from './reject.js';
 import { normalizeSeeds } from '../storage/seed-key.js';
 import { htmlHash } from './dedup.js';
 import { clearCancel, isCancelRequested } from './cancel-registry.js';
-import { MAX_PAGES_PER_SITE, clampToSiteCap } from './crawl-limits.js';
+import { clampToSiteCap } from './crawl-limits.js';
 import { createSectionQuota } from './section-quota.js';
 import { crawlProfileFor, sectionQuotasFor } from './crawl-profile.js';
 import { harvestLinks } from './link-harvest.js';
@@ -95,18 +95,6 @@ export async function prepareCheerioCrawl(input: RunCrawlInput): Promise<Prepare
     dataDir: persist.dataDir,
     run: () => executeCheerioCrawl(persist, seeds, input, robots),
   };
-}
-
-/** Resume of failed/incomplete runs is forbidden — start a new run. */
-export async function prepareResumeCheerioCrawl(_input: {
-  runId: string;
-  dataDir: string;
-  maxRequestsPerCrawl?: number;
-  maxConcurrency?: number;
-}): Promise<PreparedCrawl> {
-  throw new Error(
-    'Resume is forbidden under fail-closed policy — start a new crawl run instead',
-  );
 }
 
 export async function runCheerioCrawl(input: RunCrawlInput): Promise<RunCrawlResult> {

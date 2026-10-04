@@ -61,7 +61,7 @@ const SAMPLES = new Map<string, string>([
   [SECTIONS.find((e) => e.name === 'jurisdiction-guides')!.pattern.source, 'country-guides'],
   [SECTIONS.find((e) => e.name === 'tax-reference')!.pattern.source, 'eu-vat-rules'],
   [/^tax-?rates?$/.source, 'taxrates'],
-  [/^(?:state|city|county|local|zip|sales-tax)-rates?$/.source, 'local-rates'],
+  [/^(?:local|zip)-rates?$/.source, 'local-rates'],
   [/^(?:count(?:y|ies)|cities|states|municipalities|districts)$/.source, 'counties'],
   [/^zip-?codes?$/.source, 'zip-codes'],
 ]);
