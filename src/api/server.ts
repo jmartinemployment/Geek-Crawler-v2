@@ -69,6 +69,37 @@ export function createCrawlApiServer(options?: { dataDir?: string; port?: number
    */
   const inFlightSeedKeys = new Map<string, string>();
 
+  /**
+   * Delete a run everywhere: GeekAPI's pages, links and vectors first, then the run directory and
+   * request queue here. The one implementation, used by DELETE /crawls/:runId and by the startup
+   * orphan pass, so the two cannot disagree about what deleting a run means.
+   *
+   * Authority first. GeekAPI owns the pages, links and vectors; if that purge fails the local
+   * record stays and the run is still accounted for. Clearing scratch first would leave rows alive
+   * with nothing on this machine pointing at them. Rejects when GeekAPI's purge fails.
+   */
+  async function deleteRunEverywhere(runId: string) {
+    const result = await createGeekApiClient().deleteRun(runId);
+
+    // The rest of the run's footprint on this machine. `GET /crawls/:runId` reads local meta,
+    // so a run whose rows are gone keeps rendering with its old page count until these go.
+    const localPaths = [path.join(dataDir, 'runs', runId), path.join(dataDir, '.crawlee', runId)];
+    const localRemoved: string[] = [];
+    const localFailed: Array<{ path: string; error: string }> = [];
+    for (const target of localPaths) {
+      try {
+        await rm(target, { recursive: true, force: true });
+        localRemoved.push(target);
+      } catch (err) {
+        localFailed.push({
+          path: target,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    return { ...result, localRemoved, localFailed };
+  }
+
   const server = createServer(async (req, res) => {
     try {
       const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
@@ -247,36 +278,11 @@ export function createCrawlApiServer(options?: { dataDir?: string; port?: number
             runId,
           });
         }
-        // Authority first. GeekAPI owns the pages, links, and vectors; if that purge fails the
-        // local record stays and the run is still accounted for. Clearing scratch first would
-        // leave rows alive with nothing on this machine pointing at them.
-        const result = await createGeekApiClient().deleteRun(runId);
-
-        // The rest of the run's footprint on this machine. `GET /crawls/:runId` reads local meta,
-        // so a run whose rows are gone keeps rendering with its old page count until these go.
-        const localPaths = [
-          path.join(dataDir, 'runs', runId),
-          path.join(dataDir, '.crawlee', runId),
-        ];
-        const localRemoved: string[] = [];
-        const localFailed: Array<{ path: string; error: string }> = [];
-        for (const target of localPaths) {
-          try {
-            await rm(target, { recursive: true, force: true });
-            localRemoved.push(target);
-          } catch (err) {
-            localFailed.push({
-              path: target,
-              error: err instanceof Error ? err.message : String(err),
-            });
-          }
-        }
-
+        const { localFailed, ...result } = await deleteRunEverywhere(runId);
         return send(res, 200, {
           ok: true,
           runId,
           ...result,
-          localRemoved,
           ...(localFailed.length > 0 ? { localFailed } : {}),
         });
       }
@@ -378,9 +384,18 @@ export function createCrawlApiServer(options?: { dataDir?: string; port?: number
       // process owns nothing yet, so inFlight is empty by construction and the
       // staleness window is what separates a dead record from one a concurrent
       // CLI crawl is still writing.
+      // An orphan is an interrupted run, and an interrupted run is deleted (Jeff, 2026-10-05).
       const reconciled = await reconcileOrphanedRuns({
         meta,
         isLive: (runId) => inFlight.has(runId),
+        purge: async (runId) => {
+          const { localFailed } = await deleteRunEverywhere(runId);
+          if (localFailed.length > 0) {
+            throw new Error(
+              `GeekAPI copy deleted, local files remain: ${localFailed.map((f) => f.path).join(', ')}`,
+            );
+          }
+        },
         staleAfterMs: orphanStaleMs,
       });
       if (
@@ -390,10 +405,10 @@ export function createCrawlApiServer(options?: { dataDir?: string; port?: number
       ) {
         if (reconciled.reconciled.length > 0) {
           console.log(
-            `startup: ${reconciled.reconciled.length} orphaned run(s) marked failed`,
+            `startup: ${reconciled.reconciled.length} orphaned run(s) deleted`,
           );
         } else {
-          // Saying "0 orphaned run(s) marked failed" above a list of real
+          // Saying "0 orphaned run(s) deleted" above a list of real
           // problems reads as "nothing happened" and buries the thing that
           // needed attention.
           console.log('startup: orphan check found nothing to correct');

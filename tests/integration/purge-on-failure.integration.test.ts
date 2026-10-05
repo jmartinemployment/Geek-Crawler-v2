@@ -193,31 +193,30 @@ test(
   },
 );
 
-// The regression that cost parseur 180 pages, quickbooks 81 and zoneandco 342 in one minute on
-// 2026-09-30, plus 1,192 more to 5xx on pages/batch. Every error reached archiveAndPurge, so
-// "GeekAPI was not there" destroyed finished crawls. A sink that did not answer for itself is not a
-// judgement about the run, and the pages have to still be there afterwards to be re-posted.
+// An interrupted run is deleted, whatever interrupted it (Jeff, 2026-10-05). From 2026-09-30 a run
+// that failed because GeekAPI was absent was kept "for re-post" instead, but nothing could re-post
+// it, and the run sat `external` on GeekAPI and `running` here. Now a 5xx and a Railway edge 404
+// purge exactly as a determinate refusal does: post-mortem first, then the delete.
 for (const failure of ['unreachable-5xx', 'unreachable-platform-404'] as const) {
   test(
-    `a crawl that failed because GeekAPI was absent (${failure}) keeps its data`,
+    `a crawl that failed because GeekAPI was absent (${failure}) is deleted`,
     { timeout: 120_000 },
     async () => {
       const out = await crawlAgainstFailure(failure);
 
-      assert.equal(out.deleteCalls, 0, 'an absent sink must not cause a purge');
+      assert.equal(out.deleteCalls, 1, 'an interrupted run is purged, exactly once');
 
-      assert.equal(out.failures.length, 1, 'a kept run is still archived, or it is invisible');
+      assert.equal(out.failures.length, 1, 'the post-mortem is what survives');
       const record = out.failures[0]!;
       assert.equal(record.status, 'failed');
       assert.equal(record.runId, RUN_ID);
       assert.match(record.errorSummary ?? '', /links\/batch/);
-      assert.equal(record.purgedAtUtc, null, 'nothing was purged, so there is no purge time');
-      assert.equal(record.purge, null, 'and no purge outcome to misread as a completed purge');
-      assert.ok(record.pagesSaved > 0, 'the pages it did save are what is being kept');
+      assert.equal(record.purge?.crawlDataDeleted, true);
+      assert.ok(record.purgedAtUtc, 'a purged run carries the time it was purged');
 
-      assert.equal(out.runDirExists, true, 'the local run directory must survive for re-posting');
-      assert.equal(out.queueDirExists, true, 'and so must the request queue');
-      assert.ok(out.cacheFiles.length > 0, 'the extract cache survives too');
+      assert.equal(out.runDirExists, false, 'the local run directory must be gone');
+      assert.equal(out.queueDirExists, false, 'the request queue must be gone');
+      assert.ok(out.cacheFiles.length > 0, 'the extract cache survives, as for any purge');
     },
   );
 }

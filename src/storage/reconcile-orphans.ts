@@ -17,11 +17,14 @@ import type { RunStore } from './runs.js';
  * progress - a netsuite run dead for two hours forty minutes was reported as
  * "currently running, 490 pages" on the strength of its record.
  *
- * Marking failed is local only. RunStore.markFailed writes status, summary and
- * a completion timestamp to run.json and nothing else: no GeekAPI call, no
- * purge, no archive. A run that actually succeeded server side keeps its rows
- * there, and this only corrects the local claim. Deleting instead would be
- * worse - the post-mortem is the whole value of keeping the record.
+ * An orphan is an interrupted run, and an interrupted run is deleted (Jeff,
+ * 2026-10-05): its pages, links and vectors on GeekAPI, then its run directory
+ * and request queue here, through the same purge the DELETE route performs.
+ * Until then this only marked the local record failed, which left the GeekAPI
+ * copy behind as a run nobody would ever finish.
+ *
+ * A purge that fails is reported in problems and leaves the record as it was,
+ * so the next startup tries again rather than hiding the run under a status.
  */
 
 /**
@@ -40,8 +43,13 @@ const ACTIVE_STATUSES = ['pending', 'running'] as const;
 type ActiveStatus = (typeof ACTIVE_STATUSES)[number];
 
 export type OrphanReconcileResult = {
-  /** Records corrected from an active status to failed. */
-  reconciled: Array<{ runId: string; previousStatus: ActiveStatus; staleForMs: number }>;
+  /** Orphaned runs deleted, on GeekAPI and locally. */
+  reconciled: Array<{
+    runId: string;
+    previousStatus: ActiveStatus;
+    staleForMs: number;
+    summary: string;
+  }>;
   /** Active in this process, so genuinely running and left alone. */
   skippedLive: string[];
   /** Written too recently to call dead - another process may own it. */
@@ -58,6 +66,8 @@ export async function reconcileOrphanedRuns(input: {
   meta: RunStore;
   /** True when this process is the one crawling that run. */
   isLive: (runId: string) => boolean;
+  /** Deletes the run on GeekAPI and locally. Rejects when the deletion did not happen. */
+  purge: (runId: string) => Promise<void>;
   staleAfterMs?: number;
   now?: number;
 }): Promise<OrphanReconcileResult> {
@@ -110,11 +120,16 @@ export async function reconcileOrphanedRuns(input: {
       `(last write ${lastWrite.toISOString()}, ${minutes} min earlier)`;
 
     try {
-      await input.meta.markFailed(run.runId, summary);
-      result.reconciled.push({ runId: run.runId, previousStatus: run.status, staleForMs });
+      await input.purge(run.runId);
+      result.reconciled.push({
+        runId: run.runId,
+        previousStatus: run.status,
+        staleForMs,
+        summary,
+      });
     } catch (error) {
-      // One unwritable record must not stop the rest being corrected, and must
-      // not be hidden either - it comes back in problems and the caller logs it.
+      // One run that could not be deleted must not stop the rest, and must not
+      // be hidden either - it comes back in problems and the caller logs it.
       result.problems.push({
         runId: run.runId,
         reason: error instanceof Error ? error.message : String(error),
@@ -131,7 +146,7 @@ export function describeReconcileResult(result: OrphanReconcileResult): string[]
   for (const entry of result.reconciled) {
     const minutes = Math.round(entry.staleForMs / 60000);
     lines.push(
-      `  orphan reconciled: ${entry.runId} was ${entry.previousStatus}, unwritten ${minutes} min`,
+      `  orphan deleted: ${entry.runId} was ${entry.previousStatus}, unwritten ${minutes} min`,
     );
   }
   for (const entry of result.problems) {
