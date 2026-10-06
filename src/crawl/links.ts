@@ -38,33 +38,34 @@ export function isSameSite(pageUrl: string, linkUrl: string): boolean {
  *
  * `scopeUrl` anchors the same-site test. Pass the run's seed URL: `pageUrl` is the
  * URL *after* redirects, so anchoring to it lets one off-host redirect move the
- * crawl boundary and the BFS adopts the new host. Defaults to `pageUrl` for
- * callers that have no seed to hand.
+ * crawl boundary and the BFS adopts the new host. Required: until 2026-10-06 a
+ * missing or unparseable scope quietly became `pageUrl`, which is that drift.
+ * An unparseable page or scope yields no links, and says so.
  */
 export function extractHrefs(
   $: CheerioLike,
   pageUrl: string,
-  scopeUrl?: string,
+  scopeUrl: string,
 ): ExtractedLink[] {
-  let pageOriginOk = false;
-  try {
-    void new URL(pageUrl).origin;
-    pageOriginOk = true;
-  } catch {
-    return [];
-  }
-  if (!pageOriginOk) return [];
-
-  // Anchor scope to the seed when given; fall back to the page itself.
-  let scope = pageUrl;
-  if (scopeUrl) {
+  for (const [name, value] of [
+    ['page', pageUrl],
+    ['scope', scopeUrl],
+  ] as const) {
     try {
-      void new URL(scopeUrl).origin;
-      scope = scopeUrl;
+      void new URL(value).origin;
     } catch {
-      scope = pageUrl;
+      console.error(
+        JSON.stringify({
+          code: 'LINK_EXTRACT_UNPARSEABLE_URL',
+          which: name,
+          url: value.slice(0, 2000),
+          pageUrl: pageUrl.slice(0, 2000),
+        }),
+      );
+      return [];
     }
   }
+  const scope = scopeUrl;
 
   const seen = new Set<string>();
   const out: ExtractedLink[] = [];

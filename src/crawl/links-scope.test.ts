@@ -44,15 +44,6 @@ describe('crawl scope anchoring', () => {
     assert.equal(sameOriginUrls(links).length, 0, 'off-seed links must not enqueue');
   });
 
-  it('without a scope it adopts the landing host — the old behaviour', () => {
-    const landed = 'https://www.forbesindia.com/article/x';
-    const links = extractHrefs(
-      fakeCheerio(['https://www.forbesindia.com/article/y']),
-      landed,
-    );
-    assert.equal(sameOriginUrls(links).length, 1, 'documents the drift this fixes');
-  });
-
   it('still follows the seed host, and tolerates www redirects', () => {
     const links = extractHrefs(
       fakeCheerio(['https://www.leadsquared.com/us/sales/']),
@@ -63,12 +54,12 @@ describe('crawl scope anchoring', () => {
     assert.equal(isSameSite('https://make.com/a', 'https://www.make.com/b'), true);
   });
 
-  it('falls back to pageUrl when scopeUrl is unparseable', () => {
+  it('yields no links when the scope is unparseable, rather than adopting the page host', () => {
     const links = extractHrefs(
       fakeCheerio(['https://n8n.io/b']),
       'https://n8n.io/a',
       'not-a-url',
     );
-    assert.equal(sameOriginUrls(links).length, 1);
+    assert.equal(links.length, 0);
   });
 });
