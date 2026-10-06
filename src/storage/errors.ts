@@ -32,6 +32,43 @@ export class PersistenceError extends Error {
   }
 }
 
+/**
+ * A transport error with its causes, outermost first.
+ *
+ * fetch rejects with "fetch failed" and puts the reason in cause: the socket the
+ * other side closed, a reset, a refused connection, a DNS miss, a timeout. Keeping
+ * only the message left every post-mortem of the 2026-10-05 failures reading
+ * "fetch failed", which names no cause at all. Each level contributes its message
+ * and its code when it has one; an AggregateError (several addresses tried)
+ * contributes each of its errors.
+ */
+export function describeTransportError(err: unknown): string {
+  const parts: string[] = [];
+  const seen = new Set<unknown>();
+  let current: unknown = err;
+  while (current !== undefined && current !== null && !seen.has(current) && parts.length < 6) {
+    seen.add(current);
+    if (current instanceof Error) {
+      const code = (current as { code?: unknown }).code;
+      const message = current.message;
+      const label = typeof code === 'string' && !message.includes(code)
+        ? (message ? `${message} (${code})` : code)
+        : message;
+      if (current instanceof AggregateError && current.errors.length > 0) {
+        const inner = current.errors.map((e) => describeTransportError(e)).join(' | ');
+        parts.push(label ? `${label}: ${inner}` : inner);
+      } else if (label) {
+        parts.push(label);
+      }
+      current = current.cause;
+    } else {
+      parts.push(String(current));
+      current = undefined;
+    }
+  }
+  return parts.length > 0 ? parts.join('; caused by: ') : String(err);
+}
+
 /** Whether a caught error means "the sink was not there", rather than "the sink said no". */
 export function isUnreachable(err: unknown): boolean {
   if (err instanceof PersistenceError) return err.unreachable;

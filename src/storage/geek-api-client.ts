@@ -4,7 +4,7 @@
  */
 
 import type { Block } from '../crawl/extract-content.js';
-import { ConfigError, PersistenceError } from './errors.js';
+import { ConfigError, PersistenceError, describeTransportError } from './errors.js';
 import {
   MAX_BATCH_BODY_BYTES,
   MAX_LINKS_PER_BATCH,
@@ -256,7 +256,7 @@ export class GeekApiClient {
     } catch (err) {
       return {
         kind: 'unknown',
-        reason: `transport: ${err instanceof Error ? err.message : String(err)}`,
+        reason: `transport: ${describeTransportError(err)}`,
       };
     }
     if (res.ok) {
@@ -294,7 +294,8 @@ export class GeekApiClient {
         body: payload,
       });
     } catch (err) {
-      const detail = err instanceof Error ? err.message : String(err);
+      // The cause chain, not the message: the message is "fetch failed" whatever happened.
+      const detail = describeTransportError(err);
       // Never reached the sink at all. Says nothing about the run.
       throw new PersistenceError(`${method} ${path} → transport: ${detail.slice(0, 500)}`, {
         cause: err,

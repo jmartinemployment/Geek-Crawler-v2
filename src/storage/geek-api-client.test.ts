@@ -556,3 +556,30 @@ test('runPresence carries the run status GeekAPI reports', async () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });
+
+// 2026-10-05: thirty runs failed on GeekAPI writes and every post-mortem read
+// "fetch failed". The reason was in err.cause and was dropped.
+test('a dropped connection names its cause in the persistence error', async () => {
+  const server = createServer((req) => {
+    req.socket.destroy();
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  assert(address && typeof address !== 'string');
+  const client = new GeekApiClient(`http://127.0.0.1:${address.port}`, 'test-key', 'test-user');
+
+  try {
+    await assert.rejects(
+      client.patchRun('11111111-2222-4333-8444-555555555555', { status: 'running' }),
+      (err: unknown) => {
+        assert(err instanceof PersistenceError);
+        assert.equal(err.unreachable, true);
+        assert.match(err.message, /transport: fetch failed; caused by: .+/);
+        assert.match(err.message, /other side closed|ECONNRESET|socket/i);
+        return true;
+      },
+    );
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
