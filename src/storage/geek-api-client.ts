@@ -103,13 +103,14 @@ export type CrawlReport = {
 };
 
 /**
- * present  GeekAPI answered and has the run.
+ * present  GeekAPI answered and has the run. status is the run status it
+ *          reported, or null when the 200 body carried none.
  * absent   GeekAPI answered 404 - a newer crawl of this seed replaced it, or it
  *          was deleted. The only state that justifies removing local data.
  * unknown  No answer worth acting on. Never delete on this.
  */
 export type RunPresence =
-  | { kind: 'present' }
+  | { kind: 'present'; status: string | null }
   | { kind: 'absent' }
   | { kind: 'unknown'; reason: string };
 
@@ -258,7 +259,22 @@ export class GeekApiClient {
         reason: `transport: ${err instanceof Error ? err.message : String(err)}`,
       };
     }
-    if (res.ok) return { kind: 'present' };
+    if (res.ok) {
+      // The status rides along because the orphan pass must not delete a run
+      // GeekAPI shows complete. A body without one is still presence, but the
+      // status is unknown and says so.
+      let status: string | null = null;
+      try {
+        const body = (await res.json()) as unknown;
+        if (typeof body === 'object' && body !== null) {
+          const value = (body as Record<string, unknown>).status;
+          if (typeof value === 'string') status = value;
+        }
+      } catch {
+        status = null;
+      }
+      return { kind: 'present', status };
+    }
     if (res.status === 404) return await classify404(res);
     return { kind: 'unknown', reason: `HTTP ${res.status}` };
   }

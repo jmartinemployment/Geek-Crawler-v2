@@ -528,3 +528,31 @@ test('a ProblemDetails 400 is determinate and still purges', async () => {
   );
   assert.equal(err.unreachable, false);
 });
+
+// The orphan pass decides whether to delete a run on this status, so the status
+// GeekAPI sent has to arrive intact, and a body without one has to say so.
+test('runPresence carries the run status GeekAPI reports', async () => {
+  const bodies: Record<string, string> = {
+    '/api/geek-crawler/crawls/complete-run': JSON.stringify({ runId: 'complete-run', status: 'complete' }),
+    '/api/geek-crawler/crawls/external-run': JSON.stringify({ runId: 'external-run', status: 'external' }),
+    '/api/geek-crawler/crawls/no-status-run': JSON.stringify({ runId: 'no-status-run' }),
+    '/api/geek-crawler/crawls/garbled-run': 'not json',
+  };
+  const server = createServer((req, res) => {
+    res.setHeader('content-type', 'application/json');
+    res.end(bodies[req.url ?? ''] ?? '{}');
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  assert(address && typeof address !== 'string');
+  const client = new GeekApiClient(`http://127.0.0.1:${address.port}`, 'test-key', 'test-user');
+
+  try {
+    assert.deepEqual(await client.runPresence('complete-run'), { kind: 'present', status: 'complete' });
+    assert.deepEqual(await client.runPresence('external-run'), { kind: 'present', status: 'external' });
+    assert.deepEqual(await client.runPresence('no-status-run'), { kind: 'present', status: null });
+    assert.deepEqual(await client.runPresence('garbled-run'), { kind: 'present', status: null });
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});

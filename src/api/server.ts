@@ -385,9 +385,12 @@ export function createCrawlApiServer(options?: { dataDir?: string; port?: number
       // staleness window is what separates a dead record from one a concurrent
       // CLI crawl is still writing.
       // An orphan is an interrupted run, and an interrupted run is deleted (Jeff, 2026-10-05).
+      // GeekAPI is asked first: a run it shows complete is finished, whatever run.json says.
+      const orphanClient = createGeekApiClient();
       const reconciled = await reconcileOrphanedRuns({
         meta,
         isLive: (runId) => inFlight.has(runId),
+        presence: (runId) => orphanClient.runPresence(runId),
         purge: async (runId) => {
           const { localFailed } = await deleteRunEverywhere(runId);
           if (localFailed.length > 0) {
@@ -401,7 +404,9 @@ export function createCrawlApiServer(options?: { dataDir?: string; port?: number
       if (
         reconciled.reconciled.length > 0 ||
         reconciled.problems.length > 0 ||
-        reconciled.skippedRecent.length > 0
+        reconciled.skippedRecent.length > 0 ||
+        reconciled.skippedComplete.length > 0 ||
+        reconciled.unknown.length > 0
       ) {
         if (reconciled.reconciled.length > 0) {
           console.log(

@@ -21,8 +21,13 @@ type FakeRun = {
 
 function fakeStore(
   runs: FakeRun[],
-  options?: { failWriteFor?: string },
-): { store: RunStore; purged: Set<string>; purge: (runId: string) => Promise<void> } {
+  options?: { failWriteFor?: string; presenceFor?: Record<string, RunPresence> },
+): {
+  store: RunStore;
+  purged: Set<string>;
+  purge: (runId: string) => Promise<void>;
+  presence: (runId: string) => Promise<RunPresence>;
+} {
   const purged = new Set<string>();
   const store = {
     async listRuns(): Promise<CrawlRunMeta[]> {
@@ -47,17 +52,21 @@ function fakeStore(
     if (options?.failWriteFor === runId) throw new Error('GeekAPI unreachable');
     purged.add(runId);
   };
-  return { store, purged, purge };
+  // Stands in for GeekAPI. A run it was not told about is still running there,
+  // which is what an interrupted crawl looks like from GeekAPI's side.
+  const presence = async (runId: string): Promise<RunPresence> =>
+    options?.presenceFor?.[runId] ?? { kind: 'present', status: 'running' };
+  return { store, purged, purge, presence };
 }
 
 const noneLive = () => false;
 
 test('a stale running run is deleted and says why', async () => {
-  const { store, purged, purge } = fakeStore([
+  const { store, purged, purge, presence } = fakeStore([
     { runId: 'stale-1', status: 'running', writtenMinutesAgo: 176 },
   ]);
 
-  const result = await reconcileOrphanedRuns({ meta: store, purge, isLive: noneLive, now: NOW });
+  const result = await reconcileOrphanedRuns({ meta: store, purge, presence, isLive: noneLive, now: NOW });
 
   assert.equal(result.reconciled.length, 1);
   assert.equal(result.reconciled[0]!.runId, 'stale-1');
@@ -75,12 +84,12 @@ test('a stale running run is deleted and says why', async () => {
 test('a recently written run is left alone', async () => {
   // A live crawl rewrites its record constantly. Zero minutes stale is the
   // shape every genuinely running crawl had when this was measured.
-  const { store, purged, purge } = fakeStore([
+  const { store, purged, purge, presence } = fakeStore([
     { runId: 'fresh', status: 'running', writtenMinutesAgo: 0 },
     { runId: 'just-inside', status: 'running', writtenMinutesAgo: 14 },
   ]);
 
-  const result = await reconcileOrphanedRuns({ meta: store, purge, isLive: noneLive, now: NOW });
+  const result = await reconcileOrphanedRuns({ meta: store, purge, presence, isLive: noneLive, now: NOW });
 
   assert.deepEqual(result.reconciled, []);
   assert.deepEqual(result.skippedRecent.sort(), ['fresh', 'just-inside']);
@@ -88,13 +97,14 @@ test('a recently written run is left alone', async () => {
 });
 
 test('a run this process is crawling is never touched, however stale the file', async () => {
-  const { store, purged, purge } = fakeStore([
+  const { store, purged, purge, presence } = fakeStore([
     { runId: 'mine', status: 'running', writtenMinutesAgo: 9999 },
   ]);
 
   const result = await reconcileOrphanedRuns({
     meta: store,
     purge,
+    presence,
     isLive: (runId) => runId === 'mine',
     now: NOW,
   });
@@ -105,13 +115,13 @@ test('a run this process is crawling is never touched, however stale the file', 
 });
 
 test('terminal statuses are not rewritten', async () => {
-  const { store, purged, purge } = fakeStore([
+  const { store, purged, purge, presence } = fakeStore([
     { runId: 'done', status: 'complete', writtenMinutesAgo: 9999 },
     { runId: 'dead', status: 'failed', writtenMinutesAgo: 9999 },
     { runId: 'stopped', status: 'cancelled', writtenMinutesAgo: 9999 },
   ]);
 
-  const result = await reconcileOrphanedRuns({ meta: store, purge, isLive: noneLive, now: NOW });
+  const result = await reconcileOrphanedRuns({ meta: store, purge, presence, isLive: noneLive, now: NOW });
 
   assert.deepEqual(result.reconciled, []);
   assert.equal(purged.size, 0);
@@ -120,11 +130,11 @@ test('terminal statuses are not rewritten', async () => {
 test('pending counts as abandoned too', async () => {
   // A process that died between createRun and markRunning leaves pending set
   // forever, and nothing else ever clears it.
-  const { store, purged, purge } = fakeStore([
+  const { store, purged, purge, presence } = fakeStore([
     { runId: 'never-started', status: 'pending', writtenMinutesAgo: 6295 },
   ]);
 
-  const result = await reconcileOrphanedRuns({ meta: store, purge, isLive: noneLive, now: NOW });
+  const result = await reconcileOrphanedRuns({ meta: store, purge, presence, isLive: noneLive, now: NOW });
 
   assert.equal(result.reconciled.length, 1);
   assert.equal(result.reconciled[0]!.previousStatus, 'pending');
@@ -133,11 +143,11 @@ test('pending counts as abandoned too', async () => {
 });
 
 test('an unreadable record is reported, not assumed dead', async () => {
-  const { store, purged, purge } = fakeStore([
+  const { store, purged, purge, presence } = fakeStore([
     { runId: 'no-stamp', status: 'running', writtenMinutesAgo: null },
   ]);
 
-  const result = await reconcileOrphanedRuns({ meta: store, purge, isLive: noneLive, now: NOW });
+  const result = await reconcileOrphanedRuns({ meta: store, purge, presence, isLive: noneLive, now: NOW });
 
   assert.deepEqual(result.reconciled, []);
   assert.equal(purged.size, 0);
@@ -147,7 +157,7 @@ test('an unreadable record is reported, not assumed dead', async () => {
 });
 
 test('one run that cannot be deleted does not stop the others', async () => {
-  const { store, purged, purge } = fakeStore(
+  const { store, purged, purge, presence } = fakeStore(
     [
       { runId: 'a', status: 'running', writtenMinutesAgo: 200 },
       { runId: 'b', status: 'running', writtenMinutesAgo: 200 },
@@ -156,7 +166,7 @@ test('one run that cannot be deleted does not stop the others', async () => {
     { failWriteFor: 'b' },
   );
 
-  const result = await reconcileOrphanedRuns({ meta: store, purge, isLive: noneLive, now: NOW });
+  const result = await reconcileOrphanedRuns({ meta: store, purge, presence, isLive: noneLive, now: NOW });
 
   assert.deepEqual(
     result.reconciled.map((r) => r.runId),
@@ -182,11 +192,12 @@ test('the 2026-09-28 shape: two dead waves, live runs untouched', async () => {
   }
 
   const live = new Set(runs.filter((r) => r.writtenMinutesAgo === 0).map((r) => r.runId));
-  const { store, purged, purge } = fakeStore(runs);
+  const { store, purged, purge, presence } = fakeStore(runs);
 
   const result = await reconcileOrphanedRuns({
     meta: store,
     purge,
+    presence,
     isLive: (runId) => live.has(runId),
     now: NOW,
   });
@@ -206,20 +217,116 @@ test('the default window sits between a live write cadence and a dead run', asyn
 });
 
 test('the summary lines name each corrected run', async () => {
-  const { store, purge } = fakeStore([
+  const { store, purge, presence } = fakeStore([
     { runId: 'stale-1', status: 'running', writtenMinutesAgo: 200 },
     { runId: 'no-stamp', status: 'running', writtenMinutesAgo: null },
     { runId: 'fresh', status: 'running', writtenMinutesAgo: 1 },
   ]);
 
   const lines = describeReconcileResult(
-    await reconcileOrphanedRuns({ meta: store, purge, isLive: noneLive, now: NOW }),
+    await reconcileOrphanedRuns({ meta: store, purge, presence, isLive: noneLive, now: NOW }),
   );
 
   assert.equal(lines.length, 3);
   assert.match(lines[0]!, /orphan deleted: stale-1 was running, unwritten 200 min/);
   assert.match(lines[1]!, /orphan check problem: no-stamp - no run.json timestamp/);
   assert.match(lines[2]!, /left alone, written recently: 1 run\(s\)/);
+});
+
+test('the 2026-10-06 shape: a run GeekAPI shows complete survives a stale running record', async () => {
+  // ramp.com 4563f7ec was completed by hand: GeekAPI holds it complete while
+  // run.json still says running. Thirty runs from 2026-10-05 GeekAPI holds as
+  // external, never finished, and those are what the pass exists to remove.
+  const runs: FakeRun[] = [{ runId: 'ramp', status: 'running', writtenMinutesAgo: 900 }];
+  const presenceFor: Record<string, RunPresence> = {
+    ramp: { kind: 'present', status: 'complete' },
+  };
+  for (let i = 0; i < 30; i += 1) {
+    runs.push({ runId: `external-${i}`, status: 'running', writtenMinutesAgo: 1500 });
+    presenceFor[`external-${i}`] = { kind: 'present', status: 'external' };
+  }
+  const { store, purged, purge, presence } = fakeStore(runs, { presenceFor });
+
+  const result = await reconcileOrphanedRuns({ meta: store, purge, presence, isLive: noneLive, now: NOW });
+
+  assert.equal(purged.has('ramp'), false, 'a complete run on GeekAPI is never purged');
+  assert.deepEqual(result.skippedComplete, ['ramp']);
+  assert.equal(result.reconciled.length, 30);
+  assert.equal(purged.size, 30);
+});
+
+test('no usable answer from GeekAPI deletes nothing', async () => {
+  const { store, purged, purge, presence } = fakeStore(
+    [
+      { runId: 'unreachable', status: 'running', writtenMinutesAgo: 200 },
+      { runId: 'no-status', status: 'running', writtenMinutesAgo: 200 },
+    ],
+    {
+      presenceFor: {
+        unreachable: { kind: 'unknown', reason: 'transport: fetch failed' },
+        'no-status': { kind: 'present', status: null },
+      },
+    },
+  );
+
+  const result = await reconcileOrphanedRuns({ meta: store, purge, presence, isLive: noneLive, now: NOW });
+
+  assert.equal(purged.size, 0);
+  assert.deepEqual(result.reconciled, []);
+  assert.deepEqual(result.unknown, [
+    { runId: 'unreachable', reason: 'transport: fetch failed' },
+    { runId: 'no-status', reason: 'GeekAPI answered without a run status' },
+  ]);
+});
+
+test('a lookup that throws is a problem, not a deletion', async () => {
+  const { store, purged, purge } = fakeStore([
+    { runId: 'throws', status: 'running', writtenMinutesAgo: 200 },
+  ]);
+
+  const result = await reconcileOrphanedRuns({
+    meta: store,
+    purge,
+    presence: async () => {
+      throw new Error('lookup exploded');
+    },
+    isLive: noneLive,
+    now: NOW,
+  });
+
+  assert.equal(purged.size, 0);
+  assert.deepEqual(result.problems, [{ runId: 'throws', reason: 'lookup exploded' }]);
+});
+
+test('GeekAPI is not asked about a run written recently', async () => {
+  const asked: string[] = [];
+  const { store, purge } = fakeStore([{ runId: 'fresh', status: 'running', writtenMinutesAgo: 1 }]);
+
+  await reconcileOrphanedRuns({
+    meta: store,
+    purge,
+    presence: async (runId) => {
+      asked.push(runId);
+      return { kind: 'present', status: 'running' };
+    },
+    isLive: noneLive,
+    now: NOW,
+  });
+
+  assert.deepEqual(asked, []);
+});
+
+test('the summary names a run left alone because GeekAPI shows it complete', async () => {
+  const { store, purge, presence } = fakeStore(
+    [{ runId: 'ramp', status: 'running', writtenMinutesAgo: 900 }],
+    { presenceFor: { ramp: { kind: 'present', status: 'complete' } } },
+  );
+
+  const lines = describeReconcileResult(
+    await reconcileOrphanedRuns({ meta: store, purge, presence, isLive: noneLive, now: NOW }),
+  );
+
+  assert.deepEqual(lines, ['  left alone, complete on GeekAPI: ramp (local record says running)']);
 });
 
 // --- superseded runs: completed locally, gone from GeekAPI ---
@@ -310,7 +417,7 @@ test('runs GeekAPI still holds are kept', async () => {
   const result = await reconcileSupersededRuns({
     meta: store,
     isLive: () => false,
-    presence: async () => ({ kind: 'present' }),
+    presence: async () => ({ kind: 'present', status: 'complete' }),
     remove: async (runId) => {
       removed.push(runId);
     },
@@ -367,7 +474,7 @@ test('the 2026-09-29 shape: 42 superseded, 12 held', async () => {
   const presence: PresenceMap = {};
   for (const r of runs) presence[r.runId] = r.runId.startsWith('old-')
     ? { kind: 'absent' }
-    : { kind: 'present' };
+    : { kind: 'present', status: 'complete' };
 
   const { store, removed } = supersededStore(runs);
   const result = await reconcileSupersededRuns({

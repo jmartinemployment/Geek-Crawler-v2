@@ -25,6 +25,13 @@ import type { RunStore } from './runs.js';
  *
  * A purge that fails is reported in problems and leaves the record as it was,
  * so the next startup tries again rather than hiding the run under a status.
+ *
+ * GeekAPI is asked before anything is deleted, because the local record is not
+ * the authority on whether a run finished. ramp.com 4563f7ec was completed by
+ * hand on 2026-10-06: published in GeekAPI as complete while its run.json still
+ * said running, so a stale running record alone would have purged a finished
+ * corpus. A run GeekAPI shows complete is left alone. So is a run GeekAPI gave
+ * no usable answer about, because deletion requires an answer.
  */
 
 /**
@@ -54,6 +61,10 @@ export type OrphanReconcileResult = {
   skippedLive: string[];
   /** Written too recently to call dead - another process may own it. */
   skippedRecent: string[];
+  /** GeekAPI shows the run complete, so it is finished, not interrupted. */
+  skippedComplete: string[];
+  /** GeekAPI gave no usable answer. Left alone, because deletion requires one. */
+  unknown: Array<{ runId: string; reason: string }>;
   /** Could not be read or could not be written. Reported, never swallowed. */
   problems: Array<{ runId: string; reason: string }>;
 };
@@ -66,6 +77,8 @@ export async function reconcileOrphanedRuns(input: {
   meta: RunStore;
   /** True when this process is the one crawling that run. */
   isLive: (runId: string) => boolean;
+  /** What GeekAPI holds for the run, asked before any deletion. */
+  presence: (runId: string) => Promise<RunPresence>;
   /** Deletes the run on GeekAPI and locally. Rejects when the deletion did not happen. */
   purge: (runId: string) => Promise<void>;
   staleAfterMs?: number;
@@ -78,6 +91,8 @@ export async function reconcileOrphanedRuns(input: {
     reconciled: [],
     skippedLive: [],
     skippedRecent: [],
+    skippedComplete: [],
+    unknown: [],
     problems: [],
   };
 
@@ -114,6 +129,31 @@ export async function reconcileOrphanedRuns(input: {
       continue;
     }
 
+    let presence: RunPresence;
+    try {
+      presence = await input.presence(run.runId);
+    } catch (error) {
+      result.problems.push({
+        runId: run.runId,
+        reason: error instanceof Error ? error.message : String(error),
+      });
+      continue;
+    }
+    if (presence.kind === 'unknown') {
+      result.unknown.push({ runId: run.runId, reason: presence.reason });
+      continue;
+    }
+    if (presence.kind === 'present') {
+      if (presence.status === null) {
+        result.unknown.push({ runId: run.runId, reason: 'GeekAPI answered without a run status' });
+        continue;
+      }
+      if (presence.status === 'complete') {
+        result.skippedComplete.push(run.runId);
+        continue;
+      }
+    }
+
     const minutes = Math.round(staleForMs / 60000);
     const summary =
       `orphaned: status ${run.status} with no writer at API startup ` +
@@ -148,6 +188,12 @@ export function describeReconcileResult(result: OrphanReconcileResult): string[]
     lines.push(
       `  orphan deleted: ${entry.runId} was ${entry.previousStatus}, unwritten ${minutes} min`,
     );
+  }
+  for (const runId of result.skippedComplete) {
+    lines.push(`  left alone, complete on GeekAPI: ${runId} (local record says running)`);
+  }
+  for (const entry of result.unknown) {
+    lines.push(`  left alone, no answer from GeekAPI: ${entry.runId} - ${entry.reason}`);
   }
   for (const entry of result.problems) {
     lines.push(`  orphan check problem: ${entry.runId} - ${entry.reason}`);
