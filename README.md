@@ -278,8 +278,9 @@ backfill timestamp.
 
 Without those env vars, nothing leaves the machine, but note what local mode
 actually keeps: run stubs and counters under `DATA_DIR/runs/`, the Crawlee
-request queue under `DATA_DIR/.crawlee/<runId>/`, and post-mortems under
-`DATA_DIR/failures/`. **Page bodies are not written locally.** The body store
+request queue under `DATA_DIR/.crawlee/<runId>/`, post-mortems under
+`DATA_DIR/failures/`, and each run's log lines under `DATA_DIR/logs/<runId>.log`.
+**Page bodies are not written locally.** The body store
 exists (`src/storage/raw-body.ts`, `put` for the raw wire HTML and
 `putContentHtml` for the clean fragment) but nothing calls it, and
 `CrawlPageMeta.bodyKey` / `contentBodyKey` are set by nothing. Local mode is a
@@ -417,6 +418,11 @@ to remove. It is written **before** anything is destroyed: if the
 archive cannot be written, the purge does not run. Nothing reads this directory
 to decide what to crawl, resume, or dedup, so it is diagnostics and never crawl
 authority.
+
+The run's own log lines land at `DATA_DIR/logs/<runId>.log`, outside the run
+directory, so the purge leaves them. Every line the run causes goes there as
+well as to the terminal, Crawlee's own lines included, and each concurrent run
+keeps only its own (`src/crawl/run-log.ts`). Nothing removes these files.
 
 Read it at `http://localhost:3000/runs` under **Purged Runs**, or from the API:
 

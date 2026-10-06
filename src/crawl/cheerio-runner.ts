@@ -37,6 +37,7 @@ import { clampToSiteCap } from './crawl-limits.js';
 import { createSectionQuota } from './section-quota.js';
 import { crawlProfileFor, sectionQuotasFor } from './crawl-profile.js';
 import { harvestLinks } from './link-harvest.js';
+import { withRunLog } from './run-log.js';
 
 export type RunCrawlInput = {
   crawlType: CrawlType;
@@ -92,7 +93,11 @@ export async function prepareCheerioCrawl(input: RunCrawlInput): Promise<Prepare
     runId: persist.runId,
     persistMode: persist.mode,
     dataDir: persist.dataDir,
-    run: () => executeCheerioCrawl(persist, seeds, input, robots),
+    // Inside the run log, so every line the crawl causes is kept on disk, serve or CLI alike.
+    run: () =>
+      withRunLog(persist.dataDir, persist.runId, () =>
+        executeCheerioCrawl(persist, seeds, input, robots),
+      ),
   };
 }
 

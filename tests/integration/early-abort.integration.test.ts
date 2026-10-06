@@ -13,11 +13,12 @@
 
 import assert from 'node:assert/strict';
 import { createServer, type Server } from 'node:http';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { access, mkdtemp, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { startCrawl } from '../../src/crawl/orchestrator.js';
+import { runLogPath } from '../../src/crawl/run-log.js';
 import { listFailures } from '../../src/storage/failure-archive.js';
 
 const RUN_ID = '11111111-2222-4333-8444-555555555555';
@@ -170,7 +171,19 @@ async function crawlBarrenSite(mode: Mode) {
       maxConcurrency: 1,
     });
     const failures = await listFailures(dataDir);
-    return { result, failures, pageFetches: site.pageFetches(), pageWrites: geek.pageWrites() };
+    const runLog = await readFile(runLogPath(dataDir, result.runId), 'utf8');
+    const runDirSurvived = await access(path.join(dataDir, 'runs', result.runId)).then(
+      () => true,
+      () => false,
+    );
+    return {
+      result,
+      failures,
+      runLog,
+      runDirSurvived,
+      pageFetches: site.pageFetches(),
+      pageWrites: geek.pageWrites(),
+    };
   } finally {
     process.env.GEEK_API_URL = old.url;
     process.env.GEEK_BACKEND_API_KEY = old.key;
@@ -185,10 +198,11 @@ test(
   'a JavaScript site that does not announce itself is abandoned, not crawled out',
   { timeout: 120_000 },
   async () => {
-    const { result, failures, pageFetches, pageWrites } = await crawlBarrenSite(() => ({
-      status: 200,
-      body: QUIET_SHELL,
-    }));
+    const { result, failures, runLog, runDirSurvived, pageFetches, pageWrites } =
+      await crawlBarrenSite(() => ({
+        status: 200,
+        body: QUIET_SHELL,
+      }));
 
     assert.equal(result.pagesSaved, 0, 'nothing from a JavaScript-only site may be stored');
     assert.equal(pageWrites, 0, 'and nothing may reach GeekAPI');
@@ -203,6 +217,12 @@ test(
     assert.equal(failures.length, 1, 'the post-mortem is what survives');
     assert.match(failures[0]!.errorSummary ?? '', /Nothing extractable after/);
     assert.match(failures[0]!.errorSummary ?? '', /carried no prose/);
+
+    // The run is purged, and its log is not: the log is most needed for the runs
+    // that get deleted.
+    assert.equal(runDirSurvived, false, 'the failed run was purged');
+    assert.match(runLog, /Starting crawl with \d+ URL/);
+    assert.match(runLog, /Nothing extractable after/);
   },
 );
 
