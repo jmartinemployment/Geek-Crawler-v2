@@ -61,6 +61,16 @@ export type RunCrawlResult = {
   persistMode: string;
 };
 
+/** A run that was created and then failed before crawling, with the cause. Not thrown: returned. */
+export type PrepareFailure = {
+  runId: string;
+  failure: string;
+};
+
+export function isPrepareFailure<T extends object>(value: T | PrepareFailure): value is PrepareFailure {
+  return 'failure' in value;
+}
+
 export type PreparedCrawl = {
   runId: string;
   persistMode: string;
@@ -68,7 +78,9 @@ export type PreparedCrawl = {
   run: () => Promise<RunCrawlResult>;
 };
 
-export async function prepareCheerioCrawl(input: RunCrawlInput): Promise<PreparedCrawl> {
+export async function prepareCheerioCrawl(
+  input: RunCrawlInput,
+): Promise<PreparedCrawl | PrepareFailure> {
   const seeds = normalizeSeeds(input.seeds);
   if (seeds.length === 0) throw new Error('No valid seed URLs');
 
@@ -97,7 +109,7 @@ export async function prepareCheerioCrawl(input: RunCrawlInput): Promise<Prepare
     console.error(reason);
     await persist.markFailed(reason);
     await persist.archiveAndPurge('failed', reason);
-    throw new Error(reason);
+    return { runId: persist.runId, failure: reason };
   }
   const runLog = opened.log;
 
@@ -110,8 +122,11 @@ export async function prepareCheerioCrawl(input: RunCrawlInput): Promise<Prepare
   };
 }
 
-export async function runCheerioCrawl(input: RunCrawlInput): Promise<RunCrawlResult> {
+export async function runCheerioCrawl(
+  input: RunCrawlInput,
+): Promise<RunCrawlResult | PrepareFailure> {
   const prepared = await prepareCheerioCrawl(input);
+  if (isPrepareFailure(prepared)) return prepared;
   return prepared.run();
 }
 

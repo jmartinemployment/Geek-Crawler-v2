@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { readdir, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
-import { prepareCrawl, startCrawl } from '../crawl/orchestrator.js';
+import { isPrepareFailure, prepareCrawl, startCrawl } from '../crawl/orchestrator.js';
 import { CRAWL_TYPE_VALUES } from '../crawl/types.js';
 import { createGeekApiClient, requireGeekApiEnv } from '../storage/geek-api-client.js';
 import { requestCancel } from '../crawl/cancel-registry.js';
@@ -171,6 +171,9 @@ export function createCrawlApiServer(options?: { dataDir?: string; port?: number
               maxRequestsPerCrawl,
               maxConcurrency,
             });
+            if (isPrepareFailure(result)) {
+              return send(res, 500, { error: result.failure, runId: result.runId });
+            }
             return send(res, 200, {
               ok: true,
               runId: result.runId,
@@ -201,6 +204,11 @@ export function createCrawlApiServer(options?: { dataDir?: string; port?: number
           // Nothing was started, so the seed must not stay claimed.
           inFlightSeedKeys.delete(seedKey);
           throw err;
+        }
+        if (isPrepareFailure(prepared)) {
+          // Created, failed and purged before crawling. Nothing holds the seed.
+          inFlightSeedKeys.delete(seedKey);
+          return send(res, 500, { error: prepared.failure, runId: prepared.runId });
         }
         inFlightSeedKeys.set(seedKey, prepared.runId);
 

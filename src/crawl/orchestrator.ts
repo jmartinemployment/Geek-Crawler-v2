@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { prepareCheerioCrawl, runCheerioCrawl } from './cheerio-runner.js';
+export { isPrepareFailure, type PrepareFailure } from './cheerio-runner.js';
 import { parseCrawlType, type CrawlType } from './types.js';
 import { requireGeekApiEnv } from '../storage/geek-api-client.js';
 

@@ -4,7 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { startCrawl } from '../../src/crawl/orchestrator.js';
+import { isPrepareFailure, startCrawl } from '../../src/crawl/orchestrator.js';
 import { startFixtureSite } from '../fixtures/site.js';
 
 async function startMockGeekApi(): Promise<{
@@ -94,6 +94,7 @@ test('cheerio-only crawl persists via GeekAPI with retries disabled', { timeout:
       maxConcurrency: 1,
     });
 
+    assert(!isPrepareFailure(result), 'the run must get past preparation');
     assert.equal(result.persistMode, 'api');
     assert.ok(result.pagesSaved >= 1);
     assert.ok(geek.pageWrites() >= 1);

@@ -4,7 +4,7 @@ loadEnv();
 loadEnv({ path: '.env.local', override: true });
 import path from 'node:path';
 import { createCrawlApiServer } from './api/server.js';
-import { startCrawl } from './crawl/orchestrator.js';
+import { isPrepareFailure, startCrawl } from './crawl/orchestrator.js';
 import { renderFailures, summarizeFailures } from './storage/failures-report.js';
 
 function usage(): never {
@@ -64,6 +64,11 @@ async function cmdCrawl(argv: string[]) {
     maxRequestsPerCrawl,
     dataDir,
   });
+  if (isPrepareFailure(result)) {
+    console.error(JSON.stringify({ ok: false, runId: result.runId, error: result.failure }, null, 2));
+    process.exitCode = 1;
+    return;
+  }
   console.log(
     JSON.stringify(
       {

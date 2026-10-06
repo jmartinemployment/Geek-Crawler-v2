@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { access, mkdtemp, readdir, rm } from 'node:fs/promises';
+import { access, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { startCrawl } from '../../src/crawl/orchestrator.js';
+import { isPrepareFailure, startCrawl } from '../../src/crawl/orchestrator.js';
 import { listFailures, type FailureRecord } from '../../src/storage/failure-archive.js';
 import { startFixtureSite } from '../fixtures/site.js';
 
@@ -222,3 +222,48 @@ for (const failure of ['unreachable-5xx', 'unreachable-platform-404'] as const) 
     },
   );
 }
+
+// A run does not crawl without its log. When the log cannot be opened the run, already created on
+// GeekAPI, is failed and purged with the cause, and the result is returned rather than thrown.
+test('a run whose log cannot be opened is failed and purged before it fetches a page', { timeout: 60_000 }, async () => {
+  const geek = await startFailingGeekApi('determinate');
+  const fixture = await startFixtureSite();
+  const dataDir = await mkdtemp(path.join(os.tmpdir(), 'geek-crawler-nolog-'));
+  // A file where the logs directory belongs, so opening the run log fails for any user.
+  await writeFile(path.join(dataDir, 'logs'), 'not a directory');
+  const old = {
+    url: process.env.GEEK_API_URL,
+    key: process.env.GEEK_BACKEND_API_KEY,
+    user: process.env.GEEK_USER_ID,
+  };
+  process.env.GEEK_API_URL = geek.origin;
+  process.env.GEEK_BACKEND_API_KEY = 'test-key';
+  process.env.GEEK_USER_ID = 'test-user';
+  try {
+    const result = await startCrawl({
+      seeds: [`${fixture.origin}/`],
+      crawlType: 'partner',
+      dataDir,
+      maxConcurrency: 1,
+    });
+    assert(isPrepareFailure(result), 'the run must not get past preparation');
+    assert.equal(result.runId, RUN_ID);
+    assert.match(result.failure, /^Run log could not be opened: .*logs[\\/].*\.log: /);
+    assert.equal(geek.deleteCalls(), 1, 'the created run is purged');
+    assert.equal(fixture.requests('/'), 0, 'no page is fetched');
+    const failures = await listFailures(dataDir);
+    assert(failures);
+    assert.equal(failures.length, 1);
+    assert.match(failures[0]!.errorSummary ?? '', /^Run log could not be opened/);
+  } finally {
+    if (old.url === undefined) delete process.env.GEEK_API_URL;
+    else process.env.GEEK_API_URL = old.url;
+    if (old.key === undefined) delete process.env.GEEK_BACKEND_API_KEY;
+    else process.env.GEEK_BACKEND_API_KEY = old.key;
+    if (old.user === undefined) delete process.env.GEEK_USER_ID;
+    else process.env.GEEK_USER_ID = old.user;
+    geek.close();
+    await fixture.close();
+    await rm(dataDir, { recursive: true, force: true });
+  }
+});

@@ -17,7 +17,7 @@ import { access, mkdtemp, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { startCrawl } from '../../src/crawl/orchestrator.js';
+import { isPrepareFailure, startCrawl } from '../../src/crawl/orchestrator.js';
 import { runLogPath } from '../../src/crawl/run-log.js';
 import { listFailures } from '../../src/storage/failure-archive.js';
 
@@ -170,6 +170,7 @@ async function crawlBarrenSite(mode: Mode) {
       dataDir,
       maxConcurrency: 1,
     });
+    assert(!isPrepareFailure(result), 'the run must get past preparation');
     const failures = await listFailures(dataDir);
     assert(failures, 'the failures directory must be listable');
     const runLog = await readFile(runLogPath(dataDir, result.runId), 'utf8');
