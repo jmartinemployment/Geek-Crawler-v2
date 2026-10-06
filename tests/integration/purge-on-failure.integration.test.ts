@@ -138,9 +138,11 @@ async function crawlAgainstFailure(failure: LinkFailure): Promise<{
     );
 
     const cacheDir = path.join(dataDir, 'extract-cache', RUN_ID);
+    const failures = await listFailures(dataDir);
+    assert(failures, 'the failures directory must be listable');
     return {
       deleteCalls: geek.deleteCalls(),
-      failures: await listFailures(dataDir),
+      failures,
       runDirExists: await exists(path.join(dataDir, 'runs', RUN_ID)),
       queueDirExists: await exists(path.join(dataDir, '.crawlee', RUN_ID)),
       cacheFiles: (await exists(cacheDir)) ? (await readdir(cacheDir)).sort() : [],

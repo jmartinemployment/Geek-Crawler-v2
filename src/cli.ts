@@ -91,6 +91,11 @@ async function cmdFailures(argv: string[]) {
   const { dataDir } = parseArgs(argv);
   const resolved = path.resolve(dataDir ?? process.env.DATA_DIR ?? './data');
   const summary = await summarizeFailures(resolved);
+  if (summary === null) {
+    console.error(`cannot list ${resolved}/failures; RECORD_UNREADABLE above names the cause`);
+    process.exitCode = 1;
+    return;
+  }
   console.log(renderFailures(summary, resolved));
 }
 

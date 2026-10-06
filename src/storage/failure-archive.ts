@@ -20,7 +20,7 @@ import path from 'node:path';
 import type { RejectSample } from '../crawl/reject.js';
 import type { CrawlReport } from './geek-api-client.js';
 import type { DiscoveryReport } from '../crawl/discovery-ledger.js';
-import { isMissing, readJsonRecord } from './read-record.js';
+import { isMissing, logUnreadable, readJsonRecord, type RecordRead } from './read-record.js';
 
 export type PurgeOutcome = {
   vectorsPurged: boolean;
@@ -72,18 +72,12 @@ export async function archiveRun(dataDir: string, record: FailureRecord): Promis
   return file;
 }
 
-/** One record, or null when the run was never archived. Throws when the record is unreadable. */
+/** One record: missing when the run was never archived, unreadable with its reason, or the record. */
 export async function readFailure(
   dataDir: string,
   runId: string,
-): Promise<FailureRecord | null> {
-  // Null only when there is no record. An unreadable one is not "never archived": it is logged
-  // by readJsonRecord and raised with its cause.
-  const file = recordPath(dataDir, runId);
-  const read = await readJsonRecord<FailureRecord>(file);
-  if (read.kind === 'ok') return read.value;
-  if (read.kind === 'missing') return null;
-  throw new Error(`post-mortem unreadable: ${file}: ${read.reason}`);
+): Promise<RecordRead<FailureRecord>> {
+  return readJsonRecord<FailureRecord>(recordPath(dataDir, runId));
 }
 
 /**
@@ -93,16 +87,16 @@ export async function readFailure(
  * take the whole report down. It is logged with its path and reason by readJsonRecord, so it is
  * never left out silently.
  */
-export async function listFailures(dataDir: string): Promise<FailureRecord[]> {
+export async function listFailures(dataDir: string): Promise<FailureRecord[] | null> {
   let names: string[];
   try {
     names = await readdir(failuresDir(dataDir));
   } catch (err) {
-    // No failures directory means no post-mortems. Any other error is not an empty archive.
+    // No failures directory means no post-mortems. Any other error is not an empty archive: it
+    // is logged and answered null.
     if (isMissing(err)) return [];
-    throw new Error(
-      `cannot list ${failuresDir(dataDir)}: ${err instanceof Error ? err.message : String(err)}`,
-    );
+    logUnreadable(failuresDir(dataDir), err instanceof Error ? err.message : String(err));
+    return null;
   }
 
   const records: FailureRecord[] = [];

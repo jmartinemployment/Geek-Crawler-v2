@@ -171,6 +171,7 @@ async function crawlBarrenSite(mode: Mode) {
       maxConcurrency: 1,
     });
     const failures = await listFailures(dataDir);
+    assert(failures, 'the failures directory must be listable');
     const runLog = await readFile(runLogPath(dataDir, result.runId), 'utf8');
     const runDirSurvived = await access(path.join(dataDir, 'runs', result.runId)).then(
       () => true,

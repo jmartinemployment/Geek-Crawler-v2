@@ -65,8 +65,10 @@ export function causeOf(record: FailureRecord): string {
   return message.slice(0, 80);
 }
 
-export async function summarizeFailures(dataDir: string): Promise<FailureSummary> {
+/** Null when the archive cannot be listed; listFailures has logged the cause. */
+export async function summarizeFailures(dataDir: string): Promise<FailureSummary | null> {
   const records = await listFailures(dataDir);
+  if (records === null) return null;
 
   const causes = new Map<string, { runs: number; pages: number }>();
   let purged = 0;

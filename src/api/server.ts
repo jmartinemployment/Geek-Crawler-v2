@@ -117,6 +117,9 @@ export function createCrawlApiServer(options?: { dataDir?: string; port?: number
 
       if (req.method === 'GET' && pathname === '/crawls') {
         const runs = await meta.listRuns();
+        if (runs === null) {
+          return send(res, 500, { error: 'the runs directory could not be listed; the cause is logged' });
+        }
         return send(res, 200, { ok: true, runs });
       }
 
@@ -224,8 +227,11 @@ export function createCrawlApiServer(options?: { dataDir?: string; port?: number
       if (req.method === 'GET' && runMatch) {
         const runId = decodeURIComponent(runMatch[1]!);
         const run = await meta.getRun(runId);
-        if (!run) return send(res, 404, { error: 'run not found' });
-        return send(res, 200, run as unknown as Json);
+        if (run.kind === 'missing') return send(res, 404, { error: 'run not found' });
+        if (run.kind === 'unreadable') {
+          return send(res, 500, { error: `run record unreadable: ${run.reason}` });
+        }
+        return send(res, 200, run.value as unknown as Json);
       }
 
       if (
@@ -308,6 +314,9 @@ export function createCrawlApiServer(options?: { dataDir?: string; port?: number
       // Post-mortems. A purged run is gone and this is what is left of it.
       if (req.method === 'GET' && pathname === '/failures') {
         const failures = await listFailures(dataDir);
+        if (failures === null) {
+          return send(res, 500, { error: 'the failures directory could not be listed; the cause is logged' });
+        }
         return send(res, 200, { ok: true, failures });
       }
 
@@ -315,6 +324,9 @@ export function createCrawlApiServer(options?: { dataDir?: string; port?: number
       // pages sat here unnoticed until someone happened to look on 2026-09-30.
       if (req.method === 'GET' && pathname === '/failures/summary') {
         const summary = await summarizeFailures(dataDir);
+        if (summary === null) {
+          return send(res, 500, { error: 'the failures directory could not be listed; the cause is logged' });
+        }
         const { records: _records, ...counts } = summary;
         return send(res, 200, { ok: true, ...counts });
       }
@@ -323,8 +335,11 @@ export function createCrawlApiServer(options?: { dataDir?: string; port?: number
       if (req.method === 'GET' && failureMatch) {
         const runId = decodeURIComponent(failureMatch[1]!);
         const failure = await readFailure(dataDir, runId);
-        if (!failure) return send(res, 404, { error: 'no post-mortem for that run' });
-        return send(res, 200, failure);
+        if (failure.kind === 'missing') return send(res, 404, { error: 'no post-mortem for that run' });
+        if (failure.kind === 'unreadable') {
+          return send(res, 500, { error: `post-mortem unreadable: ${failure.reason}` });
+        }
+        return send(res, 200, failure.value);
       }
 
       // Request-queue directories whose run is already gone. Pure engine scratch — no run owns

@@ -96,13 +96,11 @@ export async function reconcileOrphanedRuns(input: {
     problems: [],
   };
 
-  let runs: Awaited<ReturnType<RunStore['listRuns']>>;
-  try {
-    runs = await input.meta.listRuns();
-  } catch (error) {
+  const runs = await input.meta.listRuns();
+  if (runs === null) {
     result.problems.push({
       runId: '(listing)',
-      reason: error instanceof Error ? error.message : String(error),
+      reason: 'the runs directory could not be listed; RECORD_UNREADABLE in the log names the cause',
     });
     return result;
   }
@@ -248,13 +246,11 @@ export async function reconcileSupersededRuns(input: {
     problems: [],
   };
 
-  let runs: Awaited<ReturnType<RunStore['listRuns']>>;
-  try {
-    runs = await input.meta.listRuns();
-  } catch (error) {
+  const runs = await input.meta.listRuns();
+  if (runs === null) {
     result.problems.push({
       runId: '(listing)',
-      reason: error instanceof Error ? error.message : String(error),
+      reason: 'the runs directory could not be listed; RECORD_UNREADABLE in the log names the cause',
     });
     return result;
   }

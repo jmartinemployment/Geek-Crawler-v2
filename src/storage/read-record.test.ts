@@ -37,23 +37,27 @@ test('a corrupt run.json is not "run not found"', async () => {
   await writeFile(path.join(d, 'runs', 'r1', 'run.json'), '{"runId":');
   const store = createJsonRunStore(d);
 
-  await assert.rejects(store.getRun('r1'), /Run record unreadable: .*run\.json: invalid JSON/);
-  assert.equal(await store.getRun('r2'), null, 'a run with no record is still not found');
+  const corrupt = await store.getRun('r1');
+  assert.equal(corrupt.kind, 'unreadable');
+  assert.match(corrupt.kind === 'unreadable' ? corrupt.reason : '', /^invalid JSON: /);
+  assert.deepEqual(await store.getRun('r2'), { kind: 'missing' });
   assert.deepEqual(await store.listRuns(), [], 'the corrupt record is left out of the listing');
 });
 
-test('a runs path that cannot be listed is an error, not an empty list', async () => {
+test('a runs path that cannot be listed is null, not an empty list', async () => {
   const d = await dir();
   await writeFile(path.join(d, 'runs'), 'not a directory');
-  await assert.rejects(createJsonRunStore(d).listRuns(), /cannot list .*ENOTDIR/);
+  assert.equal(await createJsonRunStore(d).listRuns(), null);
 });
 
-test('a corrupt post-mortem is raised with its cause, not answered as never archived', async () => {
+test('a corrupt post-mortem is unreadable with its cause, not answered as never archived', async () => {
   const d = await dir();
   await mkdir(path.join(d, 'failures'), { recursive: true });
   await writeFile(path.join(d, 'failures', 'r1.json'), 'not json');
 
-  await assert.rejects(readFailure(d, 'r1'), /post-mortem unreadable: .*r1\.json: invalid JSON/);
-  assert.equal(await readFailure(d, 'r2'), null);
+  const corrupt = await readFailure(d, 'r1');
+  assert.equal(corrupt.kind, 'unreadable');
+  assert.match(corrupt.kind === 'unreadable' ? corrupt.reason : '', /^invalid JSON: /);
+  assert.deepEqual(await readFailure(d, 'r2'), { kind: 'missing' });
   assert.deepEqual(await listFailures(d), [], 'left out of the listing, and logged');
 });

@@ -121,6 +121,7 @@ describe('summarizeFailures', () => {
       );
 
       const summary = await summarizeFailures(dataDir);
+      assert(summary);
       assert.equal(summary.total, 2);
       assert.equal(summary.purged, 1);
       assert.equal(summary.pagesLost, 342, 'only the purged run lost its pages');
@@ -141,6 +142,7 @@ describe('summarizeFailures', () => {
     const dataDir = await mkdtemp(path.join(tmpdir(), 'failures-report-empty-'));
     try {
       const summary = await summarizeFailures(dataDir);
+      assert(summary);
       assert.equal(summary.total, 0);
       assert.match(renderFailures(summary, dataDir), /No failure post-mortems/);
     } finally {

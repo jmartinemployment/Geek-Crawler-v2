@@ -98,8 +98,9 @@ test('post-mortem survives the purge that destroys the run', async () => {
     await persist.markFailed('links/batch rejected the batch');
     await persist.archiveAndPurge('failed', 'links/batch rejected the batch');
 
-    const record = await readFailure(dataDir, persist.runId);
-    assert(record, 'a post-mortem must exist after the purge');
+    const read = await readFailure(dataDir, persist.runId);
+    assert(read.kind === 'ok', 'a post-mortem must exist after the purge');
+    const record = read.value;
     assert.equal(record.status, 'failed');
     assert.equal(record.seed, 'https://example.com');
     assert.equal(record.errorSummary, 'links/batch rejected the batch');
@@ -125,7 +126,7 @@ test('post-mortem survives the purge that destroys the run', async () => {
     );
 
     const all = await listFailures(dataDir);
-    assert.equal(all.length, 1);
+    assert.equal(all?.length, 1);
   });
 });
 
@@ -141,8 +142,9 @@ test('a failed purge is recorded, and leaves local scratch in place', async () =
 
     assert.equal(deleteCalls(), 1, 'exactly one purge attempt, no retry');
 
-    const record = await readFailure(dataDir, persist.runId);
-    assert(record);
+    const read = await readFailure(dataDir, persist.runId);
+    assert(read.kind === 'ok');
+    const record = read.value;
     assert.equal(record.status, 'cancelled');
     assert(record.purge, 'a purge that was attempted and failed still records its outcome');
     assert.equal(record.purge.crawlDataDeleted, false);
