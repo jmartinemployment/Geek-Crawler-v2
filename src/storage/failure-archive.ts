@@ -15,11 +15,12 @@
  * second source of crawl authority and does not breach the no-mirror law.
  */
 
-import { mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { RejectSample } from '../crawl/reject.js';
 import type { CrawlReport } from './geek-api-client.js';
 import type { DiscoveryReport } from '../crawl/discovery-ledger.js';
+import { isMissing, readJsonRecord } from './read-record.js';
 
 export type PurgeOutcome = {
   vectorsPurged: boolean;
@@ -71,42 +72,44 @@ export async function archiveRun(dataDir: string, record: FailureRecord): Promis
   return file;
 }
 
-/** One record, or null when the run was never archived. */
+/** One record, or null when the run was never archived. Throws when the record is unreadable. */
 export async function readFailure(
   dataDir: string,
   runId: string,
 ): Promise<FailureRecord | null> {
-  try {
-    const text = await readFile(recordPath(dataDir, runId), 'utf8');
-    return JSON.parse(text) as FailureRecord;
-  } catch {
-    return null;
-  }
+  // Null only when there is no record. An unreadable one is not "never archived": it is logged
+  // by readJsonRecord and raised with its cause.
+  const file = recordPath(dataDir, runId);
+  const read = await readJsonRecord<FailureRecord>(file);
+  if (read.kind === 'ok') return read.value;
+  if (read.kind === 'missing') return null;
+  throw new Error(`post-mortem unreadable: ${file}: ${read.reason}`);
 }
 
 /**
  * Every record, newest first.
  *
- * A file that will not parse is skipped rather than thrown: one corrupt post-mortem must not take
- * the whole report down, and there is no second copy to fall back to.
+ * A file that will not parse is left out rather than thrown, so one corrupt post-mortem does not
+ * take the whole report down. It is logged with its path and reason by readJsonRecord, so it is
+ * never left out silently.
  */
 export async function listFailures(dataDir: string): Promise<FailureRecord[]> {
   let names: string[];
   try {
     names = await readdir(failuresDir(dataDir));
-  } catch {
-    return [];
+  } catch (err) {
+    // No failures directory means no post-mortems. Any other error is not an empty archive.
+    if (isMissing(err)) return [];
+    throw new Error(
+      `cannot list ${failuresDir(dataDir)}: ${err instanceof Error ? err.message : String(err)}`,
+    );
   }
 
   const records: FailureRecord[] = [];
   for (const name of names) {
     if (!name.endsWith('.json')) continue;
-    try {
-      const text = await readFile(path.join(failuresDir(dataDir), name), 'utf8');
-      records.push(JSON.parse(text) as FailureRecord);
-    } catch {
-      continue;
-    }
+    const read = await readJsonRecord<FailureRecord>(path.join(failuresDir(dataDir), name));
+    if (read.kind === 'ok') records.push(read.value);
   }
 
   // On createdAtUtc, not purgedAtUtc: a record archived without a purge has no purge time, and

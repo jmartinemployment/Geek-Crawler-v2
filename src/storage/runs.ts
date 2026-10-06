@@ -1,8 +1,9 @@
-import { mkdir, readdir, readFile, rename, rm, stat, utimes, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, rename, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { RejectSample } from '../crawl/reject.js';
 import type { CrawlType } from '../crawl/types.js';
 import type { DiscoveryReport } from '../crawl/discovery-ledger.js';
+import { isMissing, readJsonRecord } from './read-record.js';
 
 export type CrawlRunMeta = {
   runId: string;
@@ -135,14 +136,19 @@ export type RunStore = {
   remove(runId: string): Promise<void>;
 };
 
-async function readJson<T>(file: string): Promise<T | null> {
-  try {
-    const raw = await readFile(file, 'utf8');
-    if (!raw.trim()) return null;
-    return JSON.parse(raw) as T;
-  } catch {
-    return null;
-  }
+/**
+ * A run record, or the reason there is none. Missing and unreadable are different answers: a
+ * corrupt run.json is not a run that does not exist. readJsonRecord logs the unreadable ones.
+ */
+async function readRunRecord(file: string): Promise<CrawlRunMeta | { missing: true } | { unreadable: string }> {
+  const read = await readJsonRecord<CrawlRunMeta>(file);
+  if (read.kind === 'ok') return read.value;
+  if (read.kind === 'missing') return { missing: true };
+  return { unreadable: `${file}: ${read.reason}` };
+}
+
+function isRun(value: CrawlRunMeta | { missing: true } | { unreadable: string }): value is CrawlRunMeta {
+  return !('missing' in value) && !('unreadable' in value);
 }
 
 /** Atomic replace so concurrent readers never see a truncated run.json. */
@@ -182,8 +188,9 @@ export function createJsonRunStore(dataDir: string): RunStore {
   async function loadRun(runId: string): Promise<CrawlRunMeta> {
     const cached = memory.get(runId);
     if (cached) return cached;
-    const run = await readJson<CrawlRunMeta>(runPath(runId));
-    if (!run) throw new Error(`Run not found: ${runId}`);
+    const run = await readRunRecord(runPath(runId));
+    if ('unreadable' in run) throw new Error(`Run record unreadable: ${run.unreadable}`);
+    if (!isRun(run)) throw new Error(`Run not found: ${runId}`);
     memory.set(runId, run);
     return run;
   }
@@ -326,9 +333,11 @@ export function createJsonRunStore(dataDir: string): RunStore {
       // Multiple store instances are expected (API status reads vs. crawl
       // workers). Always refresh from disk so a server does not keep returning
       // the state cached by an earlier listRuns() call.
-      const run = await readJson<CrawlRunMeta>(runPath(runId));
-      if (run) memory.set(runId, run);
-      return run ? { ...run } : null;
+      const run = await readRunRecord(runPath(runId));
+      if ('unreadable' in run) throw new Error(`Run record unreadable: ${run.unreadable}`);
+      if (!isRun(run)) return null;
+      memory.set(runId, run);
+      return { ...run };
     },
 
     async remove(runId) {
@@ -359,13 +368,19 @@ export function createJsonRunStore(dataDir: string): RunStore {
       let dirs: string[] = [];
       try {
         dirs = await readdir(runsDir);
-      } catch {
-        return [];
+      } catch (err) {
+        // No runs directory means no runs. Any other error is not an empty list.
+        if (isMissing(err)) return [];
+        throw new Error(
+          `cannot list ${runsDir}: ${err instanceof Error ? err.message : String(err)}`,
+        );
       }
       const out: CrawlRunMeta[] = [];
       for (const id of dirs) {
-        const run = await readJson<CrawlRunMeta>(runPath(id));
-        if (run) {
+        // An unreadable record is logged by readJsonRecord and left out of the listing; a
+        // directory with no run.json is not a run.
+        const run = await readRunRecord(runPath(id));
+        if (isRun(run)) {
           memory.set(run.runId, run);
           out.push({ ...run });
         }

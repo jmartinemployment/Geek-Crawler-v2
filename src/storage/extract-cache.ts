@@ -16,6 +16,7 @@ import { createHash } from 'node:crypto';
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { Block } from '../crawl/extract-content.js';
+import { isMissing, logUnreadable, readJsonRecord } from './read-record.js';
 
 export type ExtractCache = {
   /** Write both files for one page. Returns the relative key, or null when off. */
@@ -103,20 +104,18 @@ export type CachedPage = {
 /** Runs holding a cached corpus, newest-unknown order. Empty when none. */
 export async function listCachedRuns(dataDir: string): Promise<string[]> {
   const root = extractCacheDir(dataDir);
-  const entries = await readdir(root, { withFileTypes: true }).catch(() => null);
+  const entries = await readdir(root, { withFileTypes: true }).catch((err: unknown) => {
+    if (!isMissing(err)) logUnreadable(root, err instanceof Error ? err.message : String(err));
+    return null;
+  });
   if (!entries) return [];
   return entries.filter((e) => e.isDirectory()).map((e) => e.name).sort();
 }
 
-/** Read one JSON file, or null. Corrupt is indistinguishable from absent here. */
+/** Read one JSON file, or null. An unreadable one is logged by readJsonRecord, not passed off as absent. */
 async function readJson<T>(file: string): Promise<T | null> {
-  const raw = await readFile(file, 'utf8').catch(() => null);
-  if (raw === null) return null;
-  try {
-    return JSON.parse(raw) as T;
-  } catch {
-    return null;
-  }
+  const read = await readJsonRecord<T>(file);
+  return read.kind === 'ok' ? read.value : null;
 }
 
 /** Every page cached for a run. Pages whose meta is unreadable are skipped. */
@@ -125,7 +124,10 @@ export async function listCachedPages(
   runId: string,
 ): Promise<CachedPageMeta[]> {
   const dir = path.join(extractCacheDir(dataDir), runId);
-  const names = await readdir(dir).catch(() => null);
+  const names = await readdir(dir).catch((err: unknown) => {
+    if (!isMissing(err)) logUnreadable(dir, err instanceof Error ? err.message : String(err));
+    return null;
+  });
   if (!names) return [];
 
   const out: CachedPageMeta[] = [];
