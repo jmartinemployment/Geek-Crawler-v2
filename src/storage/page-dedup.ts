@@ -3,7 +3,7 @@
  * Fail toward duplication, never toward silent loss.
  */
 
-import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { log } from 'crawlee';
 import {
@@ -109,9 +109,7 @@ type CheerioRel = {
 
 export type PageDedupTracker = {
   aliases: AliasTable;
-  dedupLedgerBackfilled: boolean;
   counters: DedupCounters;
-  rehydrate(): Promise<void>;
   resolveKey(url: string): string | null;
   learnRedirect(requestUrl: string, finalUrl: string, scopeUrl: string): void;
   reserve(
@@ -206,21 +204,6 @@ function bumpSkip(counters: DedupCounters, reason: HandlerSkipReason): void {
   }
 }
 
-function parseJsonlTolerant(raw: string): unknown[] {
-  const lines = raw.split('\n');
-  const out: unknown[] = [];
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]!.trim();
-    if (!line) continue;
-    try {
-      out.push(JSON.parse(line));
-    } catch {
-      if (i >= lines.length - 2) break;
-    }
-  }
-  return out;
-}
-
 export function createPageDedupTracker(input: {
   dataDir: string;
   runId: string;
@@ -242,7 +225,6 @@ export function createPageDedupTracker(input: {
   const cfg = nearDupConfig();
   const simIndex = new SimhashIndex(cfg.hamming);
 
-  let dedupLedgerBackfilled = true;
   let nearDupFiles = 0;
   let nearDupBytes = 0;
 
@@ -274,68 +256,7 @@ export function createPageDedupTracker(input: {
 
   const tracker: PageDedupTracker = {
     aliases,
-    get dedupLedgerBackfilled() {
-      return dedupLedgerBackfilled;
-    },
     counters,
-
-    async rehydrate() {
-      let raw: string | null = null;
-      try {
-        raw = await readFile(acceptedPath, 'utf8');
-      } catch {
-        dedupLedgerBackfilled = false;
-        log.warning(
-          `Dedup ledger missing for run ${input.runId} — resume proceeds without backfill (dedupLedgerBackfilled=false)`,
-        );
-        return;
-      }
-      const rows = parseJsonlTolerant(raw) as DedupLedgerAccepted[];
-      if (rows.length === 0) {
-        dedupLedgerBackfilled = false;
-        log.warning(
-          `Dedup ledger empty for run ${input.runId} — resume proceeds (dedupLedgerBackfilled=false)`,
-        );
-        return;
-      }
-      for (const row of rows) {
-        if (!row || row.v !== 1) continue;
-        if (row.finalUrlKey) {
-          urlSlots.set(row.finalUrlKey, { kind: 'accepted', reason: 'duplicate_url' });
-        }
-        if (row.requestedUrlKey && row.requestedUrlKey !== row.finalUrlKey) {
-          aliases.learn(row.requestedUrlKey, row.finalUrlKey);
-        }
-        for (const ak of row.aliasKeys ?? []) {
-          aliases.learn(ak, row.finalUrlKey);
-        }
-        if (row.htmlHash) {
-          htmlSlots.set(row.htmlHash, { kind: 'accepted', reason: 'duplicate_html' });
-        }
-        if (row.contentHash) {
-          contentSlots.set(row.contentHash, { kind: 'accepted', reason: 'duplicate_content' });
-        }
-        if (row.canonicalKey) {
-          canonicalGroups.set(row.canonicalKey, {
-            representativePageId: row.pageId,
-            representativeKey: row.finalUrlKey,
-          });
-        }
-        if (row.simhash && row.contentHash) {
-          simIndex.add({
-            simhash: row.simhash,
-            contentHash: row.contentHash,
-            pageId: row.pageId,
-            url: row.finalUrlKey,
-            contentLength: row.contentLength ?? 0,
-            excerpt: '',
-          });
-        }
-      }
-      counters.aliasesLearned = aliases.learned;
-      dedupLedgerBackfilled = true;
-      log.info(`Dedup ledger rehydrated: ${rows.length} accepted page(s) for ${input.runId}`);
-    },
 
     resolveKey(url) {
       const k = crawlDedupKey(url);

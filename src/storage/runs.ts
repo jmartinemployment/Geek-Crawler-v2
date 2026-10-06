@@ -32,11 +32,11 @@ export type CrawlRunMeta = {
   pagesRejectedRequiresJavascript?: number;
   pagesRejectedChallenge?: number;
   pagesRejectedExtractEmpty?: number;
+  pagesRejectedExtractFailed?: number;
   pagesRejectedRobots?: number;
   pagesRejectedRequestFailed?: number;
   /** Rows not written because the resolved final URL was already saved this run. */
   duplicatePagesSkipped?: number;
-  dedupLedgerBackfilled?: boolean;
   enqueueAttempts?: number;
   enqueueSuppressedLocal?: number;
   enqueueSuppressedQueue?: number;
@@ -86,10 +86,10 @@ export type RunStore = {
       pagesRejectedRequiresJavascript?: number;
       pagesRejectedChallenge?: number;
       pagesRejectedExtractEmpty?: number;
+      pagesRejectedExtractFailed?: number;
       pagesRejectedRobots?: number;
       pagesRejectedRequestFailed?: number;
       duplicatePagesSkipped?: number;
-      dedupLedgerBackfilled?: boolean;
       enqueueAttempts?: number;
       enqueueSuppressedLocal?: number;
       enqueueSuppressedQueue?: number;
@@ -262,6 +262,9 @@ export function createJsonRunStore(dataDir: string): RunStore {
         if (stats.pagesRejectedExtractEmpty !== undefined) {
           run.pagesRejectedExtractEmpty = stats.pagesRejectedExtractEmpty;
         }
+        if (stats.pagesRejectedExtractFailed !== undefined) {
+          run.pagesRejectedExtractFailed = stats.pagesRejectedExtractFailed;
+        }
         if (stats.duplicatePagesSkipped !== undefined) {
           run.duplicatePagesSkipped = stats.duplicatePagesSkipped;
         }
@@ -272,7 +275,6 @@ export function createJsonRunStore(dataDir: string): RunStore {
           run.pagesRejectedRequestFailed = stats.pagesRejectedRequestFailed;
         }
         const copyKeys = [
-          'dedupLedgerBackfilled',
           'enqueueAttempts',
           'enqueueSuppressedLocal',
           'enqueueSuppressedQueue',

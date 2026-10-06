@@ -67,40 +67,6 @@ describe('PageDedupTracker reservations', () => {
     assert.equal(w.skip, false);
   });
 
-  it('rehydrate tolerates truncated final JSONL line', async () => {
-    tmp = await mkdtemp(path.join(os.tmpdir(), 'page-dedup-'));
-    const runId = 'run-d';
-    const dir = path.join(tmp, 'runs', runId);
-    await mkdir(dir, { recursive: true });
-    const good = {
-      v: 1,
-      pageId: 'p',
-      at: new Date().toISOString(),
-      requestedUrlKey: 'https://n8n.io/a',
-      finalUrlKey: 'https://n8n.io/a',
-      contentHash: contentHash('hello world article text'),
-    };
-    await writeFile(
-      path.join(dir, 'dedup.jsonl'),
-      `${JSON.stringify(good)}\n{"v":1,"pageId":"trunc`,
-      'utf8',
-    );
-    const t = createPageDedupTracker({ dataDir: tmp, runId });
-    await t.rehydrate();
-    const owned = new Set<string>();
-    const r = await t.reserve({ urlKey: 'https://n8n.io/a' }, owned);
-    assert.equal(r.state, 'accepted');
-  });
-
-  it('missing ledger warns and sets dedupLedgerBackfilled false', async () => {
-    tmp = await mkdtemp(path.join(os.tmpdir(), 'page-dedup-'));
-    const runId = 'run-e';
-    await mkdir(path.join(tmp, 'runs', runId), { recursive: true });
-    const t = createPageDedupTracker({ dataDir: tmp, runId });
-    await t.rehydrate();
-    assert.equal(t.dedupLedgerBackfilled, false);
-  });
-
   it('canonical group skips variants but not the canonical URL itself', async () => {
     tmp = await mkdtemp(path.join(os.tmpdir(), 'page-dedup-'));
     const runId = 'run-f';

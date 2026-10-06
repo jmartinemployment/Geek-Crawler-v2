@@ -95,7 +95,6 @@ export type CrawlPersist = {
       pagesSaved: number;
       linksSaved: number;
       duplicatePagesSkipped: number;
-      dedupLedgerBackfilled: boolean;
     } & RejectCounters &
       DedupCounters
   >;
@@ -293,7 +292,6 @@ export function createCrawlPersist(input: {
       ...d,
       duplicatePagesSkipped:
         d.skippedUrl + d.skippedHtml + d.skippedCanonicalAlias + d.skippedContent + d.skippedNearDuplicate,
-      dedupLedgerBackfilled: dedup.dedupLedgerBackfilled,
       rejectSamples: rejectSamples.snapshot() as CrawlRunMeta['rejectSamples'],
       discovery: discovery.report(),
     });
@@ -725,7 +723,6 @@ export function createCrawlPersist(input: {
           d.skippedCanonicalAlias +
           d.skippedContent +
           d.skippedNearDuplicate,
-        dedupLedgerBackfilled: dedup.dedupLedgerBackfilled,
         ...rejectCounters,
         ...d,
       };
