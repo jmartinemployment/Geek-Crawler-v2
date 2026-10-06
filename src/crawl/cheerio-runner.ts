@@ -202,14 +202,16 @@ async function executeCheerioCrawl(
 
   const siteMap: SiteMapIndex = await loadSiteMapIndex(seeds);
   persist.discovery.setSitemap(siteMap.hasMap, siteMap.urls.size, siteMap.truncated);
-  if (siteMap.hasMap) {
+  if (siteMap.failure) {
+    log.error(`Sitemap could not be read: ${siteMap.failure}`);
+  } else if (siteMap.hasMap) {
     log.info(
       `Sitemap seeds the crawl: ${siteMap.urls.size} URL(s)` +
         `${siteMap.truncated ? ' (truncated at the loader ceiling)' : ''}; ` +
         'links it omits are admitted under the trap rules and quotas',
     );
   } else {
-    log.info('No sitemap map found — same-site BFS (tracking params stripped)');
+    log.info('No sitemap at any location fetched; every fetch answered, see the lines above');
   }
   log.info(`Concurrency min=${minConcurrency} max=${maxConcurrency}`);
 
@@ -586,6 +588,12 @@ async function executeCheerioCrawl(
   );
 
   try {
+    // A sitemap that could not be read is not a site without one. Crawling on would replace the
+    // site's own url list with link discovery and report the run as if nothing had failed.
+    if (siteMap.failure) {
+      throw new Error(`Sitemap could not be read: ${siteMap.failure}`);
+    }
+
     let startUrls = initialCrawlUrls(seeds, siteMap, enqueueOpts);
 
     // Link discovery, for the sites a static fetch cannot see.

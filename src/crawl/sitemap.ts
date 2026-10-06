@@ -1,3 +1,4 @@
+import { log } from 'crawlee';
 import { hostnameKey } from './links.js';
 import { localeNormalizeForMap } from './locale-path.js';
 import { BOT } from '../bot/identity.js';
@@ -6,6 +7,7 @@ import { crawlDedupKey, type AliasTable } from './dedup.js';
 import type { SectionQuota } from './section-quota.js';
 import type { DiscoveryLedger } from './discovery-ledger.js';
 import { trapRuleFor, type DirectoryCap } from './link-trap.js';
+import { describeTransportError } from '../storage/errors.js';
 
 const MAX_SITEMAPS = 40;
 const MAX_URLS = 50_000;
@@ -48,6 +50,11 @@ export type SiteMapIndex = {
   truncated: boolean;
   /** sitemapMemberKey of every url, so membership survives trailing-slash, case and www variants. */
   memberKeys: Set<string>;
+  /**
+   * Null when every fetch got an answer. Otherwise each fetch that failed, with its URL and its
+   * cause, and the run stops on it: a sitemap that could not be read is not a site without one.
+   */
+  failure: string | null;
 };
 
 /**
@@ -75,11 +82,12 @@ export function siteMapIndex(
   urls: Iterable<string>,
   sources: string[],
   truncated: boolean,
+  failure: string | null = null,
 ): SiteMapIndex {
   const set = new Set(urls);
   const memberKeys = new Set<string>();
   for (const u of set) memberKeys.add(sitemapMemberKey(u));
-  return { hasMap: set.size > 0, urls: set, sources, truncated, memberKeys };
+  return { hasMap: set.size > 0, urls: set, sources, truncated, memberKeys, failure };
 }
 
 export function inSiteMap(map: SiteMapIndex, url: string): boolean {
@@ -91,7 +99,24 @@ function sameSite(seed: URL, candidate: URL): boolean {
   return hostnameKey(seed.hostname) === hostnameKey(candidate.hostname);
 }
 
-async function fetchText(url: string): Promise<string | null> {
+/**
+ * What one robots.txt or sitemap fetch got, as it happened.
+ *
+ * Until 2026-10-06 every failure here returned null, the same value as a file that does not
+ * exist: a timeout, a refused connection, a 403 and a 503 all read as "this site has no sitemap",
+ * and the crawl went on without one, logging only "No sitemap map found". Each outcome is now
+ * logged with its URL and its status or transport cause.
+ *
+ * absent   the site answered 404 or 410: it says there is no file at that URL.
+ * failed   anything else that is not a 2xx, or no answer at all. The run stops on it.
+ */
+type FetchOutcome =
+  | { kind: 'ok'; text: string }
+  | { kind: 'absent'; status: number }
+  | { kind: 'failed'; detail: string };
+
+async function fetchText(url: string): Promise<FetchOutcome> {
+  let outcome: FetchOutcome;
   try {
     const res = await fetch(url, {
       signal: AbortSignal.timeout(FETCH_MS),
@@ -101,11 +126,25 @@ async function fetchText(url: string): Promise<string | null> {
       },
       redirect: 'follow',
     });
-    if (!res.ok) return null;
-    return await res.text();
-  } catch {
-    return null;
+    if (res.ok) {
+      outcome = { kind: 'ok', text: await res.text() };
+    } else if (res.status === 404 || res.status === 410) {
+      outcome = { kind: 'absent', status: res.status };
+    } else {
+      outcome = { kind: 'failed', detail: `HTTP ${res.status}` };
+    }
+  } catch (err) {
+    outcome = { kind: 'failed', detail: `transport: ${describeTransportError(err)}` };
   }
+
+  if (outcome.kind === 'ok') {
+    log.info(`fetch ${url} -> 200 (${outcome.text.length} chars)`);
+  } else if (outcome.kind === 'absent') {
+    log.info(`fetch ${url} -> HTTP ${outcome.status}`);
+  } else {
+    log.error(`fetch ${url} -> ${outcome.detail}`);
+  }
+  return outcome;
 }
 
 function extractLocs(xml: string): string[] {
@@ -123,15 +162,19 @@ function isSitemapIndex(xml: string): boolean {
   return /<sitemapindex[\s>]/i.test(xml);
 }
 
-async function sitemapUrlsFromRobots(origin: string): Promise<string[]> {
-  const text = await fetchText(`${origin}/robots.txt`);
-  if (!text) return [];
+async function sitemapUrlsFromRobots(
+  origin: string,
+): Promise<{ urls: string[]; failure: string | null }> {
+  const url = `${origin}/robots.txt`;
+  const outcome = await fetchText(url);
+  if (outcome.kind === 'failed') return { urls: [], failure: `${url}: ${outcome.detail}` };
+  if (outcome.kind === 'absent') return { urls: [], failure: null };
   const found: string[] = [];
-  for (const line of text.split(/\r?\n/)) {
+  for (const line of outcome.text.split(/\r?\n/)) {
     const m = line.match(/^\s*Sitemap:\s*(\S+)/i);
     if (m?.[1]) found.push(m[1].trim());
   }
-  return found;
+  return { urls: found, failure: null };
 }
 
 /**
@@ -161,20 +204,24 @@ export async function loadSiteMapForSeed(seedUrl: string): Promise<SiteMapIndex>
   try {
     seed = new URL(seedUrl);
   } catch {
-    return siteMapIndex([], [], false);
+    return siteMapIndex([], [], false, `seed is not a url: ${seedUrl}`);
   }
 
   const origin = seed.origin;
   const sources = new Set<string>();
   const queue: string[] = [];
+  const failures: string[] = [];
 
-  for (const s of await sitemapUrlsFromRobots(origin)) {
+  const fromRobots = await sitemapUrlsFromRobots(origin);
+  if (fromRobots.failure) failures.push(fromRobots.failure);
+  for (const s of fromRobots.urls) {
     queue.push(s);
     sources.add(s);
   }
-  const fallback = `${origin}/sitemap.xml`;
-  if (![...sources].some((s) => s.replace(/\/$/, '') === fallback.replace(/\/$/, ''))) {
-    queue.push(fallback);
+  // The conventional location, read as well as whatever robots.txt lists.
+  const wellKnown = `${origin}/sitemap.xml`;
+  if (![...sources].some((s) => s.replace(/\/$/, '') === wellKnown.replace(/\/$/, ''))) {
+    queue.push(wellKnown);
   }
 
   const urlSet = new Set<string>();
@@ -188,8 +235,13 @@ export async function loadSiteMapForSeed(seedUrl: string): Promise<SiteMapIndex>
     if (seenSitemaps.has(smUrl)) continue;
     seenSitemaps.add(smUrl);
 
-    const xml = await fetchText(smUrl);
-    if (!xml) continue;
+    const outcome = await fetchText(smUrl);
+    if (outcome.kind === 'failed') {
+      failures.push(`${smUrl}: ${outcome.detail}`);
+      continue;
+    }
+    if (outcome.kind === 'absent') continue;
+    const xml = outcome.text;
     sitemapsFetched += 1;
     sources.add(smUrl);
 
@@ -227,13 +279,19 @@ export async function loadSiteMapForSeed(seedUrl: string): Promise<SiteMapIndex>
   }
   if (queue.some((q) => !seenSitemaps.has(q))) truncated = true;
 
-  return siteMapIndex(urlSet, [...sources].slice(0, 20), truncated);
+  return siteMapIndex(
+    urlSet,
+    [...sources].slice(0, 20),
+    truncated,
+    failures.length > 0 ? failures.join('; ') : null,
+  );
 }
 
 /** Merge per-seed maps (legacy multi-seed runs). */
 export async function loadSiteMapIndex(seeds: string[]): Promise<SiteMapIndex> {
   const urls = new Set<string>();
   const sources: string[] = [];
+  const failures: string[] = [];
   let truncated = false;
   for (const seed of seeds) {
     const part = await loadSiteMapForSeed(seed);
@@ -242,8 +300,14 @@ export async function loadSiteMapIndex(seeds: string[]): Promise<SiteMapIndex> {
       if (!sources.includes(s)) sources.push(s);
     }
     truncated ||= part.truncated;
+    if (part.failure) failures.push(part.failure);
   }
-  return siteMapIndex(urls, sources.slice(0, 40), truncated);
+  return siteMapIndex(
+    urls,
+    sources.slice(0, 40),
+    truncated,
+    failures.length > 0 ? failures.join('; ') : null,
+  );
 }
 
 export type EnqueueDedupOpts = {

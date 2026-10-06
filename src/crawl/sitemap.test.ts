@@ -12,6 +12,7 @@ import {
   mergeHarvestedUrls,
   siteMapIndex,
   sitemapMemberKey,
+  type SiteMapIndex,
 } from './sitemap.js';
 
 const NO_MAP = siteMapIndex([], [], false);
@@ -282,7 +283,7 @@ describe('loadSiteMapForSeed — robots.txt, sitemap indexes, and the ceilings',
         );
       }
       if (path === '/sitemap.xml') {
-        return xml(`<urlset><url><loc>${origin}/from-fallback</loc></url></urlset>`);
+        return xml(`<urlset><url><loc>${origin}/from-well-known</loc></url></urlset>`);
       }
       res.writeHead(404);
       res.end();
@@ -297,22 +298,23 @@ describe('loadSiteMapForSeed — robots.txt, sitemap indexes, and the ceilings',
     server.close();
   });
 
-  it('reads robots.txt sitemaps and the /sitemap.xml fallback, normalized and same-site', async () => {
+  it('reads robots.txt sitemaps and /sitemap.xml, normalized and same-site', async () => {
     const map = await loadSiteMapForSeed(`${origin}/`);
     assert.equal(map.hasMap, true);
     assert.equal(map.truncated, false);
+    assert.equal(map.failure, null);
     assert.deepEqual([...map.urls].sort(), [
       `${origin}/features`,
-      `${origin}/from-fallback`,
+      `${origin}/from-well-known`,
       `${origin}/pricing`,
     ]);
     assert.equal(inSiteMap(map, `${origin}/pricing/`), true);
   });
 
-  it('is an empty map for an unparseable seed', async () => {
+  it('reports an unparseable seed as a failure, not as a site without a sitemap', async () => {
     const map = await loadSiteMapForSeed('not a url');
     assert.equal(map.hasMap, false);
-    assert.equal(map.truncated, false);
+    assert.equal(map.failure, 'seed is not a url: not a url');
   });
 
   it('reports truncation when the sitemap-file ceiling stops the load', async () => {
@@ -349,5 +351,46 @@ describe('loadSiteMapForSeed — robots.txt, sitemap indexes, and the ceilings',
     } finally {
       wide.close();
     }
+  });
+
+  // Until 2026-10-06 each of these returned the same empty map as a site with no sitemap, and the
+  // crawl went on by link discovery with no record of why.
+  async function mapFrom(handler: (path: string) => number): Promise<SiteMapIndex> {
+    const site = createServer((req, res) => {
+      const status = handler(req.url ?? '/');
+      res.writeHead(status, { 'content-type': 'text/plain' });
+      res.end(status === 200 ? 'User-agent: *\n' : '');
+    });
+    await new Promise<void>((resolve) => site.listen(0, '127.0.0.1', resolve));
+    const address = site.address();
+    assert(address && typeof address !== 'string');
+    try {
+      return await loadSiteMapForSeed(`http://127.0.0.1:${address.port}/`);
+    } finally {
+      site.close();
+    }
+  }
+
+  it('reports a sitemap that answers 503 as a failure, with its url and status', async () => {
+    const map = await mapFrom((path) => (path === '/sitemap.xml' ? 503 : 200));
+    assert.equal(map.hasMap, false);
+    assert.match(map.failure ?? '', /\/sitemap\.xml: HTTP 503$/);
+  });
+
+  it('reports a robots.txt that answers 403 as a failure', async () => {
+    const map = await mapFrom((path) => (path === '/robots.txt' ? 403 : 404));
+    assert.match(map.failure ?? '', /\/robots\.txt: HTTP 403/);
+  });
+
+  it('reports a fetch that gets no answer as a failure, with its transport cause', async () => {
+    const map = await loadSiteMapForSeed('http://127.0.0.1:1/');
+    assert.match(map.failure ?? '', /robots\.txt: transport: fetch failed; caused by: /);
+    assert.match(map.failure ?? '', /sitemap\.xml: transport: fetch failed; caused by: /);
+  });
+
+  it('reports no failure when the site answers 404: it says there is no sitemap', async () => {
+    const map = await mapFrom(() => 404);
+    assert.equal(map.hasMap, false);
+    assert.equal(map.failure, null);
   });
 });
