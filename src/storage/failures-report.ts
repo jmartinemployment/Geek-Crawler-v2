@@ -16,12 +16,16 @@ import { listFailures, type FailureRecord } from './failure-archive.js';
 
 export type FailureSummary = {
   total: number;
-  /** Runs whose crawl data is still on disk, so re-posting is possible. */
-  recoverable: number;
+  /**
+   * Runs archived without a purge. Nothing can re-post them: no command exists, and nothing
+   * ingests from the extract cache, which is diagnostics. Since fabb42f (2026-10-05) every failed
+   * run is purged, so these predate it.
+   */
+  kept: number;
   /** Runs that were purged: the pages are gone and only the record is left. */
   purged: number;
   pagesLost: number;
-  pagesRecoverable: number;
+  pagesKept: number;
   /** One line per distinct cause, most pages first. */
   byCause: Array<{ cause: string; runs: number; pages: number }>;
   records: FailureRecord[];
@@ -72,18 +76,17 @@ export async function summarizeFailures(dataDir: string): Promise<FailureSummary
   const records = await listFailures(dataDir);
 
   const causes = new Map<string, { runs: number; pages: number }>();
-  let recoverable = 0;
+  let kept = 0;
   let purged = 0;
   let pagesLost = 0;
-  let pagesRecoverable = 0;
+  let pagesKept = 0;
 
   for (const record of records) {
     // purgedAtUtc null is the archive's own marker for a run that was kept. Reading `purge` for it
     // would be reading an outcome that never happened.
-    const kept = record.purgedAtUtc === null;
-    if (kept) {
-      recoverable += 1;
-      pagesRecoverable += record.pagesSaved;
+    if (record.purgedAtUtc === null) {
+      kept += 1;
+      pagesKept += record.pagesSaved;
     } else {
       purged += 1;
       pagesLost += record.pagesSaved;
@@ -102,10 +105,10 @@ export async function summarizeFailures(dataDir: string): Promise<FailureSummary
 
   return {
     total: records.length,
-    recoverable,
+    kept,
     purged,
     pagesLost,
-    pagesRecoverable,
+    pagesKept,
     byCause,
     records,
   };
@@ -119,7 +122,7 @@ export function renderFailures(summary: FailureSummary, dataDir: string): string
   lines.push(`${summary.total} failure post-mortem(s) in ${dataDir}/failures`);
   lines.push(
     `  ${summary.purged} purged (${summary.pagesLost} page(s) gone), ` +
-      `${summary.recoverable} kept (${summary.pagesRecoverable} page(s) still on disk)`,
+      `${summary.kept} kept (${summary.pagesKept} page(s) not purged)`,
   );
 
   lines.push('');
@@ -143,11 +146,15 @@ export function renderFailures(summary: FailureSummary, dataDir: string): string
     lines.push(`      ${causeOf(record)}`);
   }
 
-  if (summary.recoverable > 0) {
+  if (summary.kept > 0) {
     lines.push('');
     lines.push(
-      `KEPT means the crawl data is still under ${dataDir} and can be re-posted. Those runs ` +
-        'failed because GeekAPI could not be reached, which is not a verdict on the crawl.',
+      'KEPT means the run was archived without a purge, because it failed when GeekAPI could ' +
+        'not be reached. It cannot be re-posted: no command exists, and nothing ingests from ' +
+        `${dataDir}/extract-cache, which is diagnostics. Whatever it wrote to GeekAPI was not ` +
+        'deleted when it failed. It may have gone since: the startup orphan pass purges a run ' +
+        'still marked running without updating this record, and a later crawl of the same seed ' +
+        'replaces it. Since 2026-10-05 a failed run is purged, so KEPT runs predate that.',
     );
   }
 

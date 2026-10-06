@@ -88,9 +88,11 @@ export type CrawlPersist = {
   /**
    * Write the post-mortem and destroy nothing.
    *
-   * For a failure that says nothing about the crawl — GeekAPI unreachable, a platform 404 during a
-   * redeploy — the pages are still good and stay on disk for re-posting. The record is what makes
-   * that recoverable rather than merely undeleted.
+   * Nothing calls this since fabb42f (2026-10-05): a failed run is purged, whatever failed it. It
+   * was kept for a failure that said nothing about the crawl, GeekAPI unreachable or a platform 404
+   * during a redeploy, on the premise that the run could be re-posted. It could not: no command
+   * exists, and nothing ingests from the extract cache, which is diagnostics. Kept for now by
+   * Jeff's decision of 2026-10-06, pending his decision on re-post.
    */
   archiveFailure(status: 'failed' | 'cancelled', errorSummary: string): Promise<void>;
   throwIfPersistenceFailed(): void;

@@ -469,7 +469,7 @@ export function createCrawlApiServer(options?: { dataDir?: string; port?: number
           console.log(`  GET  /crawls/:runId/pages  → 410 PAGES_NOT_LOCAL (read from GeekAPI)`);
           console.log(`  POST /crawls/:runId/cancel`);
           console.log(`  GET  /failures            post-mortems, newest first`);
-          console.log(`  GET  /failures/summary    counts by cause, and what can still be re-posted`);
+          console.log(`  GET  /failures/summary    counts by cause, and runs never purged`);
           resolve();
         });
       });

@@ -6,11 +6,12 @@
  * which meant deleting the run deleted its own explanation; writing it here first is what makes
  * the purge safe to perform.
  *
- * Since 2026-09-30 not every failed run is purged: one that failed because GeekAPI could not be
- * reached keeps its pages for re-posting. Such a run is archived too, with `purgedAtUtc` and
- * `purge` both null, because a kept run with no record is invisible — and being invisible to the
- * operator is how 603 pages sat unnoticed. The two null fields are the distinction: a record with
- * them still has crawl data on disk and something can be done about it.
+ * From 2026-09-30 to 2026-10-05 a run that failed because GeekAPI could not be reached was kept
+ * instead of purged, on the premise that it could be re-posted. It could not: no command exists, and
+ * nothing ingests from the extract cache, which is diagnostics. Such a run is archived with `purgedAtUtc` and `purge`
+ * both null, because a kept run with no record is invisible, and being invisible to the operator is
+ * how 603 pages sat unnoticed. The two null fields mark a run that was never purged and is waiting
+ * on an operator to delete or re-crawl it. Since fabb42f every failed run is purged.
  *
  * Diagnostics only. Nothing reads this to decide what to crawl, resume, or dedup, so it is not a
  * second source of crawl authority and does not breach the no-mirror law.
