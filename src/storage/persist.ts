@@ -92,7 +92,8 @@ export type CrawlPersist = {
    * was kept for a failure that said nothing about the crawl, GeekAPI unreachable or a platform 404
    * during a redeploy, on the premise that the run could be re-posted. It could not: no command
    * exists, and nothing ingests from the extract cache, which is diagnostics. Kept for now by
-   * Jeff's decision of 2026-10-06, pending his decision on re-post.
+   * Jeff's instruction of 2026-10-06. Re-post is a fallback and is not pending: whether it is the
+   * fix is known only once the logged failure data shows it.
    */
   archiveFailure(status: 'failed' | 'cancelled', errorSummary: string): Promise<void>;
   throwIfPersistenceFailed(): void;
