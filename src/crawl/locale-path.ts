@@ -86,7 +86,11 @@ function marketOf(tag: LocaleSegment): string {
   return tag.region ?? tag.language;
 }
 
-function stripLeadingSegment(url: string, shouldStrip: (seg: string) => boolean): string {
+/** Null for an unparseable URL: it is rejected, never passed on as it came. */
+function stripLeadingSegment(
+  url: string,
+  shouldStrip: (seg: string) => boolean,
+): string | null {
   try {
     const u = new URL(url);
     const parts = u.pathname.split('/').filter(Boolean);
@@ -98,7 +102,7 @@ function stripLeadingSegment(url: string, shouldStrip: (seg: string) => boolean)
     }
     return u.toString();
   } catch {
-    return url;
+    return null;
   }
 }
 
@@ -147,9 +151,9 @@ export function shouldExcludeLocalePath(url: string): boolean {
 
 /**
  * Strip leading `en` / `en-*` path segment (e.g. /en-us/foo → /foo).
- * Does not touch `/us/`.
+ * Does not touch `/us/`. Null for an unparseable URL.
  */
-export function stripEnglishLocalePrefix(url: string): string {
+export function stripEnglishLocalePrefix(url: string): string | null {
   if (isUsRegionPath(url)) return url;
   return stripLeadingSegment(url, (seg) => {
     const tag = parseLocaleSegment(seg);
@@ -164,7 +168,7 @@ export function stripEnglishLocalePrefix(url: string): string {
 /**
  * For sitemap map membership:
  * keep `/us/…`; drop other regions + non-English; strip `en` / `en-*` only.
- * Returns null if the URL should not be on the map.
+ * Returns null if the URL should not be on the map, or cannot be parsed.
  */
 export function localeNormalizeForMap(url: string): string | null {
   if (shouldExcludeLocalePath(url)) return null;

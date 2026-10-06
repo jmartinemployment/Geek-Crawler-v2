@@ -64,12 +64,13 @@ export type SiteMapIndex = {
  * nothing while the map was an allowlist -- the variant was dropped -- but it now decides whether a
  * link is subject to the trap rules and whether it is reported as off-sitemap.
  */
-export function sitemapMemberKey(url: string): string {
+export function sitemapMemberKey(url: string): string | null {
   let u: URL;
   try {
     u = new URL(url);
   } catch {
-    return url;
+    // Null, not the raw string: an unparseable URL is not a member of anything.
+    return null;
   }
   let host = u.hostname.toLowerCase();
   if (host.startsWith('www.')) host = host.slice(4);
@@ -86,12 +87,16 @@ export function siteMapIndex(
 ): SiteMapIndex {
   const set = new Set(urls);
   const memberKeys = new Set<string>();
-  for (const u of set) memberKeys.add(sitemapMemberKey(u));
+  for (const u of set) {
+    const key = sitemapMemberKey(u);
+    if (key) memberKeys.add(key);
+  }
   return { hasMap: set.size > 0, urls: set, sources, truncated, memberKeys, failure };
 }
 
 export function inSiteMap(map: SiteMapIndex, url: string): boolean {
-  return map.hasMap && map.memberKeys.has(sitemapMemberKey(url));
+  const key = sitemapMemberKey(url);
+  return map.hasMap && key !== null && map.memberKeys.has(key);
 }
 
 function sameSite(seed: URL, candidate: URL): boolean {
@@ -374,6 +379,11 @@ function normalizeCandidate(
   opts?: EnqueueDedupOpts,
 ): { url: string; key: string } | null {
   if (opts?.counters) opts.counters.enqueueAttempts += 1;
+  // Validity first, so an unparseable URL is refused as invalid and a locale refusal means locale.
+  if (!normalizeCrawlUrl(raw)) {
+    opts?.ledger?.refuse(raw, raw, 'invalid', offSitemap);
+    return null;
+  }
   const localeOk = localeNormalizeForMap(raw);
   if (!localeOk) {
     opts?.ledger?.refuse(raw, raw, 'locale', offSitemap);

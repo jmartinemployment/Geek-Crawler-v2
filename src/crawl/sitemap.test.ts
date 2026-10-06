@@ -250,6 +250,23 @@ describe('mergeHarvestedUrls — a browser pass stands in for a missing sitemap'
   });
 });
 
+describe('an unparseable url is rejected, never used as it came', () => {
+  it('has no member key and is not on the map', () => {
+    const map = siteMapIndex(['https://ramp.com/pricing'], [], false);
+    assert.equal(sitemapMemberKey('not a url'), null);
+    assert.equal(inSiteMap(map, 'not a url'), false);
+  });
+
+  it('is refused as invalid, not as locale', () => {
+    const ledger = createDiscoveryLedger();
+    const out = filterEnqueueUrls(['not a url'], NO_MAP, { ledger });
+    assert.deepEqual(out, []);
+    const report = ledger.report();
+    assert.equal(report.refused.invalid, 1);
+    assert.equal(report.refused.locale, 0);
+  });
+});
+
 describe('loadSiteMapForSeed — robots.txt, sitemap indexes, and the ceilings', () => {
   let server: Server;
   let origin = '';

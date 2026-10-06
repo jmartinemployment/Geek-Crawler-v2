@@ -85,18 +85,24 @@ describe('non-English languages', () => {
 
 describe('stripEnglishLocalePrefix', () => {
   it('collapses English prefixes to the bare path', () => {
-    assert.equal(new URL(stripEnglishLocalePrefix(at('/en/pricing'))).pathname, '/pricing');
-    assert.equal(new URL(stripEnglishLocalePrefix(at('/en-us/pricing'))).pathname, '/pricing');
+    assert.equal(new URL(stripEnglishLocalePrefix(at('/en/pricing'))!).pathname, '/pricing');
+    assert.equal(new URL(stripEnglishLocalePrefix(at('/en-us/pricing'))!).pathname, '/pricing');
   });
 
   it('does not collapse a foreign market onto the US path', () => {
     // /en-gb/pricing is not the same page as /pricing; collapsing it would let a
     // GB page occupy the US slot in map membership.
-    assert.equal(new URL(stripEnglishLocalePrefix(at('/en-gb/pricing'))).pathname, '/en-gb/pricing');
+    assert.equal(new URL(stripEnglishLocalePrefix(at('/en-gb/pricing'))!).pathname, '/en-gb/pricing');
   });
 
   it('leaves /us/ untouched', () => {
-    assert.equal(new URL(stripEnglishLocalePrefix(at('/us/pricing'))).pathname, '/us/pricing');
+    assert.equal(new URL(stripEnglishLocalePrefix(at('/us/pricing'))!).pathname, '/us/pricing');
+  });
+});
+
+describe('an unparseable url', () => {
+  it('is null from the English-prefix strip, not passed on as it came', () => {
+    assert.equal(stripEnglishLocalePrefix('not a url'), null);
   });
 });
 
