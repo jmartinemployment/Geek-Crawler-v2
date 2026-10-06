@@ -37,7 +37,7 @@ import { clampToSiteCap } from './crawl-limits.js';
 import { createSectionQuota } from './section-quota.js';
 import { crawlProfileFor, sectionQuotasFor } from './crawl-profile.js';
 import { harvestLinks } from './link-harvest.js';
-import { withRunLog } from './run-log.js';
+import { openRunLog, runLogFailure } from './run-log.js';
 
 export type RunCrawlInput = {
   crawlType: CrawlType;
@@ -89,15 +89,24 @@ export async function prepareCheerioCrawl(input: RunCrawlInput): Promise<Prepare
   await persist.begin();
   await persist.markRunning();
 
+  // The run does not crawl without its log. Opened now, once the run id exists, and a failure
+  // fails the run with the cause rather than leaving it to crawl unrecorded.
+  const opened = openRunLog(persist.dataDir, persist.runId);
+  if (!opened.ok) {
+    const reason = `Run log could not be opened: ${opened.reason}`;
+    console.error(reason);
+    await persist.markFailed(reason);
+    await persist.archiveAndPurge('failed', reason);
+    throw new Error(reason);
+  }
+  const runLog = opened.log;
+
   return {
     runId: persist.runId,
     persistMode: persist.mode,
     dataDir: persist.dataDir,
     // Inside the run log, so every line the crawl causes is kept on disk, serve or CLI alike.
-    run: () =>
-      withRunLog(persist.dataDir, persist.runId, () =>
-        executeCheerioCrawl(persist, seeds, input, robots),
-      ),
+    run: () => runLog.run(() => executeCheerioCrawl(persist, seeds, input, robots)),
   };
 }
 
@@ -322,6 +331,11 @@ async function executeCheerioCrawl(
         },
       ],
       async requestHandler({ request, body, $, response, enqueueLinks }) {
+        const logFailure = runLogFailure();
+        if (logFailure) {
+          await abortRun(`Run log could not be written: ${logFailure}`, request);
+          return;
+        }
         persist.discovery.markFetched(request.url);
         const currentDepth = Number((request.userData as { depth?: number } | undefined)?.depth ?? 0);
         if (persist.rootPersistenceError()) {
@@ -637,6 +651,10 @@ async function executeCheerioCrawl(
     await crawler.run(startUrls.map((url) => applyUniqueKey({ url })));
 
     persist.throwIfPersistenceFailed();
+    const lateLogFailure = runLogFailure();
+    if (lateLogFailure && !abortReason) {
+      abortReason = `Run log could not be written: ${lateLogFailure}`;
+    }
     if (abortReason) {
       // Failed rather than complete: nothing was published, and the reason names
       // the cause. Left to finish, GeekAPI answers "no usable pages" - the same

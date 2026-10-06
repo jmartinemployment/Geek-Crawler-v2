@@ -1,10 +1,16 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { log } from 'crawlee';
-import { runLogPath, withRunLog } from './run-log.js';
+import { openRunLog, runLogFailure, runLogPath } from './run-log.js';
+
+async function withRunLog<T>(dataDir: string, runId: string, fn: () => Promise<T>): Promise<T> {
+  const opened = openRunLog(dataDir, runId);
+  assert(opened.ok, opened.ok ? '' : opened.reason);
+  return opened.log.run(fn);
+}
 
 async function dataDir(): Promise<string> {
   return mkdtemp(path.join(tmpdir(), 'run-log-'));
@@ -83,15 +89,33 @@ test('the run outcome is unchanged: a value comes back, a rejection still reject
   );
 });
 
-test('a log directory that cannot be made does not stop the run', async () => {
+test('a log directory that cannot be made is a failure with its cause, not a run without a log', async () => {
   const dir = await dataDir();
   // A file where the logs directory should be, so mkdir fails for any user.
   await writeFile(path.join(dir, 'logs'), 'not a directory');
 
-  const result = await withRunLog(dir, 'run-h', async () => {
-    console.log('still crawling');
-    return 'done';
-  });
+  const opened = openRunLog(dir, 'run-h');
 
-  assert.equal(result, 'done');
+  assert.equal(opened.ok, false);
+  assert.match(opened.ok ? '' : opened.reason, /logs[\\/]run-h\.log: /);
+});
+
+test('a log file that cannot be opened is a failure with its cause', async () => {
+  const dir = await dataDir();
+  // A directory where the log file should be, so opening it for append fails.
+  await mkdir(runLogPath(dir, 'run-i'), { recursive: true });
+
+  const opened = openRunLog(dir, 'run-i');
+
+  assert.equal(opened.ok, false);
+  assert.match(opened.ok ? '' : opened.reason, /EISDIR/);
+});
+
+test('a run whose log is writing reports no log failure', async () => {
+  const dir = await dataDir();
+  const seen = await withRunLog(dir, 'run-j', async () => {
+    console.log('writing');
+    return runLogFailure();
+  });
+  assert.equal(seen, null);
 });

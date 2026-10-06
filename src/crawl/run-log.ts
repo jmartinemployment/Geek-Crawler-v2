@@ -17,12 +17,15 @@
  * purge that deletes a failed run leaves its log behind. That is the point:
  * the log is most needed for exactly the runs that get deleted.
  *
- * Logging must never end a crawl. A log file that cannot be opened or written
- * is reported once on the terminal and the run carries on without it.
+ * A run does not go on without its log. Until 2026-10-06 a log that could not be
+ * opened or written was reported on the terminal and the run carried on without
+ * it, which is the gap this file exists to close. Now a log that cannot be
+ * opened fails the run before it crawls, and one that stops accepting writes is
+ * reported through runLogFailure, which the runner checks and aborts on.
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { createWriteStream, mkdirSync, type WriteStream } from 'node:fs';
+import { createWriteStream, mkdirSync, openSync, type WriteStream } from 'node:fs';
 import path from 'node:path';
 import { format, stripVTControlCharacters } from 'node:util';
 
@@ -42,8 +45,10 @@ const CRAWLEE_LEVEL = /^(DEBUG|INFO|WARN|ERROR|SOFT_FAIL|PERF)\b/;
 type RunLogSink = {
   runId: string;
   stream: WriteStream;
-  /** False once the stream failed or was closed. Writes after that are dropped. */
+  /** False once the stream failed or was closed. */
   open: boolean;
+  /** Null until a write fails, then the error. The runner aborts the run on it. */
+  failure: string | null;
 };
 
 const current = new AsyncLocalStorage<RunLogSink>();
@@ -79,48 +84,68 @@ export function runLogPath(dataDir: string, runId: string): string {
   return path.join(dataDir, 'logs', `${runId}.log`);
 }
 
+export type RunLog = {
+  file: string;
+  /**
+   * Run fn with every console line it causes appended to this log, and still
+   * printed to the terminal. Resolves or rejects exactly as fn does.
+   */
+  run<T>(fn: () => Promise<T>): Promise<T>;
+};
+
 /**
- * Run fn with every console line it causes appended to the run's log file, and
- * still printed to the terminal as before. Resolves or rejects exactly as fn
- * does; the log file never changes the outcome.
+ * Open the run's log file for appending. A failure is returned with its cause,
+ * so the caller can fail the run on it rather than crawl without a log.
  */
-export async function withRunLog<T>(
+export function openRunLog(
   dataDir: string,
   runId: string,
-  fn: () => Promise<T>,
-): Promise<T> {
+): { ok: true; log: RunLog } | { ok: false; reason: string } {
   installTee();
   const file = runLogPath(dataDir, runId);
 
+  let fd: number;
   try {
     mkdirSync(path.dirname(file), { recursive: true });
+    fd = openSync(file, 'a');
   } catch (err) {
-    original.error(
-      `run log unavailable for ${runId}: ${err instanceof Error ? err.message : String(err)}`,
-    );
-    return fn();
+    return { ok: false, reason: `${file}: ${err instanceof Error ? err.message : String(err)}` };
   }
 
-  const stream = createWriteStream(file, { flags: 'a' });
-  const sink: RunLogSink = { runId, stream, open: true };
+  const stream = createWriteStream(file, { fd, flags: 'a' });
+  const sink: RunLogSink = { runId, stream, open: true, failure: null };
   stream.on('error', (err) => {
-    if (!sink.open) return;
+    if (sink.failure) return;
+    sink.failure = `${file}: ${err.message}`;
     sink.open = false;
-    original.error(`run log stopped for ${runId} (${file}): ${err.message}`);
+    original.error(`run log stopped for ${runId}: ${sink.failure}`);
   });
 
-  original.log(`run log: ${file}`);
-  try {
-    return await current.run(sink, fn);
-  } finally {
-    // Anything the run left behind (a timer, a late callback) still carries
-    // this context; closing the sink stops it writing to a finished stream.
-    const wasOpen = sink.open;
-    sink.open = false;
-    if (wasOpen) {
-      await new Promise<void>((resolve) => {
-        stream.end(() => resolve());
-      });
-    }
-  }
+  return {
+    ok: true,
+    log: {
+      file,
+      async run<T>(fn: () => Promise<T>): Promise<T> {
+        original.log(`run log: ${file}`);
+        try {
+          return await current.run(sink, fn);
+        } finally {
+          // Anything the run left behind (a timer, a late callback) still carries
+          // this context; closing the sink stops it writing to a finished stream.
+          const wasOpen = sink.open;
+          sink.open = false;
+          if (wasOpen) {
+            await new Promise<void>((resolve) => {
+              stream.end(() => resolve());
+            });
+          }
+        }
+      },
+    },
+  };
+}
+
+/** The write failure of the run log in the current context, or null. */
+export function runLogFailure(): string | null {
+  return current.getStore()?.failure ?? null;
 }
