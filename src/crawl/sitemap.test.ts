@@ -399,10 +399,39 @@ describe('loadSiteMapForSeed — robots.txt, sitemap indexes, and the ceilings',
     assert.match(map.failure ?? '', /\/robots\.txt: HTTP 403/);
   });
 
-  it('reports a fetch that gets no answer as a failure, with its transport cause', async () => {
+  it('stops the read at the first fetch that gets no answer, with its transport cause', async () => {
     const map = await loadSiteMapForSeed('http://127.0.0.1:1/');
     assert.match(map.failure ?? '', /robots\.txt: transport: fetch failed; caused by: /);
-    assert.match(map.failure ?? '', /sitemap\.xml: transport: fetch failed; caused by: /);
+    assert.doesNotMatch(map.failure ?? '', /sitemap\.xml/, 'nothing is fetched after the failure');
+  });
+
+  it('keeps nothing from a read that failed part way', async () => {
+    const site = createServer((req, res) => {
+      const path = req.url ?? '/';
+      if (path === '/robots.txt') {
+        res.writeHead(200, { 'content-type': 'text/plain' });
+        return res.end(`Sitemap: ${partOrigin}/a.xml\nSitemap: ${partOrigin}/b.xml\n`);
+      }
+      if (path === '/a.xml') {
+        res.writeHead(200, { 'content-type': 'application/xml' });
+        return res.end(`<urlset><url><loc>${partOrigin}/kept</loc></url></urlset>`);
+      }
+      res.writeHead(path === '/b.xml' ? 503 : 404);
+      res.end();
+    });
+    let partOrigin = '';
+    await new Promise<void>((resolve) => site.listen(0, '127.0.0.1', resolve));
+    const address = site.address();
+    assert(address && typeof address !== 'string');
+    partOrigin = `http://127.0.0.1:${address.port}`;
+    try {
+      const map = await loadSiteMapForSeed(`${partOrigin}/`);
+      assert.equal(map.hasMap, false);
+      assert.equal(map.urls.size, 0);
+      assert.match(map.failure ?? '', /\/b\.xml: HTTP 503$/);
+    } finally {
+      site.close();
+    }
   });
 
   it('reports no failure when the site answers 404: it says there is no sitemap', async () => {

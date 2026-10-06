@@ -212,7 +212,9 @@ async function executeCheerioCrawl(
   const siteMap: SiteMapIndex = await loadSiteMapIndex(seeds);
   persist.discovery.setSitemap(siteMap.hasMap, siteMap.urls.size, siteMap.truncated);
   if (siteMap.failure) {
-    log.error(`Sitemap could not be read: ${siteMap.failure}`);
+    // A sitemap only seeds the crawl, so a failed read does not end it. The read stopped at the
+    // failed fetch and kept nothing; the crawl goes on by link discovery.
+    log.error(`Sitemap read failed, crawling by link discovery: ${siteMap.failure}`);
   } else if (siteMap.hasMap) {
     log.info(
       `Sitemap seeds the crawl: ${siteMap.urls.size} URL(s)` +
@@ -609,12 +611,6 @@ async function executeCheerioCrawl(
   );
 
   try {
-    // A sitemap that could not be read is not a site without one. Crawling on would replace the
-    // site's own url list with link discovery and report the run as if nothing had failed.
-    if (siteMap.failure) {
-      throw new Error(`Sitemap could not be read: ${siteMap.failure}`);
-    }
-
     let startUrls = initialCrawlUrls(seeds, siteMap, enqueueOpts);
 
     // Link discovery, for the sites a static fetch cannot see.

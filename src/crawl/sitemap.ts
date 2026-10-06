@@ -51,8 +51,10 @@ export type SiteMapIndex = {
   /** sitemapMemberKey of every url, so membership survives trailing-slash, case and www variants. */
   memberKeys: Set<string>;
   /**
-   * Null when every fetch got an answer. Otherwise each fetch that failed, with its URL and its
-   * cause, and the run stops on it: a sitemap that could not be read is not a site without one.
+   * Null when the sitemap was read, or the site answered that it has none. Otherwise the fetch
+   * that failed, with its URL and cause. The read stops at that fetch and the map is empty: a
+   * sitemap only partly read is not kept. A sitemap only seeds the crawl, so the crawl goes on
+   * without one.
    */
   failure: string | null;
 };
@@ -113,7 +115,11 @@ function sameSite(seed: URL, candidate: URL): boolean {
  * logged with its URL and its status or transport cause.
  *
  * absent   the site answered 404 or 410: it says there is no file at that URL.
- * failed   anything else that is not a 2xx, or no answer at all. The run stops on it.
+ * failed   anything else that is not a 2xx, or no answer at all. The sitemap read stops on it.
+ *
+ * The robots.txt read here is only for its Sitemap: lines. Whether the crawler may fetch a URL is
+ * decided by the robots gate in robots.ts, which is separate, runs before the run is created, and
+ * fails closed.
  */
 type FetchOutcome =
   | { kind: 'ok'; text: string }
@@ -215,10 +221,9 @@ export async function loadSiteMapForSeed(seedUrl: string): Promise<SiteMapIndex>
   const origin = seed.origin;
   const sources = new Set<string>();
   const queue: string[] = [];
-  const failures: string[] = [];
 
   const fromRobots = await sitemapUrlsFromRobots(origin);
-  if (fromRobots.failure) failures.push(fromRobots.failure);
+  if (fromRobots.failure) return siteMapIndex([], [], false, fromRobots.failure);
   for (const s of fromRobots.urls) {
     queue.push(s);
     sources.add(s);
@@ -242,8 +247,7 @@ export async function loadSiteMapForSeed(seedUrl: string): Promise<SiteMapIndex>
 
     const outcome = await fetchText(smUrl);
     if (outcome.kind === 'failed') {
-      failures.push(`${smUrl}: ${outcome.detail}`);
-      continue;
+      return siteMapIndex([], [], false, `${smUrl}: ${outcome.detail}`);
     }
     if (outcome.kind === 'absent') continue;
     const xml = outcome.text;
@@ -284,19 +288,13 @@ export async function loadSiteMapForSeed(seedUrl: string): Promise<SiteMapIndex>
   }
   if (queue.some((q) => !seenSitemaps.has(q))) truncated = true;
 
-  return siteMapIndex(
-    urlSet,
-    [...sources].slice(0, 20),
-    truncated,
-    failures.length > 0 ? failures.join('; ') : null,
-  );
+  return siteMapIndex(urlSet, [...sources].slice(0, 20), truncated, null);
 }
 
 /** Merge per-seed maps (legacy multi-seed runs). */
 export async function loadSiteMapIndex(seeds: string[]): Promise<SiteMapIndex> {
   const urls = new Set<string>();
   const sources: string[] = [];
-  const failures: string[] = [];
   let truncated = false;
   for (const seed of seeds) {
     const part = await loadSiteMapForSeed(seed);
@@ -304,15 +302,10 @@ export async function loadSiteMapIndex(seeds: string[]): Promise<SiteMapIndex> {
     for (const s of part.sources) {
       if (!sources.includes(s)) sources.push(s);
     }
+    if (part.failure) return siteMapIndex([], [], false, part.failure);
     truncated ||= part.truncated;
-    if (part.failure) failures.push(part.failure);
   }
-  return siteMapIndex(
-    urls,
-    sources.slice(0, 40),
-    truncated,
-    failures.length > 0 ? failures.join('; ') : null,
-  );
+  return siteMapIndex(urls, sources.slice(0, 40), truncated, null);
 }
 
 export type EnqueueDedupOpts = {
