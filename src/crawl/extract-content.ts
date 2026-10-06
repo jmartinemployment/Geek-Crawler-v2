@@ -201,6 +201,11 @@ export type CleanContent = {
   truncated: boolean;
   /** Which root supplied the content. `body` means the page declared none. */
   contentRoot: ContentRoot | null;
+  /**
+   * Null unless extraction threw, then its message. A page that crashed the extractor is not a page
+   * with no prose, and until 2026-10-06 it was counted as one.
+   */
+  failure: string | null;
 };
 
 function emptyContent(): CleanContent {
@@ -212,6 +217,7 @@ function emptyContent(): CleanContent {
     excerpt: null,
     truncated: false,
     contentRoot: null,
+    failure: null,
   };
 }
 
@@ -729,8 +735,9 @@ function firstNonEmpty(...values: Array<string | undefined | null>): string | nu
 }
 
 /**
- * Extract. Any miss returns nulls -- a page extraction failure, never an
- * exception and never a substituted value.
+ * Extract. A page with nothing to extract returns nulls. A page the extractor
+ * crashed on returns nulls with `failure` set to the error, so the caller can
+ * record the real cause. Never an exception and never a substituted value.
  */
 export function extractCleanContent(html: string, pageUrl: string): CleanContent {
   if (!html || html.length < 40) return emptyContent();
@@ -832,6 +839,7 @@ export function extractCleanContent(html: string, pageUrl: string): CleanContent
       excerpt: readExcerpt($, blocks),
       truncated,
       contentRoot,
+      failure: null,
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -842,6 +850,6 @@ export function extractCleanContent(html: string, pageUrl: string): CleanContent
         message: message.slice(0, 500),
       }),
     );
-    return emptyContent();
+    return { ...emptyContent(), failure: message.slice(0, 500) };
   }
 }

@@ -11,6 +11,7 @@ export type RejectReason =
   | 'requires_javascript'
   | 'challenge_page'
   | 'extract_empty'
+  | 'extract_failed'
   | 'robots_disallowed'
   | 'request_failed';
 
@@ -61,6 +62,12 @@ export type RejectCounters = {
   pagesRejectedRequiresJavascript: number;
   pagesRejectedChallenge: number;
   pagesRejectedExtractEmpty: number;
+  /**
+   * The extractor threw on the page. Kept apart from extract_empty, which is a page with no prose:
+   * one is the site, the other is this crawler. Local only: GeekAPI's typed CrawlReport has no
+   * field for it and would drop one.
+   */
+  pagesRejectedExtractFailed: number;
   pagesRejectedRobots: number;
   pagesRejectedRequestFailed: number;
 };
@@ -71,6 +78,7 @@ export function emptyRejectCounters(): RejectCounters {
     pagesRejectedRequiresJavascript: 0,
     pagesRejectedChallenge: 0,
     pagesRejectedExtractEmpty: 0,
+    pagesRejectedExtractFailed: 0,
     pagesRejectedRobots: 0,
     pagesRejectedRequestFailed: 0,
   };
@@ -89,6 +97,9 @@ export function bumpRejectCounter(counters: RejectCounters, reason: RejectReason
       break;
     case 'extract_empty':
       counters.pagesRejectedExtractEmpty += 1;
+      break;
+    case 'extract_failed':
+      counters.pagesRejectedExtractFailed += 1;
       break;
     case 'robots_disallowed':
       counters.pagesRejectedRobots += 1;
@@ -187,6 +198,7 @@ export function rejectStatsHostProgressEntry(
     pagesRejectedRequiresJavascript: counters.pagesRejectedRequiresJavascript,
     pagesRejectedChallenge: counters.pagesRejectedChallenge,
     pagesRejectedExtractEmpty: counters.pagesRejectedExtractEmpty,
+    pagesRejectedExtractFailed: counters.pagesRejectedExtractFailed,
     pagesRejectedRobots: counters.pagesRejectedRobots,
     pagesRejectedRequestFailed: counters.pagesRejectedRequestFailed,
     ...(rejectSamples ? { rejectSamples } : {}),

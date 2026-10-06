@@ -479,6 +479,13 @@ async function executeCheerioCrawl(
               `content root is body — site declares no main/article: ${finalUrl}`,
             );
           }
+          if (clean.failure) {
+            // The extractor crashed. Recorded as that, with its message, and not as a page
+            // with no prose: it says nothing about the site, so it does not count toward
+            // abandoning it either.
+            persist.noteReject('extract_failed', finalUrl, clean.failure);
+            return;
+          }
           const extractReject = classifyReject({
             finalUrl,
             text: clean.text,

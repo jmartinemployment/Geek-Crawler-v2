@@ -90,6 +90,7 @@ describe('rejectStatsHostProgressEntry', () => {
         pagesRejectedRequiresJavascript: 6,
         pagesRejectedChallenge: 2,
         pagesRejectedExtractEmpty: 3,
+        pagesRejectedExtractFailed: 7,
         pagesRejectedRobots: 4,
         pagesRejectedRequestFailed: 5,
       },
@@ -98,6 +99,7 @@ describe('rejectStatsHostProgressEntry', () => {
     assert.equal(entry.origin, REJECT_STATS_ORIGIN);
     assert.equal(entry.pagesRejectedChallenge, 2);
     assert.equal(entry.pagesRejectedRobots, 4);
+    assert.equal(entry.pagesRejectedExtractFailed, 7);
     assert.equal(entry.pagesRejectedRequestFailed, 5);
     assert.equal(entry.pagesSaved, 9);
   });
@@ -110,6 +112,13 @@ describe('failure rejection reporting', () => {
     bumpRejectCounter(counters, 'request_failed');
     assert.equal(counters.pagesRejectedRobots, 1);
     assert.equal(counters.pagesRejectedRequestFailed, 1);
+  });
+
+  it('counts an extractor crash apart from a page with no prose', () => {
+    const counters = emptyRejectCounters();
+    bumpRejectCounter(counters, 'extract_failed');
+    assert.equal(counters.pagesRejectedExtractFailed, 1);
+    assert.equal(counters.pagesRejectedExtractEmpty, 0);
   });
 
   it('caps samples and removes URL secrets and error credentials', () => {
