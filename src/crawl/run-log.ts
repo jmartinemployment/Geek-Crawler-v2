@@ -22,6 +22,15 @@
  * it, which is the gap this file exists to close. Now a log that cannot be
  * opened fails the run before it crawls, and one that stops accepting writes is
  * reported through runLogFailure, which the runner checks and aborts on.
+ *
+ * Every line written outside a run goes to DATA_DIR/logs/process.log: the
+ * startup passes and the runs they delete, robots refusals before a run exists,
+ * unreadable-record reports from the API and the CLI, sweep errors, and the
+ * server's own lines. A late line from a run that has already finished goes
+ * there too, tagged with its run id. Until 2026-10-06 all of these reached only
+ * the terminal. The process log is opened before a command does anything, and a
+ * command does not run without it; one that stops accepting writes is reported
+ * through processLogFailure.
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks';
@@ -53,6 +62,16 @@ type RunLogSink = {
 
 const current = new AsyncLocalStorage<RunLogSink>();
 
+type ProcessLogSink = {
+  file: string;
+  stream: WriteStream;
+  open: boolean;
+  /** Null until a write fails, then the error. */
+  failure: string | null;
+};
+
+let processSink: ProcessLogSink | null = null;
+
 /** The console as it was before the tee, so the tee's own reports cannot loop. */
 const original: Record<ConsoleMethod, (...args: unknown[]) => void> = {
   log: console.log.bind(console),
@@ -70,12 +89,19 @@ function installTee(): void {
   for (const method of METHODS) {
     console[method] = (...args: unknown[]) => {
       original[method](...args);
-      const sink = current.getStore();
-      if (!sink || !sink.open) return;
       const text = stripVTControlCharacters(format(...args));
       // Crawlee's lines already open with their level; adding ours would say it twice.
       const level = CRAWLEE_LEVEL.test(text) ? '' : `${LEVEL[method]} `;
-      sink.stream.write(`${new Date().toISOString()} ${level}${text}\n`);
+      const stamp = new Date().toISOString();
+      const sink = current.getStore();
+      if (sink?.open) {
+        sink.stream.write(`${stamp} ${level}${text}\n`);
+        return;
+      }
+      if (!processSink?.open) return;
+      // Outside any run, or a late line from a run whose log is already closed.
+      const tag = sink ? `[run ${sink.runId}] ` : '';
+      processSink.stream.write(`${stamp} ${level}${tag}${text}\n`);
     };
   }
 }
@@ -148,4 +174,50 @@ export function openRunLog(
 /** The write failure of the run log in the current context, or null. */
 export function runLogFailure(): string | null {
   return current.getStore()?.failure ?? null;
+}
+
+export function processLogPath(dataDir: string): string {
+  return path.join(dataDir, 'logs', 'process.log');
+}
+
+/**
+ * Open the process log for appending, before a command does anything else. A
+ * failure is returned with its cause, so the command can refuse to run rather
+ * than run with its lines going only to the terminal. Opening it again for the
+ * same file is a no-op; for another file, the old one is closed first.
+ */
+export function openProcessLog(dataDir: string): { ok: true; file: string } | { ok: false; reason: string } {
+  installTee();
+  const file = processLogPath(dataDir);
+  if (processSink?.open && processSink.file === file) return { ok: true, file };
+
+  let fd: number;
+  try {
+    mkdirSync(path.dirname(file), { recursive: true });
+    fd = openSync(file, 'a');
+  } catch (err) {
+    return { ok: false, reason: `${file}: ${err instanceof Error ? err.message : String(err)}` };
+  }
+
+  if (processSink?.open) {
+    processSink.open = false;
+    processSink.stream.end();
+  }
+  const stream = createWriteStream(file, { fd, flags: 'a' });
+  const sink: ProcessLogSink = { file, stream, open: true, failure: null };
+  stream.on('error', (err) => {
+    if (sink.failure) return;
+    sink.failure = `${file}: ${err.message}`;
+    sink.open = false;
+    original.error(`process log stopped: ${sink.failure}`);
+  });
+  processSink = sink;
+  original.log(`process log: ${file}`);
+  return { ok: true, file };
+}
+
+/** Null while the process log is open and writing; otherwise why it is not. */
+export function processLogFailure(): string | null {
+  if (!processSink) return 'process log was never opened';
+  return processSink.failure;
 }

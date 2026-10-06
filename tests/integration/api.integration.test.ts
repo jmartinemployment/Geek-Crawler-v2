@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import type { Server } from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { createCrawlApiServer } from '../../src/api/server.js';
+import { processLogPath } from '../../src/crawl/run-log.js';
 import { startFixtureSite } from '../fixtures/site.js';
 
 type Api = ReturnType<typeof createCrawlApiServer>;
@@ -61,7 +62,8 @@ async function startMockGeekApi(): Promise<{ origin: string; close: () => void }
 
 async function startApi(dataDir: string): Promise<{ api: Api; origin: string }> {
   const api = createCrawlApiServer({ dataDir, port: 0 });
-  await api.listen();
+  const started = await api.listen();
+  assert(started.ok, started.ok ? '' : started.reason);
   const address = api.server.address();
   if (!address || typeof address === 'string') throw new Error('Crawler API did not bind');
   return { api, origin: `http://127.0.0.1:${address.port}` };
@@ -387,5 +389,45 @@ test('the scratch sweep keeps a queue it cannot prove orphaned, and says why', {
     if (old.user === undefined) delete process.env.GEEK_USER_ID;
     else process.env.GEEK_USER_ID = old.user;
     await rm(dataDir, { recursive: true, force: true });
+  }
+});
+
+// Lines written outside a run, the startup passes among them, reached only the terminal until
+// 2026-10-06. The server opens the process log before anything else and does not start without it.
+test('the server writes its own lines to the process log, and does not start without one', { timeout: 30_000 }, async () => {
+  const geek = await startMockGeekApi();
+  const old = {
+    url: process.env.GEEK_API_URL,
+    key: process.env.GEEK_BACKEND_API_KEY,
+    user: process.env.GEEK_USER_ID,
+  };
+  process.env.GEEK_API_URL = geek.origin;
+  process.env.GEEK_BACKEND_API_KEY = 'test-key';
+  process.env.GEEK_USER_ID = 'test-user';
+  const good = await mkdtemp(path.join(os.tmpdir(), 'geek-crawler-proclog-'));
+  const blocked = await mkdtemp(path.join(os.tmpdir(), 'geek-crawler-proclog-blocked-'));
+  try {
+    const { api } = await startApi(good);
+    await closeServer(api.server);
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+    assert.match(await readFile(processLogPath(good), 'utf8'), /INFO geek-crawler-v2 API on http:\/\/127\.0\.0\.1:/);
+
+    // A directory where the process log belongs, so it cannot be opened.
+    await mkdir(processLogPath(blocked), { recursive: true });
+    const refused = createCrawlApiServer({ dataDir: blocked, port: 0 });
+    const started = await refused.listen();
+    assert.equal(started.ok, false);
+    assert.match(started.ok ? '' : started.reason, /^process log could not be opened: .*EISDIR/);
+    assert.equal(refused.server.listening, false, 'the server must not start');
+  } finally {
+    geek.close();
+    if (old.url === undefined) delete process.env.GEEK_API_URL;
+    else process.env.GEEK_API_URL = old.url;
+    if (old.key === undefined) delete process.env.GEEK_BACKEND_API_KEY;
+    else process.env.GEEK_BACKEND_API_KEY = old.key;
+    if (old.user === undefined) delete process.env.GEEK_USER_ID;
+    else process.env.GEEK_USER_ID = old.user;
+    await rm(good, { recursive: true, force: true });
+    await rm(blocked, { recursive: true, force: true });
   }
 });

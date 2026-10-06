@@ -5,6 +5,7 @@ loadEnv({ path: '.env.local', override: true });
 import path from 'node:path';
 import { createCrawlApiServer } from './api/server.js';
 import { isPrepareFailure, startCrawl } from './crawl/orchestrator.js';
+import { openProcessLog } from './crawl/run-log.js';
 import { renderFailures, summarizeFailures } from './storage/failures-report.js';
 
 function usage(): never {
@@ -49,6 +50,7 @@ function parseArgs(argv: string[]) {
 
 async function cmdCrawl(argv: string[]) {
   const { seeds, crawlType, maxRequestsPerCrawl, dataDir } = parseArgs(argv);
+  if (!requireProcessLog(dataDir)) return;
   if (seeds.length === 0) {
     console.error('At least one --seed is required');
     usage();
@@ -94,6 +96,7 @@ async function cmdCrawl(argv: string[]) {
  */
 async function cmdFailures(argv: string[]) {
   const { dataDir } = parseArgs(argv);
+  if (!requireProcessLog(dataDir)) return;
   const resolved = path.resolve(dataDir ?? process.env.DATA_DIR ?? './data');
   const summary = await summarizeFailures(resolved);
   if (summary === null) {
@@ -106,7 +109,20 @@ async function cmdFailures(argv: string[]) {
 
 async function cmdServe() {
   const api = createCrawlApiServer();
-  await api.listen();
+  const started = await api.listen();
+  if (!started.ok) {
+    console.error(started.reason);
+    process.exitCode = 1;
+  }
+}
+
+/** Every command opens the process log before it does anything, and does not run without it. */
+function requireProcessLog(dataDir: string | undefined): boolean {
+  const opened = openProcessLog(path.resolve(dataDir ?? process.env.DATA_DIR ?? './data'));
+  if (opened.ok) return true;
+  console.error(`process log could not be opened: ${opened.reason}`);
+  process.exitCode = 1;
+  return false;
 }
 
 async function main() {

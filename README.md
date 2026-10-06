@@ -279,7 +279,8 @@ backfill timestamp.
 Without those env vars, nothing leaves the machine, but note what local mode
 actually keeps: run stubs and counters under `DATA_DIR/runs/`, the Crawlee
 request queue under `DATA_DIR/.crawlee/<runId>/`, post-mortems under
-`DATA_DIR/failures/`, and each run's log lines under `DATA_DIR/logs/<runId>.log`.
+`DATA_DIR/failures/`, each run's log lines under `DATA_DIR/logs/<runId>.log`, and
+every line written outside a run under `DATA_DIR/logs/process.log`.
 **Page bodies are not written locally.** The body store
 exists (`src/storage/raw-body.ts`, `put` for the raw wire HTML and
 `putContentHtml` for the clean fragment) but nothing calls it, and
@@ -447,12 +448,12 @@ and whether re-post would ever have been the fix:
 | A link scope or URL that will not parse; a near-duplicate copy that was not written | The run log |
 | A run log that cannot be opened. The run is failed and purged before it fetches a page | The post-mortem |
 | A run log that stops accepting writes. The run is aborted and purged | The post-mortem |
+| Every line written outside a run: the startup orphan and superseded passes and the runs they delete, robots gate refusals before a run exists, `RECORD_UNREADABLE` reports from the API and the CLI, scratch-sweep errors, the server's `Crawl <runId> failed` line, and a late line from a run that has finished, tagged `[run <runId>]` | `DATA_DIR/logs/process.log` |
 
-Not yet on disk: lines written outside a run go to the terminal only. That
-covers the startup orphan and superseded passes (including the runs they
-delete), robots gate refusals before a run exists, `RECORD_UNREADABLE` reports
-from the API and the CLI, scratch-sweep errors, and the server's
-`Crawl <runId> failed` line. The post-mortem still records why a run failed.
+`serve`, `crawl` and `failures` open `process.log` before they do anything, and
+do not run without it: a process log that cannot be opened is reported with its
+cause and the command exits 1. If it stops accepting writes, `GET /health`
+answers 503 and `POST /crawls` refuses new crawls with the cause.
 
 The 33 post-mortems written in that window carry `purgedAtUtc: null`. The
 failures report lists them as `not purged`, which is what the records say.

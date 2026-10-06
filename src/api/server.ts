@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { readdir, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { isPrepareFailure, prepareCrawl, startCrawl } from '../crawl/orchestrator.js';
+import { openProcessLog, processLogFailure } from '../crawl/run-log.js';
 import { CRAWL_TYPE_VALUES } from '../crawl/types.js';
 import { createGeekApiClient, requireGeekApiEnv } from '../storage/geek-api-client.js';
 import { requestCancel } from '../crawl/cancel-registry.js';
@@ -106,6 +107,10 @@ export function createCrawlApiServer(options?: { dataDir?: string; port?: number
       const { pathname } = url;
 
       if (req.method === 'GET' && (pathname === '/health' || pathname === '/')) {
+        const logFailure = processLogFailure();
+        if (logFailure) {
+          return send(res, 503, { ok: false, error: `process log not writing: ${logFailure}` });
+        }
         return send(res, 200, {
           ok: true,
           service: 'geek-crawler-v2',
@@ -124,6 +129,12 @@ export function createCrawlApiServer(options?: { dataDir?: string; port?: number
       }
 
       if (req.method === 'POST' && pathname === '/crawls') {
+        // No crawl starts while the process log is not writing: its lines would reach only the
+        // terminal.
+        const logFailure = processLogFailure();
+        if (logFailure) {
+          return send(res, 503, { error: `process log not writing: ${logFailure}` });
+        }
         const raw = await readBody(req);
         const body = raw ? (JSON.parse(raw) as Json) : {};
         const seeds = Array.isArray(body.seeds)
@@ -413,7 +424,15 @@ export function createCrawlApiServer(options?: { dataDir?: string; port?: number
   });
 
   return {
-    async listen() {
+    /**
+     * Opens the process log first: the startup passes below delete runs, and what they delete
+     * must be on disk. A process log that cannot be opened is returned with its cause, and the
+     * server does not start.
+     */
+    async listen(): Promise<{ ok: true } | { ok: false; reason: string }> {
+      const processLog = openProcessLog(dataDir);
+      if (!processLog.ok) return { ok: false, reason: `process log could not be opened: ${processLog.reason}` };
+
       // Before the socket opens, so no request can read a run record that says
       // running when the process that was writing it is gone. At startup this
       // process owns nothing yet, so inFlight is empty by construction and the
@@ -487,7 +506,7 @@ export function createCrawlApiServer(options?: { dataDir?: string; port?: number
         }
       })();
 
-      return new Promise<void>((resolve) => {
+      return new Promise<{ ok: true }>((resolve) => {
         // Loopback only. This surface has no authentication, so a non-loopback bind puts
         // POST /crawls and DELETE /crawls/:runId on the network. It is scheduled for deletion
         // outright — plans/move-crawl-reads-to-geekapi.md.
@@ -505,7 +524,7 @@ export function createCrawlApiServer(options?: { dataDir?: string; port?: number
           console.log(`  POST /crawls/:runId/cancel`);
           console.log(`  GET  /failures            post-mortems, newest first`);
           console.log(`  GET  /failures/summary    counts by cause`);
-          resolve();
+          resolve({ ok: true });
         });
       });
     },
