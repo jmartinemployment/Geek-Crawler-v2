@@ -76,7 +76,7 @@ export async function summarizeFailures(dataDir: string): Promise<FailureSummary
 
   for (const record of records) {
     // purgedAtUtc null only on records from 2026-09-30 to 2026-10-05, archived without a purge.
-    // Reading `purge` for one would be reading an outcome that never happened.
+    // Reading purge for one would be reading an outcome that never happened.
     if (record.purgedAtUtc !== null) {
       purged += 1;
       pagesLost += record.pagesSaved;

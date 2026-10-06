@@ -39,7 +39,7 @@ export function isSameSite(pageUrl: string, linkUrl: string): boolean {
  * `scopeUrl` anchors the same-site test. Pass the run's seed URL: `pageUrl` is the
  * URL *after* redirects, so anchoring to it lets one off-host redirect move the
  * crawl boundary and the BFS adopts the new host. Required: until 2026-10-06 a
- * missing or unparseable scope quietly became `pageUrl`, which is that drift.
+ * missing or unparseable scope quietly became pageUrl, which is that drift.
  * An unparseable page or scope yields no links, and says so.
  */
 export function extractHrefs(

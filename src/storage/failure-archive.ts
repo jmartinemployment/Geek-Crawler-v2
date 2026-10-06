@@ -7,7 +7,7 @@
  * the purge safe to perform.
  *
  * Every failed or cancelled run is purged, and its record carries the purge time and outcome.
- * Records written from 2026-09-30 to 2026-10-05 may carry `purgedAtUtc` and `purge` both null:
+ * Records written from 2026-09-30 to 2026-10-05 may carry purgedAtUtc and purge both null:
  * in that window a run that failed on an unreachable GeekAPI was archived without a purge. That
  * path is removed (Jeff, 2026-10-06).
  *

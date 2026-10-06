@@ -736,7 +736,7 @@ function firstNonEmpty(...values: Array<string | undefined | null>): string | nu
 
 /**
  * Extract. A page with nothing to extract returns nulls. A page the extractor
- * crashed on returns nulls with `failure` set to the error, so the caller can
+ * crashed on returns nulls with failure set to the error, so the caller can
  * record the real cause. Never an exception and never a substituted value.
  */
 export function extractCleanContent(html: string, pageUrl: string): CleanContent {

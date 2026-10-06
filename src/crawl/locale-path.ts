@@ -151,7 +151,7 @@ export function shouldExcludeLocalePath(url: string): boolean {
 
 /**
  * Strip leading `en` / `en-*` path segment (e.g. /en-us/foo → /foo).
- * Does not touch `/us/`. Null for an unparseable URL.
+ * Does not touch /us/. Null for an unparseable URL.
  */
 export function stripEnglishLocalePrefix(url: string): string | null {
   if (isUsRegionPath(url)) return url;
