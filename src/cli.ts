@@ -13,7 +13,7 @@ function usage(): never {
 Usage:
   npm run crawl -- --seed <url> [--seed <url>...] [--type partner|competitors|local|project-site] [--max N]
   npm run serve
-  npm run failures [-- --data-dir <dir>]   what failed, why, and which runs were never purged
+  npm run failures [-- --data-dir <dir>]   what failed, and why
 
 Env: see .env.example (GEEK_API_URL, EGRESS_MODE, PROXY_URL, DATA_DIR)
 `);
@@ -86,18 +86,12 @@ async function cmdCrawl(argv: string[]) {
 /**
  * The archive had 15 post-mortems and nothing read it, so ~4,000 discarded pages went unnoticed
  * until someone happened to look. This is the thing that looks.
- *
- * Exit 1 when any run was kept rather than purged: it failed before 2026-10-05 and nothing has
- * deleted it, so an operator has to delete or re-crawl it. It cannot be re-posted. A cron wrapping
- * this gets a non-zero status to notice rather than a log line to ignore. A purge-only archive
- * exits 0 — it is history, not a pending decision.
  */
 async function cmdFailures(argv: string[]) {
   const { dataDir } = parseArgs(argv);
   const resolved = path.resolve(dataDir ?? process.env.DATA_DIR ?? './data');
   const summary = await summarizeFailures(resolved);
   console.log(renderFailures(summary, resolved));
-  if (summary.kept > 0) process.exit(1);
 }
 
 async function cmdServe() {

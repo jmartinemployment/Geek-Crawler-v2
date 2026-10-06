@@ -107,7 +107,7 @@ describe('summarizeFailures', () => {
           errorSummary: 'POST /pages/batch → 500: {"error":"boom"}',
         }),
       );
-      // Kept: purgedAtUtc and purge both null, which is the archive's marker for a run not purged.
+      // A record from 2026-09-30 to 2026-10-05: archived without a purge, both fields null.
       await archiveRun(
         dataDir,
         record({
@@ -123,19 +123,15 @@ describe('summarizeFailures', () => {
       const summary = await summarizeFailures(dataDir);
       assert.equal(summary.total, 2);
       assert.equal(summary.purged, 1);
-      assert.equal(summary.kept, 1);
       assert.equal(summary.pagesLost, 342, 'only the purged run lost its pages');
-      assert.equal(summary.pagesKept, 180, 'the kept run was not purged');
 
-      // Newest first, and it must sort on createdAtUtc: the kept record has no purge time, and
-      // sorting on that would bury exactly the run still waiting on an operator.
+      // Newest first, and it must sort on createdAtUtc: the unpurged record has no purge time.
       assert.equal(summary.records[0]?.runId, '22222222-2222-4222-8222-222222222222');
 
       const text = renderFailures(summary, dataDir);
-      assert.match(text, /1 purged \(342 page\(s\) gone\), 1 kept \(180 page\(s\) not purged\)/);
-      assert.match(text, /KEPT means the run was archived without a purge/);
-      assert.match(text, /It cannot be re-posted/);
-      assert.doesNotMatch(text, /can be re-posted|still on disk/);
+      assert.match(text, /1 purged \(342 page\(s\) gone\), 1 not purged/);
+      assert.match(text, /not purged\s+180 page\(s\)  22222222-2222-4222-8222-222222222222/);
+      assert.doesNotMatch(text, /KEPT|re-post/);
     } finally {
       await rm(dataDir, { recursive: true, force: true });
     }

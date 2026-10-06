@@ -305,8 +305,7 @@ export function createCrawlApiServer(options?: { dataDir?: string; port?: number
         });
       }
 
-      // Post-mortems. A purged run is gone and this is what is left of it; a kept run still has its
-      // pages on disk, and `purgedAtUtc: null` is how the two are told apart.
+      // Post-mortems. A purged run is gone and this is what is left of it.
       if (req.method === 'GET' && pathname === '/failures') {
         const failures = await listFailures(dataDir);
         return send(res, 200, { ok: true, failures });
@@ -469,7 +468,7 @@ export function createCrawlApiServer(options?: { dataDir?: string; port?: number
           console.log(`  GET  /crawls/:runId/pages  → 410 PAGES_NOT_LOCAL (read from GeekAPI)`);
           console.log(`  POST /crawls/:runId/cancel`);
           console.log(`  GET  /failures            post-mortems, newest first`);
-          console.log(`  GET  /failures/summary    counts by cause, and runs never purged`);
+          console.log(`  GET  /failures/summary    counts by cause`);
           resolve();
         });
       });

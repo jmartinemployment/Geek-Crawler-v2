@@ -6,12 +6,10 @@
  * which meant deleting the run deleted its own explanation; writing it here first is what makes
  * the purge safe to perform.
  *
- * From 2026-09-30 to 2026-10-05 a run that failed because GeekAPI could not be reached was kept
- * instead of purged, on the premise that it could be re-posted. It could not: no command exists, and
- * nothing ingests from the extract cache, which is diagnostics. Such a run is archived with `purgedAtUtc` and `purge`
- * both null, because a kept run with no record is invisible, and being invisible to the operator is
- * how 603 pages sat unnoticed. The two null fields mark a run that was never purged and is waiting
- * on an operator to delete or re-crawl it. Since fabb42f every failed run is purged.
+ * Every failed or cancelled run is purged, and its record carries the purge time and outcome.
+ * Records written from 2026-09-30 to 2026-10-05 may carry `purgedAtUtc` and `purge` both null:
+ * in that window a run that failed on an unreachable GeekAPI was archived without a purge. That
+ * path is removed (Jeff, 2026-10-06).
  *
  * Diagnostics only. Nothing reads this to decide what to crawl, resume, or dedup, so it is not a
  * second source of crawl authority and does not breach the no-mirror law.
@@ -38,7 +36,7 @@ export type FailureRecord = {
   status: 'failed' | 'cancelled';
   errorSummary: string | null;
   createdAtUtc: string;
-  /** Null when the run was kept rather than purged — its crawl data is still on disk. */
+  /** Null only on records from 2026-09-30 to 2026-10-05, archived without a purge. */
   purgedAtUtc: string | null;
   pagesSaved: number;
   linksSaved: number;
@@ -111,8 +109,8 @@ export async function listFailures(dataDir: string): Promise<FailureRecord[]> {
     }
   }
 
-  // On createdAtUtc, not purgedAtUtc: a kept run has no purge time, and sorting on a null would
-  // bury exactly the records that still have data to recover.
+  // On createdAtUtc, not purgedAtUtc: a record archived without a purge has no purge time, and
+  // sorting on a null would misplace it.
   records.sort((a, b) => (b.createdAtUtc ?? '').localeCompare(a.createdAtUtc ?? ''));
   return records;
 }

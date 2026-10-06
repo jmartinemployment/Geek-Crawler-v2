@@ -85,17 +85,6 @@ export type CrawlPersist = {
    * that leaves no explanation behind is the one outcome this exists to prevent.
    */
   archiveAndPurge(status: 'failed' | 'cancelled', errorSummary: string): Promise<void>;
-  /**
-   * Write the post-mortem and destroy nothing.
-   *
-   * Nothing calls this since fabb42f (2026-10-05): a failed run is purged, whatever failed it. It
-   * was kept for a failure that said nothing about the crawl, GeekAPI unreachable or a platform 404
-   * during a redeploy, on the premise that the run could be re-posted. It could not: no command
-   * exists, and nothing ingests from the extract cache, which is diagnostics. Kept for now by
-   * Jeff's instruction of 2026-10-06. Re-post is a fallback and is not pending: whether it is the
-   * fix is known only once the logged failure data shows it.
-   */
-  archiveFailure(status: 'failed' | 'cancelled', errorSummary: string): Promise<void>;
   throwIfPersistenceFailed(): void;
   rootPersistenceError(): PersistenceError | null;
   noteReject(reason: RejectReason, url: string, detail?: string): void;
@@ -253,16 +242,12 @@ export function createCrawlPersist(input: {
     };
   }
 
-  /**
-   * One shape for both outcomes. A kept run and a purged run differ only in `purgedAtUtc` and
-   * `purge`, so building them from one place is what keeps the two records comparable — an
-   * operator reading `failures/` sees the same fields and can tell them apart by those two.
-   */
+  /** The post-mortem of a run that is about to be purged. */
   function failureRecord(
     status: 'failed' | 'cancelled',
     errorSummary: string,
-    purgedAtUtc: string | null,
-    purge: PurgeOutcome | null,
+    purgedAtUtc: string,
+    purge: PurgeOutcome,
   ): FailureRecord {
     return {
       runId,
@@ -444,19 +429,6 @@ export function createCrawlPersist(input: {
         );
       }
       await recordLocalStatsQuietly();
-    },
-
-    async archiveFailure(status: 'failed' | 'cancelled', errorSummary: string) {
-      await archiveRun(input.dataDir, failureRecord(status, errorSummary, null, null));
-      console.log(
-        JSON.stringify({
-          event: 'run_archived_kept',
-          runId,
-          status,
-          pagesSaved,
-          linksSaved,
-        }),
-      );
     },
 
     async archiveAndPurge(status: 'failed' | 'cancelled', errorSummary: string) {

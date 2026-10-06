@@ -179,33 +179,3 @@ test('an unwritable archive aborts before the purge', async () => {
     assert.equal(deleteCalls(), 0, 'nothing may be destroyed without a post-mortem');
   });
 });
-
-test('archiveFailure records the run and destroys nothing', async () => {
-  await withStubbedGeekApi({ deleteOk: true }, async (dataDir, deleteCalls) => {
-    const persist = createCrawlPersist({
-      crawlType: 'partner',
-      seeds: ['https://example.com'],
-      dataDir,
-    });
-    await persist.begin();
-    await persist.archiveFailure('failed', 'GeekAPI unreachable: 502 on pages/batch');
-
-    assert.equal(deleteCalls(), 0, 'keeping the run means no purge is attempted at all');
-
-    const record = await readFailure(dataDir, persist.runId);
-    assert(record, 'a kept run must still be archived, or nobody knows it is there');
-    assert.equal(record.status, 'failed');
-    assert.equal(record.errorSummary, 'GeekAPI unreachable: 502 on pages/batch');
-
-    // These two nulls are the whole distinction between a kept run and a purged one. An empty
-    // PurgeOutcome would read as "purge ran and removed nothing", which is the opposite claim.
-    assert.equal(record.purgedAtUtc, null);
-    assert.equal(record.purge, null);
-
-    assert.equal(
-      await exists(path.join(dataDir, 'runs', persist.runId)),
-      true,
-      'the local run directory is what is being kept',
-    );
-  });
-});
