@@ -414,15 +414,21 @@ export function createPageDedupTracker(input: {
             hamming: near.distance,
           };
           if (nearDupFiles < NEAR_DUP_MAX_FILES && nearDupBytes < NEAR_DUP_MAX_BYTES) {
+            const file = path.join(nearDupDir, `${ch.slice(0, 24)}.md`);
             try {
               await mkdir(nearDupDir, { recursive: true });
-              const file = path.join(nearDupDir, `${ch.slice(0, 24)}.md`);
               const body = md.slice(0, 500_000);
               await writeFile(file, body, 'utf8');
               nearDupFiles += 1;
               nearDupBytes += Buffer.byteLength(body, 'utf8');
-            } catch {
-              // counter-only
+            } catch (err) {
+              // Diagnostics only: the skip decision stands either way. But a copy that was not
+              // written is said, with its cause, rather than left to look like a cap.
+              log.warning(
+                `near-duplicate copy not written ${file}: ${
+                  err instanceof Error ? err.message : String(err)
+                }`,
+              );
             }
           }
           return {
