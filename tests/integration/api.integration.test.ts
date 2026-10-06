@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import type { Server } from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
@@ -340,6 +340,45 @@ test('cancelling a live crawl stops fetching and lands it in cancelled, never co
   } finally {
     await closeServer(api.server);
     await fixture.close();
+    geek.close();
+    if (old.url === undefined) delete process.env.GEEK_API_URL;
+    else process.env.GEEK_API_URL = old.url;
+    if (old.key === undefined) delete process.env.GEEK_BACKEND_API_KEY;
+    else process.env.GEEK_BACKEND_API_KEY = old.key;
+    if (old.user === undefined) delete process.env.GEEK_USER_ID;
+    else process.env.GEEK_USER_ID = old.user;
+    await rm(dataDir, { recursive: true, force: true });
+  }
+});
+
+// The sweep deleted a request queue whenever stat on its run directory threw, whatever the error.
+// Only a missing run directory makes a queue an orphan; anything else is reported and the queue kept.
+test('the scratch sweep keeps a queue it cannot prove orphaned, and says why', { timeout: 30_000 }, async () => {
+  const geek = await startMockGeekApi();
+  const dataDir = await mkdtemp(path.join(os.tmpdir(), 'geek-crawler-sweep-'));
+  const old = {
+    url: process.env.GEEK_API_URL,
+    key: process.env.GEEK_BACKEND_API_KEY,
+    user: process.env.GEEK_USER_ID,
+  };
+  process.env.GEEK_API_URL = geek.origin;
+  process.env.GEEK_BACKEND_API_KEY = 'test-key';
+  process.env.GEEK_USER_ID = 'test-user';
+  // runs is a file, so stat(runs/<id>) fails with ENOTDIR rather than ENOENT.
+  await writeFile(path.join(dataDir, 'runs'), 'not a directory');
+  const queue = path.join(dataDir, '.crawlee', 'queue-1');
+  await mkdir(queue, { recursive: true });
+  const { api, origin } = await startApi(dataDir);
+  try {
+    const res = await fetch(`${origin}/maintenance/sweep-scratch`, { method: 'POST' });
+    assert.equal(res.status, 200);
+    const body = await json(res);
+    assert.deepEqual(body.swept, []);
+    assert.equal(body.failures.length, 1);
+    assert.match(body.failures[0].error, /cannot stat .*ENOTDIR/);
+    await access(queue);
+  } finally {
+    await closeServer(api.server);
     geek.close();
     if (old.url === undefined) delete process.env.GEEK_API_URL;
     else process.env.GEEK_API_URL = old.url;

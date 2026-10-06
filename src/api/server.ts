@@ -334,8 +334,15 @@ export function createCrawlApiServer(options?: { dataDir?: string; port?: number
         let scratchIds: string[];
         try {
           scratchIds = await readdir(scratchDir);
-        } catch {
-          return send(res, 200, { ok: true, swept: [], bytesFreed: 0 });
+        } catch (err) {
+          // No scratch directory means there is nothing to sweep. Any other error is reported
+          // with its cause, not answered as an empty sweep.
+          if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+            return send(res, 200, { ok: true, swept: [], bytesFreed: 0 });
+          }
+          const message = err instanceof Error ? err.message : String(err);
+          console.error(`sweep-scratch: cannot read ${scratchDir}: ${message}`);
+          return send(res, 500, { error: `cannot read ${scratchDir}: ${message}` });
         }
 
         const swept: string[] = [];
@@ -346,8 +353,15 @@ export function createCrawlApiServer(options?: { dataDir?: string; port?: number
           try {
             await stat(runDir);
             continue; // the run still exists — not orphaned
-          } catch {
-            // no run directory, so this queue belongs to nothing
+          } catch (err) {
+            // Only a missing run directory makes this queue an orphan. Any other error says
+            // nothing about whether the run exists, so the queue is left and the error reported.
+            if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+              const message = err instanceof Error ? err.message : String(err);
+              console.error(`sweep-scratch: cannot stat ${runDir}: ${message}`);
+              failures.push({ runId: id, error: `cannot stat ${runDir}: ${message}` });
+              continue;
+            }
           }
           const target = path.join(scratchDir, id);
           try {
@@ -355,10 +369,9 @@ export function createCrawlApiServer(options?: { dataDir?: string; port?: number
             await rm(target, { recursive: true, force: true });
             swept.push(id);
           } catch (err) {
-            failures.push({
-              runId: id,
-              error: err instanceof Error ? err.message : String(err),
-            });
+            const message = err instanceof Error ? err.message : String(err);
+            console.error(`sweep-scratch: cannot remove ${target}: ${message}`);
+            failures.push({ runId: id, error: message });
           }
         }
         return send(res, 200, {
