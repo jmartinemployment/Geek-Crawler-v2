@@ -424,6 +424,39 @@ directory, so the purge leaves them. Every line the run causes goes there as
 well as to the terminal, Crawlee's own lines included, and each concurrent run
 keeps only its own (`src/crawl/run-log.ts`). Nothing removes these files.
 
+### Re-post was a fallback, and is removed
+
+From 2026-09-30 to 2026-10-05 a run that failed because GeekAPI could not be
+reached was kept instead of purged, so that its pages could be "re-posted"
+later. That was a fallback for a failure nobody could see the cause of: the
+ingest error kept only `fetch failed`, and the run's log existed only in the
+terminal. No re-post command was ever built. Since `fabb42f` every failed run is
+purged; `4466494` removed what was left (`archiveFailure` and the KEPT handling
+in the failures report). Persisting a failed run's state is deferred to a later
+plan (Jeff, 2026-10-06).
+
+It is replaced by logging, so the data shows the actual cause of each failure
+and whether re-post would ever have been the fix:
+
+| What | Where it is written |
+|---|---|
+| The transport cause of a failed GeekAPI write, as the full cause chain (`fetch failed; caused by: other side closed (UND_ERR_SOCKET)`) | The post-mortem's `errorSummary`, and the run log. Not GeekAPI: after a failed write the failed-status patch is blocked, and the run is then deleted there |
+| Every line a run causes, Crawlee's own included | `DATA_DIR/logs/<runId>.log`, kept after the purge |
+| Each sitemap fetch, and the robots.txt fetch that reads its `Sitemap:` lines, with the URL and HTTP status or transport cause. A failed sitemap read is logged and the crawl goes on by link discovery. Permission to crawl is the separate robots gate | The run log |
+| An extractor crash, recorded as `extract_failed` with its message, apart from a page with no prose | The run log, and the post-mortem's reject samples |
+| A link scope or URL that will not parse; a near-duplicate copy that was not written | The run log |
+| A run log that cannot be opened. The run is failed and purged before it fetches a page | The post-mortem |
+| A run log that stops accepting writes. The run is aborted and purged | The post-mortem |
+
+Not yet on disk: lines written outside a run go to the terminal only. That
+covers the startup orphan and superseded passes (including the runs they
+delete), robots gate refusals before a run exists, `RECORD_UNREADABLE` reports
+from the API and the CLI, scratch-sweep errors, and the server's
+`Crawl <runId> failed` line. The post-mortem still records why a run failed.
+
+The 33 post-mortems written in that window carry `purgedAtUtc: null`. The
+failures report lists them as `not purged`, which is what the records say.
+
 Read it at `http://localhost:3000/runs` under **Purged Runs**, or from the API:
 
 ```
