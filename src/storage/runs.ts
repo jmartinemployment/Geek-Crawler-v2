@@ -54,6 +54,7 @@ export type CrawlRunMeta = {
   aliasesLearned?: number;
   rejectSamples?: {
     locale_excluded?: RejectSample[];
+    non_content_directory?: RejectSample[];
     requires_javascript?: RejectSample[];
     challenge_page?: RejectSample[];
     extract_empty?: RejectSample[];

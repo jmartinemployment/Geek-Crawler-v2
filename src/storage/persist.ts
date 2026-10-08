@@ -226,6 +226,7 @@ export function createCrawlPersist(input: {
       excludedByPolicy: {
         robotsDisallowed: rejectCounters.pagesRejectedRobots,
         localeExcluded: rejectCounters.pagesRejectedLocale,
+        nonContentDirectory: rejectCounters.pagesRejectedNonContent,
         requiresJavascript: rejectCounters.pagesRejectedRequiresJavascript,
       },
       failed: {

@@ -25,7 +25,7 @@ function record(over: Partial<FailureRecord>): FailureRecord {
     linksSaved: 0,
     report: {
       linksStored: 0,
-      excludedByPolicy: { robotsDisallowed: 0, localeExcluded: 0, requiresJavascript: 0 },
+      excludedByPolicy: { robotsDisallowed: 0, localeExcluded: 0, nonContentDirectory: 0, requiresJavascript: 0 },
       failed: { requestFailed: 0, challengePage: 0, extractEmpty: 0 },
       samples: [],
     },

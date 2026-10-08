@@ -88,6 +88,8 @@ export type CrawlReport = {
   excludedByPolicy: {
     robotsDisallowed: number;
     localeExcluded: number;
+    /** Under a directory that is never corpus: legal, privacy, terms, cookies, careers (non-content-path.ts). */
+    nonContentDirectory: number;
     /** Needs JavaScript to render. Out of scope for a static crawler, not broken. */
     requiresJavascript: number;
   };

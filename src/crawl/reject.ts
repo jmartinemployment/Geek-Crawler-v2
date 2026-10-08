@@ -4,10 +4,12 @@
  */
 
 import { shouldExcludeLocalePath } from './locale-path.js';
+import { shouldExcludeNonContentPath } from './non-content-path.js';
 import type { DiscoveryReport } from './discovery-ledger.js';
 
 export type RejectReason =
   | 'locale_excluded'
+  | 'non_content_directory'
   | 'requires_javascript'
   | 'challenge_page'
   | 'extract_empty'
@@ -36,6 +38,11 @@ export function classifyReject(input: RejectClassifyInput): RejectReason | null 
   if (shouldExcludeLocalePath(input.finalUrl)) {
     return 'locale_excluded';
   }
+  // Legal, privacy, terms, cookies, careers: never corpus, whatever the page says. A scope
+  // decision like locale, counted like one. See non-content-path.ts.
+  if (shouldExcludeNonContentPath(input.finalUrl)) {
+    return 'non_content_directory';
+  }
   if (input.viabilityReason === 'challenge_page') {
     return 'challenge_page';
   }
@@ -54,6 +61,8 @@ export function isExtractEmptyText(text: string | null | undefined): boolean {
 
 export type RejectCounters = {
   pagesRejectedLocale: number;
+  /** Under a directory that is never corpus: legal, privacy, terms, cookies, careers. */
+  pagesRejectedNonContent: number;
   /**
    * The page needs a browser to say anything. Not a failure: this crawler
    * executes no JavaScript by design, so such a page is out of scope the same
@@ -75,6 +84,7 @@ export type RejectCounters = {
 export function emptyRejectCounters(): RejectCounters {
   return {
     pagesRejectedLocale: 0,
+    pagesRejectedNonContent: 0,
     pagesRejectedRequiresJavascript: 0,
     pagesRejectedChallenge: 0,
     pagesRejectedExtractEmpty: 0,
@@ -88,6 +98,9 @@ export function bumpRejectCounter(counters: RejectCounters, reason: RejectReason
   switch (reason) {
     case 'locale_excluded':
       counters.pagesRejectedLocale += 1;
+      break;
+    case 'non_content_directory':
+      counters.pagesRejectedNonContent += 1;
       break;
     case 'requires_javascript':
       counters.pagesRejectedRequiresJavascript += 1;

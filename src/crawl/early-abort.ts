@@ -103,8 +103,8 @@ export function isBlockedStatus(statusCode: number | undefined): boolean {
  *   refused -> challenge_page, a 401, 403, 429 or an interstitial
  *   noProse -> extract_empty, a page that parsed but carried no prose
  *
- * Deliberately absent: locale_excluded and robots_disallowed, which are scope
- * decisions this crawler made rather than answers the site gave; and
+ * Deliberately absent: locale_excluded, non_content_directory and robots_disallowed, which are
+ * scope decisions this crawler made rather than answers the site gave; and
  * request_failed, because a DNS error or a timeout says nothing about whether
  * the site would serve its content to a request that arrived.
  */

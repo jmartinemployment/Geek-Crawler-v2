@@ -388,9 +388,11 @@ async function executeCheerioCrawl(
             return;
           }
 
-          const localeReject = classifyReject({ finalUrl });
-          if (localeReject === 'locale_excluded') {
-            persist.noteReject('locale_excluded', finalUrl);
+          // Scope decisions, not answers the site gave: a locale this crawl excludes, or a directory
+          // that is never corpus (legal, privacy, terms, cookies, careers -- non-content-path.ts).
+          const scopeReject = classifyReject({ finalUrl });
+          if (scopeReject === 'locale_excluded' || scopeReject === 'non_content_directory') {
+            persist.noteReject(scopeReject, finalUrl);
             return;
           }
 
