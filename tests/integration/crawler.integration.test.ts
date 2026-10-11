@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { isPrepareFailure, startCrawl } from '../../src/crawl/orchestrator.js';
+import { runLogPath } from '../../src/crawl/run-log.js';
 import { startFixtureSite } from '../fixtures/site.js';
 
 async function startMockGeekApi(): Promise<{
@@ -98,6 +99,11 @@ test('cheerio-only crawl persists via GeekAPI with retries disabled', { timeout:
     assert.equal(result.persistMode, 'api');
     assert.ok(result.pagesSaved >= 1);
     assert.ok(geek.pageWrites() >= 1);
+
+    // Every saved page is in the run log, so a later "Dedup skip ... (accepted)" can be traced to it.
+    const runLog = await readFile(runLogPath(dataDir, result.runId), 'utf8');
+    const saved = runLog.match(/Saved page \d+: http\S+ key=\S+ pageId=\S+/g) ?? [];
+    assert.equal(saved.length, result.pagesSaved, 'one Saved line per saved page');
     assert.ok(fixture.requests('/retry') <= 1, 'maxRequestRetries=0 must not re-fetch');
     assert.equal(fixture.requests('/blocked'), 0);
     assert.equal(fixture.requests('/fr/article'), 0);

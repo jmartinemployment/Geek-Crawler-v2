@@ -680,6 +680,12 @@ export function createCrawlPersist(input: {
 
       pagesSaved += 1;
       if (!page.contentHtml?.trim()) pagesWithoutContent += 1;
+      // The save a later "Dedup skip ... (accepted)" line refers to. Without this the run log
+      // showed each skip and never the save, so a skip could not be traced, and a failed run's
+      // dedup ledger is purged with it.
+      log.info(
+        `Saved page ${pagesSaved}: ${finalUrl} key=${page.dedup?.urlKey ?? finalUrl} pageId=${pageId}`,
+      );
       return { pageId };
     },
 
