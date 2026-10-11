@@ -1,16 +1,13 @@
 /**
  * Per-crawl-type scope policy.
  *
- * Each crawl type carries its own configuration. That is design intent, not an optimisation: the
- * types answer different questions, so they cannot share a budget.
+ * The types differ in how their corpus is read, not in how it is crawled. Content Creator reads a
+ * partner crawl as evidence to cite, a competitors crawl as research it must never quote or name,
+ * and the project site as grounding for its own structure and voice. A site on both the partner and
+ * competitor lists is crawled once as each, and GeekAPI keeps the two runs apart by type.
  *
- *   partner       evidence to cite — capabilities, pricing, integrations, limits, ICP.
- *                 Mandatory on every create. The one type that genuinely needs depth.
- *   competitors   the angle — gaps, positioning, honest comparison. A thin slice, never required.
- *                 You want their services / about / pricing, not their blog archive.
- *   local         geography — local SEO pages. Few by nature.
- *   project-site  grounding — heading hierarchy, brand voice, placement, anti-duplication.
- *                 The whole of your own site.
+ * Crawling is the same for partner, competitors and local, by Jeff's decision of 2026-09-30 below.
+ * Only project-site differs: it runs without section quotas.
  *
  * Scope only. What is kept per page is a separate concern, decided downstream.
  */
@@ -28,12 +25,6 @@ export type CrawlProfile = {
   useSectionQuotas: boolean;
 };
 
-/**
- * Keyed by crawl type with no fallback branch, so adding a type is a compile error rather than a
- * silent inheritance of someone else's configuration. The previous version collapsed partner,
- * competitors and local into one THIRD_PARTY profile behind a ternary, which is how competitors
- * ended up budgeted like a partner despite being a thin slice.
- */
 /**
  * One profile for every third-party crawl.
  *

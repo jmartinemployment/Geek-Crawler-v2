@@ -207,10 +207,13 @@ export function describeReconcileResult(result: OrphanReconcileResult): string[]
 /**
  * Clear local records for completed runs GeekAPI no longer holds.
  *
- * GeekAPI keys a run by its seed, so every re-crawl replaces the previous run of
- * that site and the old id stops resolving. The local record survives, and
- * nothing removed it: the orphan pass above only looks at pending and running,
- * because a completed run is finished rather than abandoned.
+ * GeekAPI keeps a run in a slot: owner, crawl type and seed. When a re-crawl of
+ * the same site and type completes, GeekAPI deletes the previous run of that
+ * slot, and the old id stops resolving. A crawl of the same site under another
+ * type is a different slot and replaces nothing. The local record of a replaced
+ * run survives, and nothing removed it: the orphan pass above only looks at
+ * pending and running, because a completed run is finished rather than
+ * abandoned.
  *
  * They accumulate one per re-crawl. On 2026-09-29 there were 42 of them -
  * lightyear.cloud four times, dext four, stampli three - 128 MB of page counts
