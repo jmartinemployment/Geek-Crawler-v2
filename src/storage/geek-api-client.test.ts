@@ -583,3 +583,46 @@ test('a dropped connection names its cause in the persistence error', async () =
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });
+
+// GeekAPI's own 404 for a run it no longer holds, exactly as it answered on 2026-10-11. It arrives
+// as application/problem+json, which was read as no answer, so replaced runs were never cleared.
+const GEEKAPI_PROBLEM_404 =
+  '{"type":"https://tools.ietf.org/html/rfc9110#section-15.5.5","title":"Not Found","status":404,"traceId":"00-071a2ca118f4f36d85eeba5c58adad36-82feb1035fd5e00c-00"}';
+
+async function presenceFrom(status: number, body: string, contentType: string) {
+  const server = createServer((_req, res) => {
+    res.statusCode = status;
+    res.setHeader('content-type', contentType);
+    res.end(body);
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address() as { port: number };
+  try {
+    return await new GeekApiClient(`http://127.0.0.1:${port}`, 'k', 'u').runPresence('r1');
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+}
+
+test("GeekAPI's problem+json 404 means the run is gone", async () => {
+  assert.deepEqual(
+    await presenceFrom(404, GEEKAPI_PROBLEM_404, 'application/problem+json; charset=utf-8'),
+    { kind: 'absent' },
+  );
+});
+
+test("Railway's 404 stays unknown whatever its JSON media type", async () => {
+  for (const type of ['application/json', 'application/problem+json']) {
+    const presence = await presenceFrom(404, RAILWAY_404, type);
+    assert.equal(presence.kind, 'unknown', type);
+  }
+});
+
+test("a problem+json 400 from GeekAPI is determinate and still purges", async () => {
+  const err = await failureFrom(
+    400,
+    '{"title":"Bad Request","status":400,"detail":"pages carry no extracted content"}',
+    'application/problem+json; charset=utf-8',
+  );
+  assert.equal(err.unreachable, false);
+});

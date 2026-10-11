@@ -132,9 +132,19 @@ export type RunPresence =
  * An HTML error page, an empty body, a proxy's JSON that is not our contract, or a body that will
  * not parse all mean the same thing here: we did not hear from GeekAPI, so we do not know.
  */
+/**
+ * JSON by media type: application/json, or the problem+json that ASP.NET sends for a ProblemDetails
+ * body. GeekAPI's own 404 for a run it no longer holds arrives as application/problem+json; until
+ * 2026-10-11 only application/json was accepted, so every such answer read as no answer and 107
+ * replaced runs kept their local records.
+ */
+function isJsonContentType(contentType: string): boolean {
+  return contentType.includes('application/json') || contentType.includes('application/problem+json');
+}
+
 async function classify404(res: Response): Promise<RunPresence> {
   const contentType = (res.headers.get('content-type') ?? '').toLowerCase();
-  if (!contentType.includes('application/json')) {
+  if (!isJsonContentType(contentType)) {
     return {
       kind: 'unknown',
       reason: `HTTP 404 with content-type ${contentType || '(none)'} — not GeekAPI's error shape, ` +
@@ -188,7 +198,7 @@ function isGeekApiError(body: unknown): boolean {
 function answeredByGeekApi(res: Response, body: string): boolean {
   if (res.status >= 500) return false;
   const contentType = (res.headers.get('content-type') ?? '').toLowerCase();
-  if (!contentType.includes('application/json')) {
+  if (!isJsonContentType(contentType)) {
     // A bare string body from NotFound("...") or BadRequest("...") is still GeekAPI answering.
     return res.status < 500 && body.trim().length > 0 && !body.trimStart().startsWith('<');
   }
