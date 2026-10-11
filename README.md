@@ -138,7 +138,7 @@ npm run web:dev
 
 Then on the home page: enter one seed URL, set max concurrency, **Start crawl**. There is no max-requests field; the budget comes from the crawl type's profile (see Crawl scope).
 
-- **One seed URL = one `runId`**
+- **One seed URL = one `runId`**, identified on GeekAPI by site **and crawl type** (a slot of owner, crawl type and seed). A re-crawl of the same site and type replaces the previous run when the new one completes; until then the previous run stays readable. A site on both the partner and competitor lists has one run of each, crawled and read independently, and both may crawl at once; only a second crawl of the same site and type is refused while one is running (`409 SEED_IN_FLIGHT`). Dedup is per run: a `Dedup skip … (accepted)` line refers to a page the same run already saved, logged as `Saved page N: …` in that run's log.
 - **Max concurrency** = parallel fetches *for that run* (default 1 in the UI)
 - **Request budget** = the crawl type's profile budget (`src/crawl/crawl-profile.ts`), never the sitemap size, clamped to the per-site cap of **2,500 pages** (`MAX_PAGES_PER_SITE` in `src/crawl/crawl-limits.ts`). Optional API/CLI `--max` / `maxRequestsPerCrawl` overrides are clamped to the same cap. Known low-quality directories carry per-section page quotas (`src/crawl/section-quota.ts`, override with `SECTION_PAGE_QUOTA`). Until 2026-10-04 the budget was `min(sitemap size, profile)`, which equalled the sitemap's length on every site under 2,500.
 - **Locale filter on sitemap map** (crawl + report): **keep** `/us/…`; **drop** other region dirt (`/gb/`, `/uk/`, `/au/`, …) and non-English languages (`/fr/`, `/de/`, …); **strip** English language prefixes only (`/en/`, `/en-us/`, …) to the bare path
