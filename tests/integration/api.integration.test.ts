@@ -170,11 +170,11 @@ test(
     process.env.GEEK_USER_ID = 'test-user';
     const { api, origin } = await startApi(dataDir);
 
-    const submit = (seed: string) =>
+    const submit = (seed: string, crawlType = 'local') =>
       fetch(`${origin}/crawls`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ seed, crawlType: 'local', maxConcurrency: 1 }),
+        body: JSON.stringify({ seed, crawlType, maxConcurrency: 1 }),
       });
 
     try {
@@ -195,6 +195,16 @@ test(
       // different run on GeekAPI and must not be blocked.
       const sibling = await submit(`${fixture.origin}/article`);
       assert.equal(sibling.status, 202, 'a distinct seed on the same host still runs');
+
+      // GeekAPI's slot is owner, crawl type and seed: the same seed under another type is a
+      // separate run, and a site on two lists must be crawlable as both at once.
+      const otherType = await submit(`${fixture.origin}/`, 'competitors');
+      assert.equal(otherType.status, 202, 'the same seed under another type still runs');
+
+      // An unknown type is refused before any slot is claimed.
+      const badType = await submit(`${fixture.origin}/`, 'rival');
+      assert.equal(badType.status, 400);
+      assert.match((await json(badType)).error as string, /Invalid crawlType "rival"/);
 
       // Once the run settles the claim is released, so the seed is crawlable again.
       const deadline = Date.now() + 40_000;

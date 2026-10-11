@@ -62,13 +62,14 @@ export function createCrawlApiServer(options?: { dataDir?: string; port?: number
   const meta = createJsonRunStore(dataDir);
   const inFlight = new Map<string, Promise<unknown>>();
   /**
-   * seedKey -> runId holding it. GeekAPI keys a run by its seed
-   * (`GeekCrawlerSeedNormalizer.ComputeSeedKey`, mirrored in seed-key.ts), and
-   * registering a second run for a key silently drops the first: the older run
-   * starts taking 404 on pages/batch mid-crawl and fails closed. Refusing the
-   * submission is the only point at which that is still preventable.
+   * Slot -> runId holding it. GeekAPI keeps a run in a slot: owner, crawl type and seed key
+   * (GeekCrawlerSeedNormalizer.ComputeSeedKey, mirrored in seed-key.ts). Creating a second run in
+   * a slot discards the first one's uncommitted staging, so the in-flight run starts taking 404 on
+   * pages/batch and fails closed. Refusing the submission is the only point at which that is still
+   * preventable. The owner is this process's GEEK_USER_ID, so the slot here is crawl type plus
+   * seed key: the same site crawled as partner and as competitors is two slots, and both may run.
    */
-  const inFlightSeedKeys = new Map<string, string>();
+  const inFlightSlots = new Map<string, string>();
 
   /**
    * Delete a run everywhere: GeekAPI's pages, links and vectors first, then the run directory and
@@ -150,7 +151,12 @@ export function createCrawlApiServer(options?: { dataDir?: string; port?: number
             error: 'exactly one seed URL per run (1 runId = 1 URL)',
           });
         }
-        const crawlType = String(body.crawlType ?? 'partner');
+        const crawlType = String(body.crawlType ?? 'partner').trim().toLowerCase();
+        if (!(CRAWL_TYPE_VALUES as readonly string[]).includes(crawlType)) {
+          return send(res, 400, {
+            error: `Invalid crawlType "${String(body.crawlType)}". Use: ${CRAWL_TYPE_VALUES.join(' | ')}`,
+          });
+        }
         const maxRaw = body.maxRequestsPerCrawl != null ? Number(body.maxRequestsPerCrawl) : NaN;
         const maxRequestsPerCrawl =
           Number.isFinite(maxRaw) && maxRaw > 0 ? maxRaw : undefined;
@@ -159,19 +165,20 @@ export function createCrawlApiServer(options?: { dataDir?: string; port?: number
           : undefined;
         const wait = body.wait === true || body.wait === '1';
 
-        const seedKey = computeSeedKey(normalizeSeeds(seeds));
-        const holder = inFlightSeedKeys.get(seedKey);
+        const slotKey = `${crawlType}:${computeSeedKey(normalizeSeeds(seeds))}`;
+        const holder = inFlightSlots.get(slotKey);
         if (holder) {
           return send(res, 409, {
             error:
-              'A crawl of this seed is already running — a second run would supersede it on GeekAPI and destroy the first',
+              `A ${crawlType} crawl of this seed is already running. A second run of the same ` +
+              'seed and type would make GeekAPI discard the first one\'s staging.',
             code: 'SEED_IN_FLIGHT',
             runId: holder,
           });
         }
         // Claimed before the first await, so two simultaneous submissions of one
-        // seed cannot both pass the check above.
-        inFlightSeedKeys.set(seedKey, 'pending');
+        // slot cannot both pass the check above.
+        inFlightSlots.set(slotKey, 'pending');
 
         if (wait) {
           try {
@@ -198,7 +205,7 @@ export function createCrawlApiServer(options?: { dataDir?: string; port?: number
             });
           } finally {
             // The wait path owns the claim for exactly as long as it blocks.
-            inFlightSeedKeys.delete(seedKey);
+            inFlightSlots.delete(slotKey);
           }
         }
 
@@ -213,15 +220,15 @@ export function createCrawlApiServer(options?: { dataDir?: string; port?: number
           });
         } catch (err) {
           // Nothing was started, so the seed must not stay claimed.
-          inFlightSeedKeys.delete(seedKey);
+          inFlightSlots.delete(slotKey);
           throw err;
         }
         if (isPrepareFailure(prepared)) {
           // Created, failed and purged before crawling. Nothing holds the seed.
-          inFlightSeedKeys.delete(seedKey);
+          inFlightSlots.delete(slotKey);
           return send(res, 500, { error: prepared.failure, runId: prepared.runId });
         }
-        inFlightSeedKeys.set(seedKey, prepared.runId);
+        inFlightSlots.set(slotKey, prepared.runId);
 
         const work = prepared.run().catch((err) => {
           console.error(`Crawl ${prepared.runId} failed:`, err);
@@ -230,7 +237,7 @@ export function createCrawlApiServer(options?: { dataDir?: string; port?: number
         inFlight.set(prepared.runId, work);
         void work.finally(() => {
           inFlight.delete(prepared.runId);
-          inFlightSeedKeys.delete(seedKey);
+          inFlightSlots.delete(slotKey);
         });
 
         return send(res, 202, {
