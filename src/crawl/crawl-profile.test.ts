@@ -6,18 +6,35 @@ import { MAX_PAGES_PER_SITE } from './crawl-limits.js';
 
 const ALL = Object.values(CrawlTypes) as CrawlType[];
 
+/**
+ * Every type but the operator's own site. Derived, so a type added later is held to Partner's
+ * settings by these tests without anyone remembering to list it here.
+ */
+const THIRD_PARTY_TYPES = ALL.filter((t) => t !== CrawlTypes.ProjectSite);
+
 describe('crawlProfileFor', () => {
-  it('gives partner, competitors and local one identical profile', () => {
+  it('gives every third-party type one identical profile', () => {
     // Reversed deliberately on 2026-09-30. The previous rule was that each type must be configured
     // for its own purpose, because an earlier version had collapsed them behind a ternary by
     // accident. Jeff: "All three Content Types are to be the same across the board. No thin slices."
     // A competitor is a partner you are not affiliated with, so it gets a partner's crawl.
     //
+    // Jeff, 2026-10-14, adding consultancy-competitors: "Local, competitors,
+    // consultancy-competitors, and Partner's have identical settings, if different set to mirror
+    // Partner."
+    //
     // Composition is controlled by EDITORIAL_SHARE now, not by shrinking a type's page budget.
-    const third = [CrawlTypes.Partner, CrawlTypes.Competitors, CrawlTypes.Local].map((t) =>
-      JSON.stringify(crawlProfileFor(t)),
+    assert.deepEqual(
+      [...THIRD_PARTY_TYPES].sort(),
+      [
+        CrawlTypes.Competitors,
+        CrawlTypes.ConsultancyCompetitors,
+        CrawlTypes.Local,
+        CrawlTypes.Partner,
+      ].sort(),
     );
-    assert.equal(new Set(third).size, 1, 'the three third-party types must share one profile');
+    const third = THIRD_PARTY_TYPES.map((t) => JSON.stringify(crawlProfileFor(t)));
+    assert.equal(new Set(third).size, 1, 'every third-party type must share one profile');
   });
 
   it('still refuses to let project-site inherit the third-party profile', () => {
@@ -31,7 +48,7 @@ describe('crawlProfileFor', () => {
 
   it('disables section quotas for project-site only', () => {
     assert.equal(sectionQuotasFor(CrawlTypes.ProjectSite), null);
-    for (const t of [CrawlTypes.Partner, CrawlTypes.Competitors, CrawlTypes.Local]) {
+    for (const t of THIRD_PARTY_TYPES) {
       const limits = sectionQuotasFor(t);
       assert.ok(limits, `${t} must keep quotas`);
       // /tools is evidence on any site — operator-set to 100.
@@ -39,12 +56,13 @@ describe('crawlProfileFor', () => {
     }
   });
 
-  it('budgets competitors and local exactly like partner', () => {
+  it('budgets every third-party type exactly like partner: 2,500 pages', () => {
     // Was: "thin slice, must not be budgeted like partner evidence". The 150 and 100 were marked
     // PROPOSED pending operator confirmation and were never confirmed; this is the confirmation,
     // in the other direction.
     const partner = crawlProfileFor(CrawlTypes.Partner).defaultMaxPages;
-    for (const t of [CrawlTypes.Competitors, CrawlTypes.Local]) {
+    assert.equal(partner, 2500);
+    for (const t of THIRD_PARTY_TYPES) {
       assert.equal(crawlProfileFor(t).defaultMaxPages, partner, `${t} must match partner`);
     }
   });

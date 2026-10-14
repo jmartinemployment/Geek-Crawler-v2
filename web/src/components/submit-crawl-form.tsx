@@ -4,8 +4,20 @@ import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
 
 /** Mirrors src/crawl/types.ts. Keep in sync — the crawler rejects unknown values. */
-const CRAWL_TYPES = ["partner", "competitors", "local", "project-site"] as const;
+const CRAWL_TYPES = [
+  "partner",
+  "competitors",
+  "local",
+  "project-site",
+  "consultancy-competitors",
+] as const;
 type CrawlType = (typeof CRAWL_TYPES)[number];
+
+/** What belongs in a type whose name does not say it. Nothing checks where a site is. */
+const CRAWL_TYPE_NOTES: Partial<Record<CrawlType, string>> = {
+  "consultancy-competitors":
+    "A rival IT consultancy in Palm Beach, Broward or Miami-Dade county.",
+};
 
 export function SubmitCrawlForm() {
   const router = useRouter();
@@ -79,6 +91,9 @@ export function SubmitCrawlForm() {
           ))}
         </select>
       </label>
+      {CRAWL_TYPE_NOTES[crawlType] ? (
+        <p className="muted">{CRAWL_TYPE_NOTES[crawlType]}</p>
+      ) : null}
       <label className="field">
         <span>Max concurrency</span>
         <input

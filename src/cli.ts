@@ -12,7 +12,7 @@ function usage(): never {
   console.log(`Geek-Crawler v2 (standalone — does not use Geek-Crawler v1)
 
 Usage:
-  npm run crawl -- --seed <url> [--seed <url>...] [--type partner|competitors|local|project-site] [--max N]
+  npm run crawl -- --seed <url> [--seed <url>...] [--type partner|competitors|local|project-site|consultancy-competitors] [--max N]
   npm run serve
   npm run failures [-- --data-dir <dir>]   what failed, and why
 

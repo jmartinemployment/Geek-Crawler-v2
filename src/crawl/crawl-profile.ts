@@ -6,8 +6,9 @@
  * and the project site as grounding for its own structure and voice. A site on both the partner and
  * competitor lists is crawled once as each, and GeekAPI keeps the two runs apart by type.
  *
- * Crawling is the same for partner, competitors and local, by Jeff's decision of 2026-09-30 below.
- * Only project-site differs: it runs without section quotas.
+ * Crawling is the same for partner, competitors, local and consultancy-competitors, by Jeff's
+ * decisions of 2026-09-30 and 2026-10-14 below. Only project-site differs: it runs without section
+ * quotas.
  *
  * Scope only. What is kept per page is a separate concern, decided downstream.
  */
@@ -36,6 +37,9 @@ export type CrawlProfile = {
  * Composition is now controlled by EDITORIAL_SHARE in section-quota.ts, not by shrinking the page
  * budget. Capping pages was never the right lever: it made competitor crawls smaller without making
  * them better, while the 72%-editorial problem was untouched.
+ *
+ * Jeff, 2026-10-14, adding consultancy-competitors: "Local, competitors, consultancy-competitors,
+ * and Partner's have identical settings, if different set to mirror Partner."
  */
 const THIRD_PARTY: CrawlProfile = {
   defaultMaxPages: MAX_PAGES_PER_SITE,
@@ -52,7 +56,7 @@ const THIRD_PARTY: CrawlProfile = {
  * Keyed by crawl type with no fallback branch, so adding a type is a compile error rather than a
  * silent inheritance of someone else's configuration.
  *
- * The three third-party types share a VALUE, not the structure. An earlier version collapsed them
+ * The four third-party types share a VALUE, not the structure. An earlier version collapsed them
  * behind a ternary and that is how competitors ended up budgeted like a partner by accident; here it
  * is the intended outcome, written once and assigned by explicit key, so a future divergence is a
  * deliberate edit rather than a side effect.
@@ -61,6 +65,7 @@ const PROFILES: Record<CrawlType, CrawlProfile> = {
   [CrawlTypes.Partner]: THIRD_PARTY,
   [CrawlTypes.Competitors]: THIRD_PARTY,
   [CrawlTypes.Local]: THIRD_PARTY,
+  [CrawlTypes.ConsultancyCompetitors]: THIRD_PARTY,
 
   // Quotas OFF. They exist to stop a third party's page farm eating the budget; on your own site
   // every directory is content you chose to publish, and quotas would starve the directories the
