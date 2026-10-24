@@ -32,6 +32,12 @@ import type { RunStore } from './runs.js';
  * said running, so a stale running record alone would have purged a finished
  * corpus. A run GeekAPI shows complete is left alone. So is a run GeekAPI gave
  * no usable answer about, because deletion requires an answer.
+ *
+ * A run GeekAPI itself says it does not hold is purged here too, and that purge
+ * now succeeds: the same ramp.com 4563f7ec was retired on the server when its
+ * re-crawl of 2026-10-08 committed, and until 2026-10-24 its record said running
+ * at every startup because deleteRun refused GeekAPI's own 404 as an error
+ * (geek-api-client.ts). The record was removed by hand that day.
  */
 
 /**

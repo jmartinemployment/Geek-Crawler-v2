@@ -292,7 +292,7 @@ test('a run delete whose first attempt was lost is confirmed by the 404 that fol
   }
 });
 
-test("a run delete answered 404 by a proxy on the retry is still a failure, and a first-attempt 404 is too", async () => {
+test("a run delete answered 404 by a proxy on the retry is still a failure; GeekAPI's own 404 first time is the run being gone", async () => {
   // The platform's 404 while the service redeploys: byte-for-byte the Railway edge body.
   let proxyAttempts = 0;
   const proxy = createServer((req, res) => {
@@ -308,7 +308,8 @@ test("a run delete answered 404 by a proxy on the retry is still a failure, and 
   await new Promise<void>((resolve) => proxy.listen(0, '127.0.0.1', resolve));
   const proxyAddress = proxy.address();
   assert(proxyAddress && typeof proxyAddress !== 'string');
-  // GeekAPI's own 404 on the very first attempt: nothing was sent before it, so nothing landed.
+  // GeekAPI's own 404 on the very first attempt: the run is not held, by whatever path it went
+  // (ramp.com 4563f7ec, retired by its re-crawl's commit). There is nothing left to delete.
   let firstAttempts = 0;
   const first = createServer((_req, res) => {
     firstAttempts += 1;
@@ -329,15 +330,14 @@ test("a run delete answered 404 by a proxy on the retry is still a failure, and 
         err instanceof PersistenceError && err.attempts === 2 && err.status === 404 && err.unreachable,
     );
     assert.equal(proxyAttempts, 2);
-    await assert.rejects(
-      () =>
-        new GeekApiClient(`http://127.0.0.1:${firstAddress.port}`, 'test-key', 'test-user', {
-          retryDelayMs: 10,
-        }).deleteRun('run-1'),
-      (err: unknown) =>
-        err instanceof PersistenceError && err.attempts === 1 && err.status === 404 && !err.unreachable,
-    );
-    assert.equal(firstAttempts, 1);
+    const gone = await new GeekApiClient(
+      `http://127.0.0.1:${firstAddress.port}`,
+      'test-key',
+      'test-user',
+      { retryDelayMs: 10 },
+    ).deleteRun('run-1');
+    assert.deepEqual(gone, { vectorsPurged: true, crawlDataDeleted: true });
+    assert.equal(firstAttempts, 1, 'a 404 GeekAPI answered itself is final and is not sent again');
   } finally {
     proxy.close();
     first.close();

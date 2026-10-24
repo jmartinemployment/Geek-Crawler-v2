@@ -644,11 +644,14 @@ export class GeekApiClient {
    * Delete a run and its pages and links. Sent once more if it failed in transit, like any save.
    * Requires `DELETE /api/geek-crawler/ingest/runs/{runId}` on GeekAPI.
    *
-   * A delete whose first attempt reached GeekAPI and lost its acknowledgment finds the run gone on
-   * the second: GeekAPI answers its own 404. That is the delete having happened, not a failure.
-   * GeekAPI purges a run's vectors before it deletes its rows, so a run it no longer holds has had
-   * both. Only GeekAPI's own 404 is read this way; a proxy's 404 is unreachable and still an error,
-   * and a 404 on the first attempt is still an error (nothing was sent before it).
+   * A run GeekAPI itself says it does not hold is gone, and a delete of it is done: GeekAPI purges a
+   * run's vectors before it deletes its rows, so a run it no longer holds has had both, and there is
+   * nothing left on the server for this delete to do. That is read from GeekAPI's own 404 on either
+   * attempt. On the second it is the first delete having landed and lost its acknowledgment. On the
+   * first it is a run gone some other way: ramp.com 4563f7ec was retired on the server when its
+   * re-crawl of 2026-10-08 committed, and its local record said running until 2026-10-24 because
+   * every delete of it, by the operator and by the orphan pass at each startup, was refused here on
+   * that 404. Only GeekAPI's own 404 is read this way; a proxy's 404 is unreachable and still an error.
    *
    * The server reports what it purged as booleans, not row counts. Reporting counts it never sent
    * meant every delete claimed "0 pages, 0 links" no matter what it removed.
@@ -663,17 +666,16 @@ export class GeekApiClient {
         crawlDataDeleted?: boolean;
       }>('DELETE', `/api/geek-crawler/ingest/runs/${runId}`, undefined);
     } catch (err) {
-      if (
-        err instanceof PersistenceError &&
-        err.attempts === 2 &&
-        err.status === 404 &&
-        !err.unreachable
-      ) {
+      if (err instanceof PersistenceError && err.status === 404 && !err.unreachable) {
         console.info(
           JSON.stringify({
-            event: 'delete_confirmed_on_retry',
+            event: 'delete_run_absent',
             runId,
-            detail: 'GeekAPI no longer holds the run: the first delete landed and its answer was lost',
+            attempts: err.attempts,
+            detail:
+              err.attempts === 2
+                ? 'GeekAPI no longer holds the run: the first delete landed and its answer was lost'
+                : 'GeekAPI does not hold the run: nothing is left on the server to delete',
           }),
         );
         return { vectorsPurged: true, crawlDataDeleted: true };
