@@ -1,5 +1,19 @@
 /**
- * GeekAPI ingest client — one attempt, one canonical schema, no retries.
+ * GeekAPI ingest client: one canonical schema, and a save that failed in transit is sent once more.
+ *
+ * A request GeekAPI did not answer for itself (a transport failure, a 5xx, a proxy's 404) is sent a
+ * second time after the retry delay (GEEK_API_RETRY_DELAY_MS, 15 s by default), once, and both
+ * attempts are logged. A request GeekAPI refused in
+ * its own shape (400, 404, 409) is final and is not sent again: the same request gets the same
+ * answer. Creating a run is never sent twice (createRun). The server writes a repeated page or link
+ * batch once, so a save whose acknowledgment was lost does not land twice (GeekRepository
+ * MongoGeekCrawlerService, 2026-10-24).
+ *
+ * Why (Jeff, 2026-10-24): a power loss of about a second on 2026-10-23 cost five crawls one lost save
+ * each, 2,106 saved pages were purged, and the hubspot run's purge failed on the same outage and left
+ * its row behind. "Retrying a save will not have a cost ... change to retry once, if it fails again,
+ * delete and of course log all of this."
+ *
  * Auth: X-API-Key (GEEK_BACKEND_API_KEY) + X-Geek-User-Id (GEEK_USER_ID).
  */
 
@@ -74,6 +88,31 @@ export function isGeekApiConfigured(): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * How long a save waits before it is sent the second time. Long enough for a reset connection or a
+ * Railway swap; short enough to fit a crawl request's 60 second handler budget beside the fetch and
+ * the first attempt's own 10 second connect timeout (cheerio-runner.ts requestHandlerTimeoutSecs).
+ * An outage longer than this still fails the crawl after the retry; lengthening it means raising
+ * that budget too. Operator override: GEEK_API_RETRY_DELAY_MS.
+ */
+export const DEFAULT_RETRY_DELAY_MS = 15_000;
+
+export function retryDelayFromEnv(): number {
+  const raw = env('GEEK_API_RETRY_DELAY_MS');
+  if (raw === undefined) return DEFAULT_RETRY_DELAY_MS;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new ConfigError(
+      `GEEK_API_RETRY_DELAY_MS must be a non-negative number of milliseconds, got "${raw}"`,
+    );
+  }
+  return parsed;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
 
 /**
@@ -214,8 +253,15 @@ export class GeekApiClient {
   private readonly baseUrl: string;
   private readonly apiKey: string;
   private readonly userId: string;
+  private readonly retryDelayMs: number;
 
-  constructor(baseUrl?: string, apiKey?: string, userId?: string) {
+  constructor(
+    baseUrl?: string,
+    apiKey?: string,
+    userId?: string,
+    options?: { retryDelayMs?: number },
+  ) {
+    this.retryDelayMs = options?.retryDelayMs ?? retryDelayFromEnv();
     if (baseUrl !== undefined || apiKey !== undefined || userId !== undefined) {
       this.baseUrl = (baseUrl ?? '').replace(/\/$/, '');
       this.apiKey = apiKey ?? '';
@@ -291,9 +337,85 @@ export class GeekApiClient {
     return { kind: 'unknown', reason: `HTTP ${res.status}` };
   }
 
-  private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
-    let res: Response;
+  /**
+   * Send a request, and send it once more if GeekAPI did not answer for itself.
+   *
+   * Retried: a transport failure, a 5xx, a 404 in a proxy's shape (PersistenceError.unreachable).
+   * Not retried: an answer in GeekAPI's own shape, which is its judgement and would be the same
+   * again; and any request sent with `retry: false` (createRun). Every attempt is logged, and a
+   * failure after the retry names both attempts.
+   */
+  private async request<T>(
+    method: string,
+    path: string,
+    body?: unknown,
+    options?: { retry?: boolean },
+  ): Promise<T> {
     const payload = body === undefined ? undefined : JSON.stringify(body);
+    let first: PersistenceError;
+    try {
+      return await this.send<T>(method, path, payload, 1);
+    } catch (err) {
+      if (!(err instanceof PersistenceError) || !err.unreachable || options?.retry === false) {
+        throw err;
+      }
+      first = err;
+    }
+    // Logged before the wait, so a run log read while the crawler is paused says why it is.
+    console.warn(
+      JSON.stringify({
+        event: 'save_retry',
+        method,
+        path,
+        attempt: 1,
+        failure: first.message.slice(0, 500),
+        retryInMs: this.retryDelayMs,
+      }),
+    );
+    await sleep(this.retryDelayMs);
+    try {
+      const result = await this.send<T>(method, path, payload, 2);
+      console.info(JSON.stringify({ event: 'save_retry_succeeded', method, path, attempt: 2 }));
+      return result;
+    } catch (err) {
+      const second =
+        err instanceof PersistenceError
+          ? err
+          : new PersistenceError(err instanceof Error ? err.message : String(err), {
+              cause: err,
+              attempts: 2,
+            });
+      const prefix = `${method} ${path} → `;
+      const secondDetail = second.message.startsWith(prefix)
+        ? second.message.slice(prefix.length)
+        : second.message;
+      const message = `${first.message}; sent once more after ${this.retryDelayMs}ms → ${secondDetail}`;
+      console.error(
+        JSON.stringify({
+          event: 'save_retry_failed',
+          method,
+          path,
+          attempt: 2,
+          failure: secondDetail.slice(0, 500),
+        }),
+      );
+      throw new PersistenceError(message, {
+        cause: second,
+        unreachable: second.unreachable,
+        status: second.status,
+        attempts: 2,
+      });
+    }
+  }
+
+  /** One send. The error it raises says whether GeekAPI answered, with what status, and which attempt this was. */
+  private async send<T>(
+    method: string,
+    path: string,
+    payload: string | undefined,
+    attempt: number,
+  ): Promise<T> {
+    let res: Response;
     try {
       res = await fetch(`${this.baseUrl}${path}`, {
         method,
@@ -312,12 +434,16 @@ export class GeekApiClient {
       throw new PersistenceError(`${method} ${path} → transport: ${detail.slice(0, 500)}`, {
         cause: err,
         unreachable: true,
+        status: null,
+        attempts: attempt,
       });
     }
     const text = await res.text();
     if (!res.ok) {
       throw new PersistenceError(formatIngestFailure(method, path, res.status, text), {
         unreachable: !answeredByGeekApi(res, text),
+        status: res.status,
+        attempts: attempt,
       });
     }
     if (!text) return undefined as T;
@@ -326,13 +452,16 @@ export class GeekApiClient {
     } catch (err) {
       throw new PersistenceError(
         `${method} ${path} → invalid JSON acknowledgment: ${text.slice(0, 200)}`,
-        { cause: err },
+        { cause: err, status: res.status, attempts: attempt },
       );
     }
   }
 
   /**
-   * Create the run. One attempt, one schema.
+   * Create the run. One attempt, one schema, and never sent twice: a create that landed and lost
+   * its acknowledgment would start a second staging run beside the first, which is the stranded
+   * row this client's retry exists to prevent. A create that failed leaves nothing behind, and the
+   * operator queues the crawl again.
    *
    * This is the only ingest response that wraps the run: `{ run, seedsAccepted, rejected }`.
    * `patchRun` returns the snapshot flat. The envelope is read here, once, so nothing downstream
@@ -346,10 +475,15 @@ export class GeekApiClient {
       run?: ApiRunSnapshot;
       seedsAccepted?: number;
       rejected?: Array<{ url?: string; reason?: string }>;
-    }>('POST', '/api/geek-crawler/ingest/runs', {
-      crawlType: input.crawlType,
-      seeds: input.seeds,
-    });
+    }>(
+      'POST',
+      '/api/geek-crawler/ingest/runs',
+      {
+        crawlType: input.crawlType,
+        seeds: input.seeds,
+      },
+      { retry: false },
+    );
 
     const run = ack?.run;
     const runId = typeof run?.runId === 'string' ? run.runId.trim() : '';
@@ -507,8 +641,14 @@ export class GeekApiClient {
   }
 
   /**
-   * Delete a run and its pages and links. One attempt, no retry.
+   * Delete a run and its pages and links. Sent once more if it failed in transit, like any save.
    * Requires `DELETE /api/geek-crawler/ingest/runs/{runId}` on GeekAPI.
+   *
+   * A delete whose first attempt reached GeekAPI and lost its acknowledgment finds the run gone on
+   * the second: GeekAPI answers its own 404. That is the delete having happened, not a failure.
+   * GeekAPI purges a run's vectors before it deletes its rows, so a run it no longer holds has had
+   * both. Only GeekAPI's own 404 is read this way; a proxy's 404 is unreachable and still an error,
+   * and a 404 on the first attempt is still an error (nothing was sent before it).
    *
    * The server reports what it purged as booleans, not row counts. Reporting counts it never sent
    * meant every delete claimed "0 pages, 0 links" no matter what it removed.
@@ -516,10 +656,30 @@ export class GeekApiClient {
   async deleteRun(
     runId: string,
   ): Promise<{ vectorsPurged: boolean; crawlDataDeleted: boolean }> {
-    const result = await this.request<{
-      vectorsPurged?: boolean;
-      crawlDataDeleted?: boolean;
-    }>('DELETE', `/api/geek-crawler/ingest/runs/${runId}`, undefined);
+    let result: { vectorsPurged?: boolean; crawlDataDeleted?: boolean } | undefined;
+    try {
+      result = await this.request<{
+        vectorsPurged?: boolean;
+        crawlDataDeleted?: boolean;
+      }>('DELETE', `/api/geek-crawler/ingest/runs/${runId}`, undefined);
+    } catch (err) {
+      if (
+        err instanceof PersistenceError &&
+        err.attempts === 2 &&
+        err.status === 404 &&
+        !err.unreachable
+      ) {
+        console.info(
+          JSON.stringify({
+            event: 'delete_confirmed_on_retry',
+            runId,
+            detail: 'GeekAPI no longer holds the run: the first delete landed and its answer was lost',
+          }),
+        );
+        return { vectorsPurged: true, crawlDataDeleted: true };
+      }
+      throw err;
+    }
 
     if (typeof result?.crawlDataDeleted !== 'boolean') {
       throw new PersistenceError('delete acknowledgment missing crawlDataDeleted');

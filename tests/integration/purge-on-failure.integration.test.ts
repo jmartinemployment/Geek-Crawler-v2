@@ -120,10 +120,13 @@ async function crawlAgainstFailure(failure: LinkFailure): Promise<{
     url: process.env.GEEK_API_URL,
     key: process.env.GEEK_BACKEND_API_KEY,
     user: process.env.GEEK_USER_ID,
+    retryDelay: process.env.GEEK_API_RETRY_DELAY_MS,
   };
   process.env.GEEK_API_URL = geek.origin;
   process.env.GEEK_BACKEND_API_KEY = 'test-key';
   process.env.GEEK_USER_ID = 'test-user';
+  // A save that failed in transit is sent once more after this wait (15 s by default).
+  process.env.GEEK_API_RETRY_DELAY_MS = '50';
 
   try {
     await assert.rejects(
@@ -154,6 +157,8 @@ async function crawlAgainstFailure(failure: LinkFailure): Promise<{
     else process.env.GEEK_BACKEND_API_KEY = old.key;
     if (old.user === undefined) delete process.env.GEEK_USER_ID;
     else process.env.GEEK_USER_ID = old.user;
+    if (old.retryDelay === undefined) delete process.env.GEEK_API_RETRY_DELAY_MS;
+    else process.env.GEEK_API_RETRY_DELAY_MS = old.retryDelay;
     geek.close();
     await fixture.close();
     await rm(dataDir, { recursive: true, force: true });
@@ -166,7 +171,7 @@ test(
   async () => {
     const out = await crawlAgainstFailure('determinate');
 
-    assert.equal(out.deleteCalls, 1, 'exactly one purge, no retry');
+    assert.equal(out.deleteCalls, 1, 'exactly one purge: the delete landed first time, so it was not sent again');
 
     assert.equal(out.failures.length, 1, 'the post-mortem is what survives');
     const record = out.failures[0]!;
@@ -198,7 +203,9 @@ test(
 // An interrupted run is deleted, whatever interrupted it (Jeff, 2026-10-05). From 2026-09-30 a run
 // that failed because GeekAPI was absent was kept "for re-post" instead, but nothing could re-post
 // it, and the run sat `external` on GeekAPI and `running` here. Now a 5xx and a Railway edge 404
-// purge exactly as a determinate refusal does: post-mortem first, then the delete.
+// purge exactly as a determinate refusal does: post-mortem first, then the delete. Since 2026-10-24
+// the failing save is sent once more before the run fails (the fake fails it both times); the
+// delete lands first time, so it is sent once.
 for (const failure of ['unreachable-5xx', 'unreachable-platform-404'] as const) {
   test(
     `a crawl that failed because GeekAPI was absent (${failure}) is deleted`,
@@ -206,7 +213,7 @@ for (const failure of ['unreachable-5xx', 'unreachable-platform-404'] as const) 
     async () => {
       const out = await crawlAgainstFailure(failure);
 
-      assert.equal(out.deleteCalls, 1, 'an interrupted run is purged, exactly once');
+      assert.equal(out.deleteCalls, 1, 'an interrupted run is purged, exactly once: the delete landed first time');
 
       assert.equal(out.failures.length, 1, 'the post-mortem is what survives');
       const record = out.failures[0]!;
@@ -235,10 +242,13 @@ test('a run whose log cannot be opened is failed and purged before it fetches a 
     url: process.env.GEEK_API_URL,
     key: process.env.GEEK_BACKEND_API_KEY,
     user: process.env.GEEK_USER_ID,
+    retryDelay: process.env.GEEK_API_RETRY_DELAY_MS,
   };
   process.env.GEEK_API_URL = geek.origin;
   process.env.GEEK_BACKEND_API_KEY = 'test-key';
   process.env.GEEK_USER_ID = 'test-user';
+  // A save that failed in transit is sent once more after this wait (15 s by default).
+  process.env.GEEK_API_RETRY_DELAY_MS = '50';
   try {
     const result = await startCrawl({
       seeds: [`${fixture.origin}/`],
@@ -262,6 +272,8 @@ test('a run whose log cannot be opened is failed and purged before it fetches a 
     else process.env.GEEK_BACKEND_API_KEY = old.key;
     if (old.user === undefined) delete process.env.GEEK_USER_ID;
     else process.env.GEEK_USER_ID = old.user;
+    if (old.retryDelay === undefined) delete process.env.GEEK_API_RETRY_DELAY_MS;
+    else process.env.GEEK_API_RETRY_DELAY_MS = old.retryDelay;
     geek.close();
     await fixture.close();
     await rm(dataDir, { recursive: true, force: true });

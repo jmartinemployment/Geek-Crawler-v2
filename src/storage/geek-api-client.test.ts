@@ -15,10 +15,13 @@ import {
   MONGO_BSON_MAX_DOCUMENT_BYTES,
 } from './ingest-limits.js';
 
-// Not "atomic": the server inserts links one document at a time with InsertOneAsync and
-// skips duplicate keys individually, so a batch has never been a single transaction. The
-// word was removed from the refusal message for the same reason -- a claim nothing enforces
-// is read as one that something does.
+// Not "atomic": the server writes a page's links as a delete and an insert with no transaction
+// between them (since 2026-10-24; before that one InsertOneAsync per document), so a batch has
+// never been a single transaction. The word was removed from the refusal message for the same
+// reason -- a claim nothing enforces is read as one that something does.
+//
+// Every client here is built with a 10 ms retry delay: the one retry of a save that failed in
+// transit is what several of these tests exercise, and the operator's default is 15 seconds.
 test('link ingest is one batch per call, up to the max', async () => {
   const batchSizes: number[] = [];
   const server = createServer(async (req, res) => {
@@ -68,7 +71,7 @@ test('link ingest is one batch per call, up to the max', async () => {
   }
 });
 
-test('link ingest fails on first error without retry', async () => {
+test('a link save answered 503 is sent once more, then fails naming both attempts', async () => {
   let attempts = 0;
   const server = createServer((_req, res) => {
     attempts += 1;
@@ -91,6 +94,7 @@ test('link ingest fails on first error without retry', async () => {
     `http://127.0.0.1:${address.port}`,
     'test-key',
     'test-user',
+    { retryDelayMs: 10 },
   );
 
   try {
@@ -106,17 +110,21 @@ test('link ingest fails on first error without retry', async () => {
         ]),
       (err: unknown) =>
         err instanceof PersistenceError &&
+        err.attempts === 2 &&
+        err.status === 503 &&
+        err.unreachable &&
         /503/.test(err.message) &&
         /code=repository_error/.test(err.message) &&
-        /requestId=req-1/.test(err.message),
+        /requestId=req-1/.test(err.message) &&
+        /sent once more after 10ms/.test(err.message),
     );
-    assert.equal(attempts, 1);
+    assert.equal(attempts, 2, 'one retry, then the failure is final');
   } finally {
     server.close();
   }
 });
 
-test('pages/batch fails on first 5xx without retry', async () => {
+test('a page save answered 5xx twice fails after its one retry', async () => {
   let attempts = 0;
   const server = createServer((_req, res) => {
     attempts += 1;
@@ -135,6 +143,7 @@ test('pages/batch fails on first 5xx without retry', async () => {
     `http://127.0.0.1:${address.port}`,
     'test-key',
     'test-user',
+    { retryDelayMs: 10 },
   );
   try {
     await assert.rejects(
@@ -150,7 +159,214 @@ test('pages/batch fails on first 5xx without retry', async () => {
         ]),
       /500/,
     );
-    assert.equal(attempts, 1);
+    assert.equal(attempts, 2);
+  } finally {
+    server.close();
+  }
+});
+
+test('a page save that failed in transit is sent once more and lands', async () => {
+  let attempts = 0;
+  const server = createServer((req, res) => {
+    attempts += 1;
+    if (attempts === 1) {
+      // The connection drops before any answer: what a power loss or a reset looks like from here.
+      req.socket.destroy();
+      return;
+    }
+    res.setHeader('content-type', 'application/json');
+    res.end(JSON.stringify({ pages: [{ url: 'https://example.com/a', pageId: 'page-a' }] }));
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  assert(address && typeof address !== 'string');
+  const client = new GeekApiClient(
+    `http://127.0.0.1:${address.port}`,
+    'test-key',
+    'test-user',
+    { retryDelayMs: 10 },
+  );
+  try {
+    const created = await client.createPagesBatch('run-1', [
+      {
+        origin: 'https://example.com',
+        url: 'https://example.com/a',
+        statusCode: 200,
+        robotsAllowed: true,
+        contentHtml: '<p>hi</p>',
+      },
+    ]);
+    assert.deepEqual(created, [{ url: 'https://example.com/a', pageId: 'page-a' }]);
+    assert.equal(attempts, 2, 'the first attempt was lost in transit, the second landed');
+  } finally {
+    server.close();
+  }
+});
+
+test('a save GeekAPI refused is not sent again', async () => {
+  let attempts = 0;
+  const server = createServer((_req, res) => {
+    attempts += 1;
+    res.statusCode = 400;
+    res.setHeader('content-type', 'application/problem+json');
+    res.end(
+      JSON.stringify({
+        type: 'https://tools.ietf.org/html/rfc9110#section-15.5.1',
+        title: 'Bad Request',
+        status: 400,
+        detail: 'pages carry no extracted content (contentHtml + blocks required)',
+        traceId: '00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-00',
+      }),
+    );
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  assert(address && typeof address !== 'string');
+  const client = new GeekApiClient(
+    `http://127.0.0.1:${address.port}`,
+    'test-key',
+    'test-user',
+    { retryDelayMs: 10 },
+  );
+  try {
+    await assert.rejects(
+      () =>
+        client.createPagesBatch('run-1', [
+          {
+            origin: 'https://example.com',
+            url: 'https://example.com/a',
+            statusCode: 200,
+            robotsAllowed: true,
+            contentHtml: '<p>hi</p>',
+          },
+        ]),
+      (err: unknown) =>
+        err instanceof PersistenceError &&
+        err.attempts === 1 &&
+        err.status === 400 &&
+        !err.unreachable,
+    );
+    assert.equal(attempts, 1, "GeekAPI's own refusal is final; the same request gets the same answer");
+  } finally {
+    server.close();
+  }
+});
+
+test('a run delete whose first attempt was lost is confirmed by the 404 that follows', async () => {
+  let attempts = 0;
+  const server = createServer((req, res) => {
+    attempts += 1;
+    if (attempts === 1) {
+      // GeekAPI deleted the run; the answer never arrived.
+      req.socket.destroy();
+      return;
+    }
+    // GeekAPI's own 404, in its own shape: the run is no longer held.
+    res.statusCode = 404;
+    res.setHeader('content-type', 'application/problem+json');
+    res.end(
+      JSON.stringify({
+        type: 'https://tools.ietf.org/html/rfc9110#section-15.5.5',
+        title: 'Run not found',
+        status: 404,
+        detail: 'Run run-1 does not exist or is not yours.',
+        traceId: '00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-00',
+      }),
+    );
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  assert(address && typeof address !== 'string');
+  const client = new GeekApiClient(
+    `http://127.0.0.1:${address.port}`,
+    'test-key',
+    'test-user',
+    { retryDelayMs: 10 },
+  );
+  try {
+    const purged = await client.deleteRun('run-1');
+    assert.deepEqual(purged, { vectorsPurged: true, crawlDataDeleted: true });
+    assert.equal(attempts, 2);
+  } finally {
+    server.close();
+  }
+});
+
+test("a run delete answered 404 by a proxy on the retry is still a failure, and a first-attempt 404 is too", async () => {
+  // The platform's 404 while the service redeploys: byte-for-byte the Railway edge body.
+  let proxyAttempts = 0;
+  const proxy = createServer((req, res) => {
+    proxyAttempts += 1;
+    if (proxyAttempts === 1) {
+      req.socket.destroy();
+      return;
+    }
+    res.statusCode = 404;
+    res.setHeader('content-type', 'application/json');
+    res.end(JSON.stringify({ status: 404, code: 'NOT_FOUND', request_id: 'abc123' }));
+  });
+  await new Promise<void>((resolve) => proxy.listen(0, '127.0.0.1', resolve));
+  const proxyAddress = proxy.address();
+  assert(proxyAddress && typeof proxyAddress !== 'string');
+  // GeekAPI's own 404 on the very first attempt: nothing was sent before it, so nothing landed.
+  let firstAttempts = 0;
+  const first = createServer((_req, res) => {
+    firstAttempts += 1;
+    res.statusCode = 404;
+    res.setHeader('content-type', 'application/problem+json');
+    res.end(JSON.stringify({ title: 'Run not found', status: 404 }));
+  });
+  await new Promise<void>((resolve) => first.listen(0, '127.0.0.1', resolve));
+  const firstAddress = first.address();
+  assert(firstAddress && typeof firstAddress !== 'string');
+  try {
+    await assert.rejects(
+      () =>
+        new GeekApiClient(`http://127.0.0.1:${proxyAddress.port}`, 'test-key', 'test-user', {
+          retryDelayMs: 10,
+        }).deleteRun('run-1'),
+      (err: unknown) =>
+        err instanceof PersistenceError && err.attempts === 2 && err.status === 404 && err.unreachable,
+    );
+    assert.equal(proxyAttempts, 2);
+    await assert.rejects(
+      () =>
+        new GeekApiClient(`http://127.0.0.1:${firstAddress.port}`, 'test-key', 'test-user', {
+          retryDelayMs: 10,
+        }).deleteRun('run-1'),
+      (err: unknown) =>
+        err instanceof PersistenceError && err.attempts === 1 && err.status === 404 && !err.unreachable,
+    );
+    assert.equal(firstAttempts, 1);
+  } finally {
+    proxy.close();
+    first.close();
+  }
+});
+
+test('creating a run is never sent twice', async () => {
+  let attempts = 0;
+  const server = createServer((_req, res) => {
+    attempts += 1;
+    res.statusCode = 503;
+    res.setHeader('content-type', 'application/json');
+    res.end(JSON.stringify({ error: { code: 'repository_error', message: 'unavailable' } }));
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  assert(address && typeof address !== 'string');
+  const client = new GeekApiClient(
+    `http://127.0.0.1:${address.port}`,
+    'test-key',
+    'test-user',
+    { retryDelayMs: 10 },
+  );
+  try {
+    await assert.rejects(
+      () => client.createRun({ crawlType: 'partner', seeds: ['https://example.com/'] }),
+      (err: unknown) => err instanceof PersistenceError && err.attempts === 1 && err.unreachable,
+    );
+    assert.equal(attempts, 1, 'a second create would be a second staging run');
   } finally {
     server.close();
   }

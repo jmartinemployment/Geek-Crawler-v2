@@ -269,7 +269,7 @@ Only after 2a–2e. The corpus is being replaced, not repaired.
 | `rag_index_jobs` rows | same call (fixed in `350b8f0`) |
 | `DATA_DIR/runs/`, `DATA_DIR/.crawlee/` | `rm -rf`, only after the authority purge succeeds |
 
-One attempt per run, no retries, authority before local scratch.
+Authority before local scratch. A delete that failed in transit is sent once more (2026-10-24, like every save; `geek-api-client.ts`); a run is never created twice.
 
 **Verification:** `crawl_runs`, `crawl_pages`, `crawl_links`, `rag_index_jobs`
 all 0; Qdrant crawler collection empty; both local directories empty.

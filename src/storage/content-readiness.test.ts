@@ -133,7 +133,7 @@ test('API persistence marks completed content runs ready', async () => {
   }
 });
 
-test('terminal link persistence failure throws once', async () => {
+test('a link save answered 503 is sent once more, then the failure is terminal', async () => {
   const runId = '22222222-3333-4444-8555-666666666666';
   let pageWrites = 0;
   let linkAttempts = 0;
@@ -172,10 +172,13 @@ test('terminal link persistence failure throws once', async () => {
     url: process.env.GEEK_API_URL,
     key: process.env.GEEK_BACKEND_API_KEY,
     user: process.env.GEEK_USER_ID,
+    retryDelay: process.env.GEEK_API_RETRY_DELAY_MS,
   };
   process.env.GEEK_API_URL = `http://127.0.0.1:${address.port}`;
   process.env.GEEK_BACKEND_API_KEY = 'test-key';
   process.env.GEEK_USER_ID = 'test-user';
+  // The one retry waits 15 s by default; this test wants the second attempt, not the wait.
+  process.env.GEEK_API_RETRY_DELAY_MS = '10';
 
   try {
     const persist = createCrawlPersist({
@@ -206,8 +209,8 @@ test('terminal link persistence failure throws once', async () => {
     );
 
     assert.throws(() => persist.throwIfPersistenceFailed(), PersistenceError);
-    assert.equal(pageWrites, 1);
-    assert.equal(linkAttempts, 1);
+    assert.equal(pageWrites, 1, 'the page save landed once and is not sent again');
+    assert.equal(linkAttempts, 2, 'the link save answered 503 is sent once more, and no third time');
   } finally {
     if (oldEnv.url === undefined) delete process.env.GEEK_API_URL;
     else process.env.GEEK_API_URL = oldEnv.url;
@@ -215,6 +218,8 @@ test('terminal link persistence failure throws once', async () => {
     else process.env.GEEK_BACKEND_API_KEY = oldEnv.key;
     if (oldEnv.user === undefined) delete process.env.GEEK_USER_ID;
     else process.env.GEEK_USER_ID = oldEnv.user;
+    if (oldEnv.retryDelay === undefined) delete process.env.GEEK_API_RETRY_DELAY_MS;
+    else process.env.GEEK_API_RETRY_DELAY_MS = oldEnv.retryDelay;
     server.close();
     await rm(dataDir, { recursive: true, force: true });
   }

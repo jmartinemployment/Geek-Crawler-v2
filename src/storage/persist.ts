@@ -706,9 +706,10 @@ export function createCrawlPersist(input: {
 
       // createLinksBatch already asserts the server acknowledged exactly what it
       // was handed. This repeats it here so the counters below cannot advance on
-      // a partial write, and it is not redundant: the server inserts links one
-      // document at a time and skips duplicates individually, so a short count is
-      // a real outcome rather than an impossible one.
+      // a partial write. The server writes a page's links whole and, since
+      // 2026-10-24, replaces them when the same page's batch arrives again (a save
+      // sent once more after its acknowledgment was lost), so what it counts is
+      // what this page has.
       if (persisted !== rows.length) {
         throw new PersistenceError(
           `links/batch persisted ${persisted} !== submitted ${rows.length} pageId=${pageId}`,

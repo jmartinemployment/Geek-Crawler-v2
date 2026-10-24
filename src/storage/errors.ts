@@ -25,10 +25,24 @@ export class PersistenceError extends Error {
    */
   readonly unreachable: boolean;
 
-  constructor(message: string, options?: { cause?: unknown; unreachable?: boolean }) {
+  /** The HTTP status the sink answered with; null when it did not answer at all. */
+  readonly status: number | null;
+
+  /**
+   * How many times the request was sent before this error was raised: 1, or 2 when the one retry
+   * of a save that failed in transit failed too (geek-api-client.ts, 2026-10-24).
+   */
+  readonly attempts: number;
+
+  constructor(
+    message: string,
+    options?: { cause?: unknown; unreachable?: boolean; status?: number | null; attempts?: number },
+  ) {
     super(message, options?.cause !== undefined ? { cause: options.cause } : undefined);
     this.name = 'PersistenceError';
     this.unreachable = options?.unreachable ?? false;
+    this.status = options?.status ?? null;
+    this.attempts = options?.attempts ?? 1;
   }
 }
 

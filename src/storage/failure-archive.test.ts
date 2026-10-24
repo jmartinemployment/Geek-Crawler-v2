@@ -52,10 +52,13 @@ async function withStubbedGeekApi(
     url: process.env.GEEK_API_URL,
     key: process.env.GEEK_BACKEND_API_KEY,
     user: process.env.GEEK_USER_ID,
+    retryDelay: process.env.GEEK_API_RETRY_DELAY_MS,
   };
   process.env.GEEK_API_URL = `http://127.0.0.1:${address.port}`;
   process.env.GEEK_BACKEND_API_KEY = 'test-key';
   process.env.GEEK_USER_ID = 'test-user';
+  // A request GeekAPI did not answer for itself is sent once more after this wait (15 s by default).
+  process.env.GEEK_API_RETRY_DELAY_MS = '10';
 
   try {
     await body(dataDir, () => deleteCalls);
@@ -66,6 +69,8 @@ async function withStubbedGeekApi(
     else process.env.GEEK_BACKEND_API_KEY = oldEnv.key;
     if (oldEnv.user === undefined) delete process.env.GEEK_USER_ID;
     else process.env.GEEK_USER_ID = oldEnv.user;
+    if (oldEnv.retryDelay === undefined) delete process.env.GEEK_API_RETRY_DELAY_MS;
+    else process.env.GEEK_API_RETRY_DELAY_MS = oldEnv.retryDelay;
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await rm(dataDir, { recursive: true, force: true });
   }
@@ -140,7 +145,7 @@ test('a failed purge is recorded, and leaves local scratch in place', async () =
     await persist.begin();
     await persist.archiveAndPurge('cancelled', 'Cancelled by operator');
 
-    assert.equal(deleteCalls(), 1, 'exactly one purge attempt, no retry');
+    assert.equal(deleteCalls(), 2, 'a purge answered 500 is sent once more, then recorded as failed');
 
     const read = await readFailure(dataDir, persist.runId);
     assert(read.kind === 'ok');
