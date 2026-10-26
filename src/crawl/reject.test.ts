@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
   classifyReject,
+  isOnSite,
   emptyRejectCounters,
   bumpRejectCounter,
   RejectSampleLog,
@@ -17,6 +18,39 @@ import {
 } from './reject.js';
 
 describe('classifyReject', () => {
+  // Moosend's partner crawl of 2026-10-25: `/go/active-campaign-free-trial/` landed on
+  // activecampaign.com and was saved as a Moosend page; the index stamped it with the host it
+  // landed on and answered Moosend's run for activecampaign.com, which had no crawl of its own.
+  it('rejects a page that redirected to another site, before anything else about it is read', () => {
+    assert.equal(
+      classifyReject({
+        finalUrl: 'https://www.activecampaign.com/pricing',
+        scopeUrl: 'https://moosend.com',
+        text: 'A'.repeat(500),
+      }),
+      'off_site_redirect',
+    );
+    // A subdomain is another site, as it is for a link (links.ts isSameSite).
+    assert.equal(
+      classifyReject({ finalUrl: 'https://identity.moosend.com/login', scopeUrl: 'https://moosend.com' }),
+      'off_site_redirect',
+    );
+    // Off site wins over a locale or legal path on the other site: it is not this crawl's to classify.
+    assert.equal(
+      classifyReject({ finalUrl: 'https://www.activecampaign.com/fr/legal/', scopeUrl: 'https://moosend.com' }),
+      'off_site_redirect',
+    );
+  });
+
+  it('a redirect that stays on the site is not off site: www and bare are one site, scheme is ignored', () => {
+    assert.equal(classifyReject({ finalUrl: 'https://www.make.com/en/pricing', scopeUrl: 'http://make.com' }), null);
+    assert.equal(classifyReject({ finalUrl: 'https://make.com/pricing', scopeUrl: 'https://www.make.com/' }), null);
+  });
+
+  it('without a scope URL nothing is judged off site, as every caller before 2026-10-26', () => {
+    assert.equal(classifyReject({ finalUrl: 'https://www.activecampaign.com/pricing', text: 'A'.repeat(500) }), null);
+  });
+
   it('rejects locale-excluded final URLs', () => {
     assert.equal(
       classifyReject({ finalUrl: 'https://example.com/fr/docs' }),
@@ -87,7 +121,7 @@ describe('rejectStatsHostProgressEntry', () => {
     const entry = rejectStatsHostProgressEntry(
       {
         pagesRejectedLocale: 1,
-        pagesRejectedNonContent: 0,
+        pagesRejectedNonContent: 0, pagesRejectedOffSite: 0,
         pagesRejectedRequiresJavascript: 6,
         pagesRejectedChallenge: 2,
         pagesRejectedExtractEmpty: 3,
@@ -147,3 +181,31 @@ describe('failure rejection reporting', () => {
     assert.doesNotMatch(detail!, /secret/);
   });
 });
+
+describe('isOnSite', () => {
+  it('compares hosts with www set aside and ignores scheme and path', () => {
+    assert.equal(isOnSite('https://moosend.com', 'https://moosend.com/blog/x/'), true);
+    assert.equal(isOnSite('https://moosend.com', 'https://www.moosend.com/'), true);
+    assert.equal(isOnSite('http://moosend.com', 'https://moosend.com/'), true);
+    assert.equal(isOnSite('https://moosend.com', 'https://www.activecampaign.com/'), false);
+    assert.equal(isOnSite('https://moosend.com', 'https://identity.moosend.com/'), false);
+  });
+
+  it('a URL that does not parse is not on the site', () => {
+    assert.equal(isOnSite('https://moosend.com', 'not a url'), false);
+    assert.equal(isOnSite('not a url', 'https://moosend.com/'), false);
+  });
+});
+
+describe('off_site_redirect is counted and reported', () => {
+  it('bumps its own counter and the host-progress entry carries it', () => {
+    const counters = emptyRejectCounters();
+    bumpRejectCounter(counters, 'off_site_redirect');
+    bumpRejectCounter(counters, 'off_site_redirect');
+    assert.equal(counters.pagesRejectedOffSite, 2);
+    assert.equal(counters.pagesRejectedNonContent, 0);
+    const entry = rejectStatsHostProgressEntry(counters, 10);
+    assert.equal(entry.pagesRejectedOffSite, 2);
+  });
+});
+

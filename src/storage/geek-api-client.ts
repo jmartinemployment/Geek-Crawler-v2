@@ -129,6 +129,8 @@ export type CrawlReport = {
     localeExcluded: number;
     /** Under a directory that is never corpus: legal, privacy, terms, cookies, careers (non-content-path.ts). */
     nonContentDirectory: number;
+    /** Redirected to another site: that site's page, not this crawl's (reject.ts, `scopeUrl`). */
+    offSiteRedirect: number;
     /** Needs JavaScript to render. Out of scope for a static crawler, not broken. */
     requiresJavascript: number;
   };

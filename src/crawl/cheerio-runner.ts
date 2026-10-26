@@ -388,9 +388,15 @@ async function executeCheerioCrawl(
             return;
           }
 
-          // Scope decisions, not answers the site gave: a locale this crawl excludes, or a directory
-          // that is never corpus (legal, privacy, terms, cookies, careers -- non-content-path.ts).
-          const scopeReject = classifyReject({ finalUrl });
+          // Scope decisions, not answers the site gave: a page that redirected to another site
+          // (that site's page, not this crawl's -- reject.ts, `scopeUrl`), a locale this crawl
+          // excludes, or a directory that is never corpus (legal, privacy, terms, cookies, careers
+          // -- non-content-path.ts).
+          const scopeReject = classifyReject({ finalUrl, scopeUrl });
+          if (scopeReject === 'off_site_redirect') {
+            persist.noteReject(scopeReject, finalUrl, `redirected from ${request.url}`);
+            return;
+          }
           if (scopeReject === 'locale_excluded' || scopeReject === 'non_content_directory') {
             persist.noteReject(scopeReject, finalUrl);
             return;

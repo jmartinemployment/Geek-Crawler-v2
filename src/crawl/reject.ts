@@ -3,6 +3,7 @@
  * @see plans/crawl-reject-unusable-pages.md
  */
 
+import { hostnameKey } from './links.js';
 import { shouldExcludeLocalePath } from './locale-path.js';
 import { shouldExcludeNonContentPath } from './non-content-path.js';
 import type { DiscoveryReport } from './discovery-ledger.js';
@@ -10,6 +11,7 @@ import type { DiscoveryReport } from './discovery-ledger.js';
 export type RejectReason =
   | 'locale_excluded'
   | 'non_content_directory'
+  | 'off_site_redirect'
   | 'requires_javascript'
   | 'challenge_page'
   | 'extract_empty'
@@ -22,6 +24,17 @@ const SAMPLE_CAP = 5;
 
 export type RejectClassifyInput = {
   finalUrl: string;
+  /**
+   * The run's seed. When given, a final URL on another site is rejected before anything else
+   * about it is read: a page that redirected off the site is that other site's page, not this
+   * one's. Moosend's partner crawl of 2026-10-25 saved `/go/active-campaign-free-trial/`, which
+   * lands on activecampaign.com, and six more like it (instapage, kit, learnworlds,
+   * constantcontact, identity.moosend.com); the index stamped each with the host it landed on,
+   * and activecampaign.com, with no partner crawl of its own, was answered Moosend's run. Same
+   * site as the BFS reads it (links.ts isSameSite): the host with `www.` set aside; a
+   * subdomain is another site, as it is for a link.
+   */
+  scopeUrl?: string;
   /** From isViableHtml when HTML was fetched. */
   viabilityReason?: string;
   /**
@@ -35,6 +48,9 @@ export type RejectClassifyInput = {
 
 /** Return reject reason, or null if the page may be persisted as corpus. */
 export function classifyReject(input: RejectClassifyInput): RejectReason | null {
+  if (input.scopeUrl !== undefined && !isOnSite(input.scopeUrl, input.finalUrl)) {
+    return 'off_site_redirect';
+  }
   if (shouldExcludeLocalePath(input.finalUrl)) {
     return 'locale_excluded';
   }
@@ -52,6 +68,19 @@ export function classifyReject(input: RejectClassifyInput): RejectReason | null 
   return null;
 }
 
+/**
+ * Whether a final URL is on the crawl's site: the same host with `www.` set aside, scheme
+ * ignored (a seed typed as http that lands on https is the same site). A URL that does not parse
+ * is not on it.
+ */
+export function isOnSite(scopeUrl: string, finalUrl: string): boolean {
+  try {
+    return hostnameKey(new URL(scopeUrl).hostname) === hostnameKey(new URL(finalUrl).hostname);
+  } catch {
+    return false;
+  }
+}
+
 export function isExtractEmptyText(text: string | null | undefined): boolean {
   if (text == null) return true;
   const trimmed = text.trim();
@@ -63,6 +92,8 @@ export type RejectCounters = {
   pagesRejectedLocale: number;
   /** Under a directory that is never corpus: legal, privacy, terms, cookies, careers. */
   pagesRejectedNonContent: number;
+  /** Redirected to another site: that site's page, not this crawl's. */
+  pagesRejectedOffSite: number;
   /**
    * The page needs a browser to say anything. Not a failure: this crawler
    * executes no JavaScript by design, so such a page is out of scope the same
@@ -85,6 +116,7 @@ export function emptyRejectCounters(): RejectCounters {
   return {
     pagesRejectedLocale: 0,
     pagesRejectedNonContent: 0,
+    pagesRejectedOffSite: 0,
     pagesRejectedRequiresJavascript: 0,
     pagesRejectedChallenge: 0,
     pagesRejectedExtractEmpty: 0,
@@ -101,6 +133,9 @@ export function bumpRejectCounter(counters: RejectCounters, reason: RejectReason
       break;
     case 'non_content_directory':
       counters.pagesRejectedNonContent += 1;
+      break;
+    case 'off_site_redirect':
+      counters.pagesRejectedOffSite += 1;
       break;
     case 'requires_javascript':
       counters.pagesRejectedRequiresJavascript += 1;
@@ -208,6 +243,7 @@ export function rejectStatsHostProgressEntry(
     origin: REJECT_STATS_ORIGIN,
     pagesSaved,
     pagesRejectedLocale: counters.pagesRejectedLocale,
+    pagesRejectedOffSite: counters.pagesRejectedOffSite,
     pagesRejectedRequiresJavascript: counters.pagesRejectedRequiresJavascript,
     pagesRejectedChallenge: counters.pagesRejectedChallenge,
     pagesRejectedExtractEmpty: counters.pagesRejectedExtractEmpty,
