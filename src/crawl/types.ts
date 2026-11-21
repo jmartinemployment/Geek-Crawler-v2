@@ -16,6 +16,12 @@ export const CrawlTypes = {
    * site is. Not `competitors`, which is the partners' rivals a Content Creator project researches.
    */
   ConsultancyCompetitors: 'consultancy-competitors',
+  /**
+   * A Geek-Receptionist client's own website (Jeff, 2026-11-21: "needs a crawl type = Receptionist"). It is the pages the client's
+   * receptionist answers callers from, so it is the client's own site, never partner or competitor evidence and never the
+   * operator's own site (ProjectSite). Content Creator resolves runs by an exact type, so a receptionist crawl is never read as either.
+   */
+  Receptionist: 'receptionist',
 } as const;
 
 export type CrawlType = (typeof CrawlTypes)[keyof typeof CrawlTypes];

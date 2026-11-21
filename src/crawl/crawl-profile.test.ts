@@ -10,7 +10,8 @@ const ALL = Object.values(CrawlTypes) as CrawlType[];
  * Every type but the operator's own site. Derived, so a type added later is held to Partner's
  * settings by these tests without anyone remembering to list it here.
  */
-const THIRD_PARTY_TYPES = ALL.filter((t) => t !== CrawlTypes.ProjectSite);
+const OWN_SITE_TYPES: readonly string[] = [CrawlTypes.ProjectSite, CrawlTypes.Receptionist];
+const THIRD_PARTY_TYPES = ALL.filter((t) => !OWN_SITE_TYPES.includes(t));
 
 describe('crawlProfileFor', () => {
   it('gives every third-party type one identical profile', () => {
@@ -46,8 +47,27 @@ describe('crawlProfileFor', () => {
     );
   });
 
-  it('disables section quotas for project-site only', () => {
+  it('gives a receptionist crawl the project-site profile, because it is a business crawling its own site', () => {
+    assert.equal(
+      JSON.stringify(crawlProfileFor(CrawlTypes.Receptionist)),
+      JSON.stringify(crawlProfileFor(CrawlTypes.ProjectSite)),
+    );
+    assert.notEqual(
+      JSON.stringify(crawlProfileFor(CrawlTypes.Receptionist)),
+      JSON.stringify(crawlProfileFor(CrawlTypes.Partner)),
+    );
+  });
+
+  it('is a type of its own, never partner, competitor or project-site evidence', () => {
+    assert.equal(CrawlTypes.Receptionist, 'receptionist');
+    for (const other of [CrawlTypes.Partner, CrawlTypes.Competitors, CrawlTypes.Local, CrawlTypes.ProjectSite, CrawlTypes.ConsultancyCompetitors]) {
+      assert.notEqual(CrawlTypes.Receptionist, other);
+    }
+  });
+
+  it('disables section quotas for the two own-site types only', () => {
     assert.equal(sectionQuotasFor(CrawlTypes.ProjectSite), null);
+    assert.equal(sectionQuotasFor(CrawlTypes.Receptionist), null);
     for (const t of THIRD_PARTY_TYPES) {
       const limits = sectionQuotasFor(t);
       assert.ok(limits, `${t} must keep quotas`);

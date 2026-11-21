@@ -7,8 +7,8 @@
  * competitor lists is crawled once as each, and GeekAPI keeps the two runs apart by type.
  *
  * Crawling is the same for partner, competitors, local and consultancy-competitors, by Jeff's
- * decisions of 2026-09-30 and 2026-10-14 below. Only project-site differs: it runs without section
- * quotas.
+ * decisions of 2026-09-30 and 2026-10-14 below. Only the two own-site types differ, project-site and
+ * receptionist: they run without section quotas.
  *
  * Scope only. What is kept per page is a separate concern, decided downstream.
  */
@@ -75,6 +75,16 @@ const PROFILES: Record<CrawlType, CrawlProfile> = {
   // Unchanged by the 2026-09-30 composition work, deliberately. geekatyourspot.com is 83% editorial
   // for this reason, and whether your own site should be filtered is a separate question.
   [CrawlTypes.ProjectSite]: {
+    defaultMaxPages: MAX_PAGES_PER_SITE,
+    maxDepth: null,
+    useSectionQuotas: false,
+  },
+
+  // A Geek-Receptionist client's own site (Jeff, 2026-11-21). Written out, not inherited, like every other entry. It takes the same
+  // treatment as project-site because it is the same kind of crawl: a business's own site, every directory of which is content the
+  // business chose to publish and the receptionist may answer from, so a quota built to stop a third party's page farm would only
+  // starve it. This is a choice made when the type was added, not one Jeff has confirmed; change this entry to change it.
+  [CrawlTypes.Receptionist]: {
     defaultMaxPages: MAX_PAGES_PER_SITE,
     maxDepth: null,
     useSectionQuotas: false,
