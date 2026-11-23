@@ -22,6 +22,12 @@ export const CrawlTypes = {
    * operator's own site (ProjectSite). Content Creator resolves runs by an exact type, so a receptionist crawl is never read as either.
    */
   Receptionist: 'receptionist',
+  /**
+   * A prospect bought from Apollo.io (Jeff, 2026-11-23: "apollo crawl type = prospect"): a business the operator may sell to, crawled
+   * so its own words are on hand. It is a third party's site, so it is crawled exactly like a partner, but it is never partner,
+   * competitor or own-site evidence, and Content Creator resolves runs by an exact type, so a prospect crawl is never read as any of them.
+   */
+  Prospect: 'prospect',
 } as const;
 
 export type CrawlType = (typeof CrawlTypes)[keyof typeof CrawlTypes];

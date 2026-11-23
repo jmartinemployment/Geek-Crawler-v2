@@ -66,6 +66,9 @@ const PROFILES: Record<CrawlType, CrawlProfile> = {
   [CrawlTypes.Competitors]: THIRD_PARTY,
   [CrawlTypes.Local]: THIRD_PARTY,
   [CrawlTypes.ConsultancyCompetitors]: THIRD_PARTY,
+  // A prospect bought from Apollo.io (Jeff, 2026-11-23). Mirrors Partner, per his 2026-10-14 rule that third-party types have identical
+  // settings. A choice made when the type was added, not one Jeff has confirmed for prospects; change this entry to change it.
+  [CrawlTypes.Prospect]: THIRD_PARTY,
 
   // Quotas OFF. They exist to stop a third party's page farm eating the budget; on your own site
   // every directory is content you chose to publish, and quotas would starve the directories the

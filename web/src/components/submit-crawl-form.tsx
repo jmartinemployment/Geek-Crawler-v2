@@ -10,6 +10,7 @@ const CRAWL_TYPES = [
   "local",
   "project-site",
   "consultancy-competitors",
+  "prospect",
 ] as const;
 type CrawlType = (typeof CRAWL_TYPES)[number];
 
@@ -17,6 +18,7 @@ type CrawlType = (typeof CRAWL_TYPES)[number];
 const CRAWL_TYPE_NOTES: Partial<Record<CrawlType, string>> = {
   "consultancy-competitors":
     "A rival IT consultancy in Palm Beach, Broward or Miami-Dade county.",
+  prospect: "A prospect bought from Apollo.io.",
 };
 
 export function SubmitCrawlForm() {

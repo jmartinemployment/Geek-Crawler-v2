@@ -24,6 +24,8 @@ describe('crawlProfileFor', () => {
     // consultancy-competitors, and Partner's have identical settings, if different set to mirror
     // Partner."
     //
+    // Jeff, 2026-11-23, adding prospect (a prospect bought from Apollo.io): crawled like a partner.
+    //
     // Composition is controlled by EDITORIAL_SHARE now, not by shrinking a type's page budget.
     assert.deepEqual(
       [...THIRD_PARTY_TYPES].sort(),
@@ -32,6 +34,7 @@ describe('crawlProfileFor', () => {
         CrawlTypes.ConsultancyCompetitors,
         CrawlTypes.Local,
         CrawlTypes.Partner,
+        CrawlTypes.Prospect,
       ].sort(),
     );
     const third = THIRD_PARTY_TYPES.map((t) => JSON.stringify(crawlProfileFor(t)));
@@ -62,6 +65,15 @@ describe('crawlProfileFor', () => {
     assert.equal(CrawlTypes.Receptionist, 'receptionist');
     for (const other of [CrawlTypes.Partner, CrawlTypes.Competitors, CrawlTypes.Local, CrawlTypes.ProjectSite, CrawlTypes.ConsultancyCompetitors]) {
       assert.notEqual(CrawlTypes.Receptionist, other);
+    }
+  });
+
+  it('prospect is a third-party type of its own, crawled like a partner and never read as another type', () => {
+    assert.equal(CrawlTypes.Prospect, 'prospect');
+    assert.ok(THIRD_PARTY_TYPES.includes(CrawlTypes.Prospect));
+    assert.equal(JSON.stringify(crawlProfileFor(CrawlTypes.Prospect)), JSON.stringify(crawlProfileFor(CrawlTypes.Partner)));
+    for (const other of [CrawlTypes.Partner, CrawlTypes.Competitors, CrawlTypes.Local, CrawlTypes.ProjectSite, CrawlTypes.ConsultancyCompetitors, CrawlTypes.Receptionist]) {
+      assert.notEqual(CrawlTypes.Prospect, other);
     }
   });
 
